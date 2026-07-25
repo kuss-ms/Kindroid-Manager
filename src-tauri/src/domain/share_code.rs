@@ -38,6 +38,8 @@ pub struct PartialCharacter {
     pub current_scene: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none", default)]
     pub greeting: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none", default)]
+    pub ai_avatar_description: Option<String>,
 }
 
 #[derive(Debug, Serialize, Deserialize)]
@@ -72,6 +74,7 @@ pub fn build_partial(character: &Character) -> PartialCharacter {
         ai_additional_context: character.ai_additional_context.clone(),
         current_scene: character.current_scene.clone(),
         greeting: character.greeting.clone(),
+        ai_avatar_description: character.ai_avatar_description.clone(),
     }
 }
 
@@ -111,6 +114,7 @@ mod tests {
             user_gender: Some("male".into()),
             greeting: Some("Hello!".into()),
             notes: Some("local only".into()),
+            ai_avatar_description: None,
             cover_image: None,
             created_at: Utc::now(),
             updated_at: Utc::now(),

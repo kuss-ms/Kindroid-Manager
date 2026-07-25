@@ -23,6 +23,7 @@ export interface CharacterInput {
   current_scene?: string | null;
   greeting?: string | null;
   notes?: string | null;
+  ai_avatar_description?: string | null;
   cover_image?: string | null;
 }
 
@@ -68,11 +69,9 @@ export const api = {
   // Characters
   listCharacters: () => invoke<Character[]>('list_characters'),
   getCharacter: (id: Uuid) => invoke<Character>('get_character', { id }),
-  saveCharacter: (input: CharacterInput) =>
-    invoke<Character>('save_character', { input }),
+  saveCharacter: (input: CharacterInput) => invoke<Character>('save_character', { input }),
   deleteCharacter: (id: Uuid) => invoke<void>('delete_character', { id }),
-  duplicateCharacter: (id: Uuid) =>
-    invoke<Character>('duplicate_character', { id }),
+  duplicateCharacter: (id: Uuid) => invoke<Character>('duplicate_character', { id }),
 
   // Targets
   listTargets: () => invoke<Target[]>('list_targets'),
@@ -81,8 +80,7 @@ export const api = {
   deleteTarget: (id: Uuid) => invoke<void>('delete_target', { id }),
 
   // Push
-  pushToTarget: (req: PushRequest) =>
-    invoke<PushResult>('push_to_target', { req }),
+  pushToTarget: (req: PushRequest) => invoke<PushResult>('push_to_target', { req }),
 
   // History
   listPushHistory: (limit: number, offset: number) =>
@@ -92,19 +90,15 @@ export const api = {
   // Share images (PNG with embedded kindroid tEXt chunk)
   importShareImage: (bytes: number[] | Uint8Array) =>
     invoke<Character>('import_share_image', { bytes: Array.from(bytes) }),
-  exportShareImage: (id: Uuid) =>
-    invoke<number[]>('export_share_image', { id }),
+  exportShareImage: (id: Uuid) => invoke<number[]>('export_share_image', { id }),
   setCharacterImage: (id: Uuid, bytes: number[] | Uint8Array) =>
     invoke<Character>('set_character_image', { id, bytes: Array.from(bytes) }),
-  getCharacterImage: (id: Uuid) =>
-    invoke<number[] | null>('get_character_image', { id }),
+  getCharacterImage: (id: Uuid) => invoke<number[] | null>('get_character_image', { id }),
 
   // Settings / token
   getSettings: () => invoke<SettingsDto>('get_settings'),
-  setSettings: (input: SettingsInput) =>
-    invoke<void>('set_settings', { input }),
-  tokenStatus: () =>
-    invoke<{ configured: boolean }>('token_status'),
+  setSettings: (input: SettingsInput) => invoke<void>('set_settings', { input }),
+  tokenStatus: () => invoke<{ configured: boolean }>('token_status'),
   setToken: (token: string) => invoke<void>('set_token', { token }),
   clearToken: () => invoke<void>('clear_token'),
   testToken: () => invoke<TestTokenResult>('test_token'),

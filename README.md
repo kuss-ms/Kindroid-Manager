@@ -11,7 +11,7 @@ backend can be added later without touching the UI.
 
 - Local authoring of Kindroid persona "characters" (name, ai_name,
   backstory, memory, directive, example message, additional context,
-  current scene, user identity, greeting, notes).
+  current scene, greeting, notes).
 - Many-to-many push: a single Character can be pushed to any Target
   (an `ai_id` + label) at any time. Pick the fields to send each time.
 - Optional chat-break after `update-info`, with editable greeting and

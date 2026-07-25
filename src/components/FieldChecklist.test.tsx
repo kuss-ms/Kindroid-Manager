@@ -23,13 +23,7 @@ const full: Character = {
 describe('FieldChecklist', () => {
   it('groups fields under "Kindroid" and disables empty ones', () => {
     const selected = defaultSelected(full);
-    render(
-      <FieldChecklist
-        character={full}
-        selected={selected}
-        onChange={() => {}}
-      />,
-    );
+    render(<FieldChecklist character={full} selected={selected} onChange={() => {}} />);
     expect(screen.getByText(/Kindroid/)).toBeInTheDocument();
     expect(screen.getByTestId('field-ai_name')).not.toBeDisabled();
     expect(screen.getByTestId('field-ai_memory')).toBeDisabled();

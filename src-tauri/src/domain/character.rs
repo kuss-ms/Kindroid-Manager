@@ -18,6 +18,11 @@ pub struct Character {
     pub user_gender: Option<String>,
     pub greeting: Option<String>,
     pub notes: Option<String>,
+    /// Local-only description of the avatar's appearance. Not pushed to
+    /// Kindroid (their API has no field for it); the push dialog exposes a
+    /// "Copy" button so the user can paste it manually.
+    #[serde(default)]
+    pub ai_avatar_description: Option<String>,
     /// Path to the cover image relative to the data dir (e.g. `images/{id}.png`).
     #[serde(default)]
     pub cover_image: Option<String>,

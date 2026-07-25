@@ -13,6 +13,7 @@ export interface Character {
   current_scene?: string | null;
   greeting?: string | null;
   notes?: string | null;
+  ai_avatar_description?: string | null;
   cover_image?: string | null;
   created_at: string;
   updated_at: string;
@@ -115,10 +116,13 @@ export const GENDER_OPTIONS = [
 ] as const;
 
 /** Soft character limits shown in the editor's counter. */
-export const FIELD_SOFT_LIMITS: Partial<Record<PersonaField, number>> = {
+export const FIELD_SOFT_LIMITS: Partial<Record<PersonaField, number>> & {
+  ai_avatar_description: number;
+} = {
   ai_backstory: 2500,
   ai_memory: 1000,
   ai_directive: 250,
   ai_example_message: 750,
   ai_additional_context: 2500,
+  ai_avatar_description: 800,
 };

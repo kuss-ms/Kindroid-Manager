@@ -49,19 +49,21 @@ export function CharacterEditorPage() {
     onError: (e) => toast('error', errorMessage(e)),
   });
 
-  const uploadImage = useMutation<Awaited<ReturnType<typeof api.setCharacterImage>>, unknown, File>({
-    mutationFn: async (file) => {
-      const buf = await file.arrayBuffer();
-      if (!id) throw new Error('Save the character first');
-      return api.setCharacterImage(id, new Uint8Array(buf));
+  const uploadImage = useMutation<Awaited<ReturnType<typeof api.setCharacterImage>>, unknown, File>(
+    {
+      mutationFn: async (file) => {
+        const buf = await file.arrayBuffer();
+        if (!id) throw new Error('Save the character first');
+        return api.setCharacterImage(id, new Uint8Array(buf));
+      },
+      onSuccess: (c) => {
+        queryClient.setQueryData(['character', c.id], c);
+        queryClient.invalidateQueries({ queryKey: ['characters'] });
+        toast('success', 'Image uploaded');
+      },
+      onError: (e) => toast('error', errorMessage(e)),
     },
-    onSuccess: (c) => {
-      queryClient.setQueryData(['character', c.id], c);
-      queryClient.invalidateQueries({ queryKey: ['characters'] });
-      toast('success', 'Image uploaded');
-    },
-    onError: (e) => toast('error', errorMessage(e)),
-  });
+  );
 
   const exportImage = useMutation<void, unknown, void>({
     mutationFn: async () => {
@@ -164,6 +166,7 @@ export function CharacterEditorPage() {
       current_scene: undefined,
       greeting: undefined,
       notes: undefined,
+      ai_avatar_description: undefined,
     },
   });
 
@@ -181,6 +184,7 @@ export function CharacterEditorPage() {
         current_scene: character.data.current_scene ?? undefined,
         greeting: character.data.greeting ?? undefined,
         notes: character.data.notes ?? undefined,
+        ai_avatar_description: character.data.ai_avatar_description ?? undefined,
       });
     }
   }, [character.data, reset]);
@@ -265,8 +269,8 @@ export function CharacterEditorPage() {
       <div className="card">
         <h3>Cover image</h3>
         <p className="muted" style={{ fontSize: 12, marginTop: 6 }}>
-          Shown on this character and embedded in the share image you export. Any
-          existing kindroid metadata in the uploaded image is stripped.
+          Shown on this character and embedded in the share image you export. Any existing kindroid
+          metadata in the uploaded image is stripped.
         </p>
         {imageUrl ? (
           <div className="image-preview" style={{ marginTop: 12 }}>
@@ -302,6 +306,14 @@ export function CharacterEditorPage() {
             ))}
           </select>
         </Field>
+        <TextAreaWithCounter
+          label="Avatar Description"
+          rows={4}
+          name="ai_avatar_description"
+          soft={FIELD_SOFT_LIMITS.ai_avatar_description}
+          hint="Local-only. Not sent to Kindroid. Use the copy button on the Push screen to paste it manually into Kindroid's avatar prompt."
+          control={control}
+        />
         <TextAreaWithCounter
           label="Backstory"
           rows={6}
@@ -354,12 +366,7 @@ export function CharacterEditorPage() {
         />
 
         <Field label="Notes (local only)" hint="Not sent to Kindroid, not in share code.">
-          <textarea
-            className="textarea"
-            {...register('notes')}
-            rows={3}
-            maxLength={MAX_NOTE}
-          />
+          <textarea className="textarea" {...register('notes')} rows={3} maxLength={MAX_NOTE} />
         </Field>
       </form>
 
@@ -418,11 +425,7 @@ function TextArea({
 }) {
   return (
     <Field label={label} hint={hint}>
-      <textarea
-        className="textarea"
-        {...reg}
-        rows={rows}
-      />
+      <textarea className="textarea" {...reg} rows={rows} />
       <SoftCounter value={undefined} soft={soft} />
     </Field>
   );

@@ -203,6 +203,7 @@ mod tests {
             user_gender: None,
             greeting: Some("Hello!".into()),
             notes: None,
+            ai_avatar_description: Some("long auburn hair, green eyes".into()),
             cover_image: None,
             created_at: Utc::now(),
             updated_at: Utc::now(),
@@ -237,6 +238,11 @@ mod tests {
         let partial = decode_image(&encoded).unwrap();
         assert_eq!(partial.ai_name.as_deref(), Some("Aria"));
         assert_eq!(partial.greeting.as_deref(), Some("Hello!"));
+        assert_eq!(
+            partial.ai_avatar_description.as_deref(),
+            Some("long auburn hair, green eyes"),
+            "avatar description must survive image round-trip"
+        );
     }
 
     #[test]
@@ -356,6 +362,38 @@ mod tests {
             let img = image::RgbImage::from_pixel(8, 8, image::Rgb([10, 20, 30]));
             encoder
                 .encode(img.as_raw(), 8, 8, image::ExtendedColorType::Rgb8)
+                .unwrap();
+        }
+        let character = make_character();
+        let encoded = encode_image(&buf, &character).unwrap();
+        let partial = decode_image(&encoded).unwrap();
+        assert_eq!(partial.ai_name.as_deref(), Some("Aria"));
+    }
+
+    #[test]
+    fn encodes_webp_input_as_png() {
+        let mut buf = Vec::new();
+        {
+            let encoder = image::codecs::webp::WebPEncoder::new_lossless(&mut buf);
+            let img = image::RgbaImage::from_pixel(8, 8, image::Rgba([10, 20, 30, 255]));
+            encoder
+                .encode(img.as_raw(), 8, 8, image::ExtendedColorType::Rgba8)
+                .unwrap();
+        }
+        let character = make_character();
+        let encoded = encode_image(&buf, &character).unwrap();
+        let partial = decode_image(&encoded).unwrap();
+        assert_eq!(partial.ai_name.as_deref(), Some("Aria"));
+    }
+
+    #[test]
+    fn encodes_gif_input_as_png() {
+        let mut buf = Vec::new();
+        {
+            let mut encoder = image::codecs::gif::GifEncoder::new(&mut buf);
+            let img = image::RgbaImage::from_pixel(8, 8, image::Rgba([10, 20, 30, 255]));
+            encoder
+                .encode(img.as_raw(), 8, 8, image::ExtendedColorType::Rgba8)
                 .unwrap();
         }
         let character = make_character();

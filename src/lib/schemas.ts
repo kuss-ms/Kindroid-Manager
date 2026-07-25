@@ -15,6 +15,7 @@ export const characterInputSchema = z.object({
   current_scene: optionalString,
   greeting: optionalString,
   notes: z.string().optional(),
+  ai_avatar_description: optionalString,
 });
 
 export type CharacterFormValues = z.infer<typeof characterInputSchema>;

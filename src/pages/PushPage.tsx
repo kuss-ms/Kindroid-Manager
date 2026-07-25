@@ -91,6 +91,20 @@ export function PushPage() {
     !push.isPending;
   const fieldCount = selected.size;
   const targetLabel = target.data ? `${target.data.label} — ${target.data.ai_id}` : '';
+  const avatarDescription = character.data?.ai_avatar_description?.trim() ?? '';
+  const copyAvatar = async () => {
+    if (!avatarDescription) return;
+    try {
+      if (typeof navigator !== 'undefined' && navigator.clipboard?.writeText) {
+        await navigator.clipboard.writeText(avatarDescription);
+        toast('success', 'Avatar description copied to clipboard');
+        return;
+      }
+      throw new Error('Clipboard write not supported in this environment');
+    } catch (e) {
+      toast('error', errorMessage(e));
+    }
+  };
   return (
     <div className="page">
       {' '}
@@ -197,10 +211,9 @@ export function PushPage() {
             {wipeCascaded && (
               <div className="fieldset-warning" role="alert">
                 <span>
-                  <strong>⚠ Warning.</strong> This will flush all previous cascaded
-                  memories. This is a nuclear option to reset conversation context
-                  continuity, but you may lose up to hundreds or thousands of
-                  messages worth of Cascaded Memory if they existed.
+                  <strong>⚠ Warning.</strong> This will flush all previous cascaded memories. This
+                  is a nuclear option to reset conversation context continuity, but you may lose up
+                  to hundreds or thousands of messages worth of Cascaded Memory if they existed.
                 </span>
               </div>
             )}
@@ -228,12 +241,20 @@ export function PushPage() {
       </div>{' '}
       <div className="page-header" style={{ marginTop: 0 }}>
         {' '}
-        <p className="muted" style={{ fontSize: 12, margin: 0 }}>
-          {' '}
-          {targetLabel || 'Select a character and target to push.'}{' '}
-        </p>{' '}
         <div className="page-header-actions">
-          {' '}
+          <button
+            type="button"
+            className="btn"
+            onClick={copyAvatar}
+            disabled={!avatarDescription}
+            title={
+              avatarDescription
+                ? 'Copy the local-only Avatar Description to the clipboard so you can paste it into Kindroid manually'
+                : 'Pick a character that has an Avatar Description'
+            }
+          >
+            Copy Avatar Description
+          </button>
           <button
             disabled={!canPush}
             title={

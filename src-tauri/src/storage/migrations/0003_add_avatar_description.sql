@@ -1,0 +1,1 @@
+ALTER TABLE characters ADD COLUMN ai_avatar_description TEXT;

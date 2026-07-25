@@ -152,7 +152,8 @@ impl Repository for SqliteRepository {
             .prepare(
                 "SELECT id, name, ai_name, ai_gender, ai_backstory, ai_memory, ai_directive,
                         ai_example_message, ai_additional_context, current_scene, user_name,
-                        user_gender, greeting, notes, cover_image, created_at, updated_at
+                        user_gender, greeting, notes, ai_avatar_description, cover_image,
+                        created_at, updated_at
                  FROM characters ORDER BY updated_at DESC",
             )
             .map_err(|e| StorageError::Database(e.to_string()))?;
@@ -168,7 +169,8 @@ impl Repository for SqliteRepository {
         conn.query_row(
             "SELECT id, name, ai_name, ai_gender, ai_backstory, ai_memory, ai_directive,
                     ai_example_message, ai_additional_context, current_scene, user_name,
-                    user_gender, greeting, notes, cover_image, created_at, updated_at
+                    user_gender, greeting, notes, ai_avatar_description, cover_image,
+                    created_at, updated_at
              FROM characters WHERE id = ?1",
             params![id.to_string()],
             row_to_character,
@@ -199,8 +201,9 @@ impl Repository for SqliteRepository {
             "INSERT INTO characters
              (id, name, ai_name, ai_gender, ai_backstory, ai_memory, ai_directive,
               ai_example_message, ai_additional_context, current_scene, user_name,
-              user_gender, greeting, notes, cover_image, created_at, updated_at)
-             VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,?12,?13,?14,?15,?16,?17)
+              user_gender, greeting, notes, ai_avatar_description, cover_image,
+              created_at, updated_at)
+             VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,?12,?13,?14,?15,?16,?17,?18)
              ON CONFLICT(id) DO UPDATE SET
                name=excluded.name, ai_name=excluded.ai_name, ai_gender=excluded.ai_gender,
                ai_backstory=excluded.ai_backstory, ai_memory=excluded.ai_memory,
@@ -208,7 +211,8 @@ impl Repository for SqliteRepository {
                ai_additional_context=excluded.ai_additional_context,
                current_scene=excluded.current_scene, user_name=excluded.user_name,
                user_gender=excluded.user_gender, greeting=excluded.greeting,
-               notes=excluded.notes, cover_image=excluded.cover_image,
+               notes=excluded.notes, ai_avatar_description=excluded.ai_avatar_description,
+               cover_image=excluded.cover_image,
                updated_at=excluded.updated_at",
             params![
                 c.id.to_string(),
@@ -225,6 +229,7 @@ impl Repository for SqliteRepository {
                 c.user_gender,
                 c.greeting,
                 c.notes,
+                c.ai_avatar_description,
                 c.cover_image,
                 c.created_at.to_rfc3339(),
                 c.updated_at.to_rfc3339(),
@@ -432,6 +437,12 @@ impl Repository for SqliteRepository {
             .map_err(|e| StorageError::Database(e.to_string()))?;
         let rel = format!("images/{character_id}.{ext}");
         let path = self.data_dir.join(&rel);
+        // Remove any previously stored image files for this character before
+        // writing the new one. Otherwise a stale file with a different
+        // extension (e.g. the previous PNG after uploading a JPG) stays on
+        // disk and would be returned by `read_character_image_bytes`
+        // ahead of the newly written file.
+        let _ = self.delete_character_image_bytes(character_id).await;
         tokio::fs::write(&path, bytes)
             .await
             .map_err(|e| StorageError::Database(e.to_string()))?;
@@ -451,19 +462,32 @@ impl Repository for SqliteRepository {
         &self,
         character_id: Uuid,
     ) -> Result<Option<Vec<u8>>, StorageError> {
-        for ext in ["png", "jpg", "jpeg", "webp", "gif"] {
-            let path = self
-                .data_dir
-                .join("images")
-                .join(format!("{character_id}.{ext}"));
-            if path.exists() {
-                let bytes = tokio::fs::read(&path)
-                    .await
-                    .map_err(|e| StorageError::Database(e.to_string()))?;
-                return Ok(Some(bytes));
-            }
+        // Trust the `cover_image` column rather than guessing the extension
+        // from filenames on disk: when a previous image with a different
+        // extension was overwritten, a stale file could shadow the current
+        // one if we iterated extensions in a fixed order.
+        let conn = lock(&self.conn).await;
+        let rel: Option<String> = conn
+            .query_row(
+                "SELECT cover_image FROM characters WHERE id = ?1",
+                params![character_id.to_string()],
+                |r| r.get(0),
+            )
+            .optional()
+            .map_err(|e| StorageError::Database(e.to_string()))?
+            .flatten();
+        drop(conn);
+        let Some(rel) = rel else {
+            return Ok(None);
+        };
+        let path = self.data_dir.join(&rel);
+        if !path.exists() {
+            return Ok(None);
         }
-        Ok(None)
+        let bytes = tokio::fs::read(&path)
+            .await
+            .map_err(|e| StorageError::Database(e.to_string()))?;
+        Ok(Some(bytes))
     }
 
     async fn delete_character_image_bytes(&self, character_id: Uuid) -> Result<(), StorageError> {
@@ -491,8 +515,8 @@ impl Repository for SqliteRepository {
 
 fn row_to_character(row: &rusqlite::Row<'_>) -> rusqlite::Result<Character> {
     let id_s: String = row.get(0)?;
-    let created_s: String = row.get(15)?;
-    let updated_s: String = row.get(16)?;
+    let created_s: String = row.get(16)?;
+    let updated_s: String = row.get(17)?;
     Ok(Character {
         id: Uuid::parse_str(&id_s).map_err(|e| id_err(0, e))?,
         name: row.get(1)?,
@@ -508,12 +532,13 @@ fn row_to_character(row: &rusqlite::Row<'_>) -> rusqlite::Result<Character> {
         user_gender: row.get(11)?,
         greeting: row.get(12)?,
         notes: row.get(13)?,
-        cover_image: row.get(14)?,
+        ai_avatar_description: row.get(14)?,
+        cover_image: row.get(15)?,
         created_at: DateTime::parse_from_rfc3339(&created_s)
-            .map_err(|e| id_err(15, e))?
+            .map_err(|e| id_err(16, e))?
             .with_timezone(&Utc),
         updated_at: DateTime::parse_from_rfc3339(&updated_s)
-            .map_err(|e| id_err(16, e))?
+            .map_err(|e| id_err(17, e))?
             .with_timezone(&Utc),
     })
 }
@@ -583,6 +608,7 @@ mod tests {
             user_gender: None,
             greeting: None,
             notes: None,
+            ai_avatar_description: None,
             cover_image: None,
             created_at: Utc::now(),
             updated_at: Utc::now(),

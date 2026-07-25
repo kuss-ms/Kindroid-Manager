@@ -367,6 +367,7 @@ mod tests {
                 user_gender: None,
                 greeting: Some("Hello!".into()),
                 notes: None,
+                ai_avatar_description: None,
                 cover_image: None,
                 created_at: Utc::now(),
                 updated_at: Utc::now(),

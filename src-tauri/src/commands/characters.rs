@@ -27,6 +27,7 @@ pub struct CharacterFields {
     pub current_scene: Option<String>,
     pub greeting: Option<String>,
     pub notes: Option<String>,
+    pub ai_avatar_description: Option<String>,
 }
 
 fn empty_to_none(s: Option<String>) -> Option<String> {
@@ -52,6 +53,7 @@ fn normalize(fields: CharacterFields) -> CharacterFields {
         current_scene: empty_to_none(fields.current_scene),
         greeting: empty_to_none(fields.greeting),
         notes: fields.notes,
+        ai_avatar_description: empty_to_none(fields.ai_avatar_description),
     }
 }
 
@@ -104,6 +106,7 @@ pub async fn save_character(
         user_gender: None,
         greeting: fields.greeting,
         notes: fields.notes,
+        ai_avatar_description: fields.ai_avatar_description,
         cover_image,
         created_at: Utc::now(),
         updated_at: Utc::now(),
@@ -257,6 +260,49 @@ mod tests {
         assert_eq!(still_there, Some(original_bytes));
     }
 
+    #[tokio::test]
+    async fn overwriting_image_with_different_extension_returns_new_bytes() {
+        // Regression: previously `read_character_image_bytes` iterated a
+        // hardcoded list of extensions and returned whichever file existed
+        // first, so overwriting a PNG with a JPG (or vice versa) would
+        // leave the stale file on disk and cause subsequent reads to
+        // return the wrong bytes.
+        let dir = tempfile::tempdir().unwrap();
+        let db_path = dir.path().join("test.db");
+        let repo: Arc<dyn Repository> = Arc::new(SqliteRepository::open(&db_path).unwrap());
+
+        let c = repo
+            .upsert_character(Character {
+                id: Uuid::new_v4(),
+                name: "Subject".into(),
+                cover_image: None,
+                created_at: Utc::now(),
+                updated_at: Utc::now(),
+                ..make_minimal_character()
+            })
+            .await
+            .unwrap();
+
+        let png_bytes: &[u8] = b"\x89PNG\r\n\x1a\noriginal-png-payload";
+        repo.save_character_image_bytes(c.id, png_bytes)
+            .await
+            .unwrap();
+        let jpg_bytes: &[u8] = b"\xff\xd8\xff\xe0replacement-jpg-payload";
+        repo.save_character_image_bytes(c.id, jpg_bytes)
+            .await
+            .unwrap();
+
+        let read_back = repo
+            .read_character_image_bytes(c.id)
+            .await
+            .unwrap()
+            .unwrap();
+        assert_eq!(
+            read_back, jpg_bytes,
+            "must return the newly uploaded bytes, not the stale PNG"
+        );
+    }
+
     fn make_minimal_character() -> Character {
         Character {
             id: Uuid::new_v4(),
@@ -273,6 +319,7 @@ mod tests {
             user_gender: None,
             greeting: None,
             notes: None,
+            ai_avatar_description: None,
             cover_image: None,
             created_at: Utc::now(),
             updated_at: Utc::now(),

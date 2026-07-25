@@ -1,0 +1,1 @@
+ALTER TABLE characters ADD COLUMN cover_image TEXT;

@@ -1,0 +1,138 @@
+import { useQuery, useQueryClient } from '@tanstack/react-query';
+import { useEffect, useRef, useState } from 'react';
+import { NavLink, Outlet, useNavigate } from 'react-router-dom';
+import { api, errorMessage } from '../lib/api';
+import { OnboardingBanner } from './OnboardingBanner';
+import { toast } from './Toaster';
+export function AppLayout() {
+  const queryClient = useQueryClient();
+  const navigate = useNavigate();
+  const [dropActive, setDropActive] = useState(false);
+  const dragCounter = useRef(0);
+  const settings = useQuery({ queryKey: ['settings'], queryFn: api.getSettings });
+  const characters = useQuery({ queryKey: ['characters'], queryFn: api.listCharacters });
+  const targets = useQuery({ queryKey: ['targets'], queryFn: api.listTargets });
+  const showBanner =
+    !!settings.data &&
+    (!settings.data.token_configured ||
+      (characters.data?.length ?? 0) === 0 ||
+      (targets.data?.length ?? 0) === 0);
+  useEffect(() => {
+    const handleDrop = async (file: File) => {
+      const buf = await file.arrayBuffer();
+      const bytes = Array.from(new Uint8Array(buf));
+      try {
+        const draft = await api.importShareImage(bytes);
+        queryClient.setQueryData(['character', draft.id], draft);
+        queryClient.invalidateQueries({ queryKey: ['characters'] });
+        toast('success', `Imported "${draft.name}"`);
+        navigate(`/characters/${draft.id}`);
+      } catch (e) {
+        toast('error', errorMessage(e));
+      }
+    };
+    const onDragEnter = (e: DragEvent) => {
+      e.preventDefault();
+      if (e.dataTransfer?.types.includes('Files')) {
+        dragCounter.current += 1;
+        setDropActive(true);
+      }
+    };
+    const onDragLeave = (e: DragEvent) => {
+      e.preventDefault();
+      dragCounter.current = Math.max(0, dragCounter.current - 1);
+      if (dragCounter.current === 0) setDropActive(false);
+    };
+    const onDragOver = (e: DragEvent) => {
+      e.preventDefault();
+    };
+    const onDrop = (e: DragEvent) => {
+      e.preventDefault();
+      dragCounter.current = 0;
+      setDropActive(false);
+      const file = e.dataTransfer?.files[0];
+      if (!file || !file.type.startsWith('image/')) {
+        toast('error', 'Please drop a PNG image.');
+        return;
+      }
+      void handleDrop(file);
+    };
+    const onPaste = (e: ClipboardEvent) => {
+      const items = e.clipboardData?.items;
+      if (!items) return;
+      for (const item of items) {
+        if (item.type.startsWith('image/')) {
+          const file = item.getAsFile();
+          if (file) {
+            e.preventDefault();
+            void handleDrop(file);
+            return;
+          }
+        }
+      }
+    };
+    window.addEventListener('dragenter', onDragEnter);
+    window.addEventListener('dragleave', onDragLeave);
+    window.addEventListener('dragover', onDragOver);
+    window.addEventListener('drop', onDrop);
+    window.addEventListener('paste', onPaste);
+    return () => {
+      window.removeEventListener('dragenter', onDragEnter);
+      window.removeEventListener('dragleave', onDragLeave);
+      window.removeEventListener('dragover', onDragOver);
+      window.removeEventListener('drop', onDrop);
+      window.removeEventListener('paste', onPaste);
+    };
+  }, [queryClient, navigate]);
+  return (
+    <div className="app">
+      {' '}
+      <header className="app-header">
+        {' '}
+        <div className="app-brand">
+          {' '}
+          <span className="app-brand-mark">K</span> Kindroid Manager{' '}
+        </div>{' '}
+        <nav className="app-nav">
+          {' '}
+          <NavLink to="/characters" className={({ isActive }) => (isActive ? 'active' : '')}>
+            {' '}
+            Characters{' '}
+          </NavLink>{' '}
+          <NavLink to="/targets" className={({ isActive }) => (isActive ? 'active' : '')}>
+            {' '}
+            Targets{' '}
+          </NavLink>{' '}
+          <NavLink to="/push" className={({ isActive }) => (isActive ? 'active' : '')}>
+            {' '}
+            Push{' '}
+          </NavLink>{' '}
+          <NavLink to="/history" className={({ isActive }) => (isActive ? 'active' : '')}>
+            {' '}
+            History{' '}
+          </NavLink>{' '}
+          <NavLink to="/settings" className={({ isActive }) => (isActive ? 'active' : '')}>
+            {' '}
+            Settings{' '}
+          </NavLink>{' '}
+        </nav>{' '}
+      </header>{' '}
+      {showBanner && <OnboardingBanner />}{' '}
+      <main className="app-main">
+        {' '}
+        <Outlet />{' '}
+      </main>{' '}
+      {dropActive && (
+        <div className="drop-overlay">
+          {' '}
+          <div className="drop-card">
+            {' '}
+            <div className="drop-icon">⬇</div>{' '}
+            <div className="drop-title">Drop a Kindroid share image</div>{' '}
+            <div className="drop-sub">PNG with embedded persona metadata</div>{' '}
+          </div>{' '}
+        </div>
+      )}{' '}
+    </div>
+  );
+}

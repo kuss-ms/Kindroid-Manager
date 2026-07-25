@@ -1,0 +1,150 @@
+import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
+import { useState } from 'react';
+import { useNavigate } from 'react-router-dom';
+import { api, errorMessage } from '../lib/api';
+import type { Character } from '../lib/types';
+import { ConfirmDialog } from '../components/ConfirmDialog';
+import { toast } from '../components/Toaster';
+export function CharactersPage() {
+  const queryClient = useQueryClient();
+  const navigate = useNavigate();
+  const [search, setSearch] = useState('');
+  const [deleteId, setDeleteId] = useState<string | null>(null);
+  const characters = useQuery<Character[]>({
+    queryKey: ['characters'],
+    queryFn: api.listCharacters,
+  });
+  const del = useMutation<void, unknown, string>({
+    mutationFn: (id) => api.deleteCharacter(id),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ['characters'] });
+      toast('success', 'Character deleted');
+    },
+    onError: (e) => toast('error', errorMessage(e)),
+  });
+  const duplicate = useMutation<Character, unknown, string>({
+    mutationFn: (id) => api.duplicateCharacter(id),
+    onSuccess: (c) => {
+      queryClient.invalidateQueries({ queryKey: ['characters'] });
+      toast('success', `Duplicated as "${c.name}"`);
+    },
+    onError: (e) => toast('error', errorMessage(e)),
+  });
+
+  const share = useMutation<void, unknown, string>({
+    mutationFn: async (id) => {
+      const bytes = await api.exportShareImage(id);
+      const blob = new Blob([new Uint8Array(bytes)], { type: 'image/png' });
+      if (
+        typeof ClipboardItem !== 'undefined' &&
+        typeof navigator !== 'undefined' &&
+        navigator.clipboard?.write
+      ) {
+        await navigator.clipboard.write([new ClipboardItem({ 'image/png': blob })]);
+        return;
+      }
+      throw new Error('Image clipboard write not supported in this environment');
+    },
+    onSuccess: () => toast('success', 'Share image copied to clipboard'),
+    onError: (e) => toast('error', errorMessage(e)),
+  });
+  const list = (characters.data ?? []).filter((c: Character) =>
+    c.name.toLowerCase().includes(search.toLowerCase()),
+  );
+  return (
+    <div className="page">
+      {' '}
+      <div className="page-header">
+        {' '}
+        <h2>Characters</h2>{' '}
+        <div className="page-header-actions">
+          {' '}
+          <input
+            className="input input-search"
+            placeholder="Search by name…"
+            value={search}
+            onChange={(e) => setSearch(e.target.value)}
+            onKeyDown={(e) => {
+              if (e.key === '/') {
+                e.preventDefault();
+                (e.target as HTMLInputElement).focus();
+              }
+            }}
+          />{' '}
+          <button className="btn btn-primary" onClick={() => navigate('/characters/new')}>
+            {' '}
+            New{' '}
+          </button>{' '}
+        </div>{' '}
+      </div>{' '}
+      <p className="muted" style={{ fontSize: 12, marginBottom: 0 }}>
+        {' '}
+        Drop a PNG anywhere on the window (or paste from clipboard) to import a share image.{' '}
+      </p>{' '}
+      {list.length === 0 && (
+        <div className="empty">No characters yet. Create one or drop a share image.</div>
+      )}{' '}
+      {list.length > 0 && (
+        <div className="card" style={{ padding: 0 }}>
+          {' '}
+          <div className="list">
+            {' '}
+            {list.map((c) => (
+              <div key={c.id} className="list-item">
+                {' '}
+                <div className="list-item-main">
+                  {' '}
+                  <div className="list-item-title">{c.name}</div>{' '}
+                  <div className="list-item-sub mono">
+                    {' '}
+                    {c.id.slice(0, 8)} {c.ai_name && <> · AI: {c.ai_name}</>}{' '}
+                    {c.cover_image && <> · 🖼</>}{' '}
+                  </div>{' '}
+                </div>{' '}
+                <div className="list-item-actions">
+                  {' '}
+                  <button className="btn btn-sm" onClick={() => navigate(`/characters/${c.id}`)}>
+                    {' '}
+                    Edit{' '}
+                  </button>{' '}
+                  <button
+                    className="btn btn-sm"
+                    onClick={() => share.mutate(c.id)}
+                    disabled={share.isPending || !c.cover_image}
+                    title={
+                      c.cover_image
+                        ? 'Copy share image (with persona) to clipboard'
+                        : 'Upload a cover image first'
+                    }
+                  >
+                    {' '}
+                    {share.isPending && share.variables === c.id ? 'Sharing…' : 'Share'}{' '}
+                  </button>{' '}
+                  <button className="btn btn-sm" onClick={() => duplicate.mutate(c.id)}>
+                    {' '}
+                    Duplicate{' '}
+                  </button>{' '}
+                  <button className="btn btn-sm btn-danger" onClick={() => setDeleteId(c.id)}>
+                    {' '}
+                    Delete{' '}
+                  </button>{' '}
+                </div>{' '}
+              </div>
+            ))}{' '}
+          </div>{' '}
+        </div>
+      )}{' '}
+      <ConfirmDialog
+        open={!!deleteId}
+        title="Delete character?"
+        body="This permanently removes the character and its cover image, and cannot be undone."
+        confirmLabel="Delete"
+        onConfirm={() => {
+          if (deleteId) del.mutate(deleteId);
+          setDeleteId(null);
+        }}
+        onCancel={() => setDeleteId(null)}
+      />{' '}
+    </div>
+  );
+}

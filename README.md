@@ -165,11 +165,6 @@ webservice-mode can slot in without changing the UI. The frontend's
 only Tauri dependency is `src/lib/api.ts` — every page/component talks
 to Rust through that one file.
 
-## License
-
-Choose a license (e.g. MIT or Apache-2.0) before any public release.
-Private use is fine without one.
-
 ## Acknowledgments
 
 API by [Kindroid](https://kindroid.ai/).

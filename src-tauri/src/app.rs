@@ -2,6 +2,7 @@ use std::sync::Arc;
 
 use tauri::Manager;
 
+use crate::commands::sync_registry::SyncRegistry;
 use crate::commands::tauri_wrappers;
 use crate::kindroid::http::HttpKindroidClient;
 use crate::kindroid::KindroidClient;
@@ -21,6 +22,7 @@ pub fn run() {
             let client: Arc<dyn KindroidClient> = Arc::new(HttpKindroidClient::new());
             app.manage(repo);
             app.manage(client);
+            app.manage(Arc::new(SyncRegistry::new()));
             Ok(())
         })
         .invoke_handler(tauri::generate_handler![
@@ -46,6 +48,14 @@ pub fn run() {
             tauri_wrappers::set_token,
             tauri_wrappers::clear_token,
             tauri_wrappers::test_token,
+            tauri_wrappers::list_chat_messages,
+            tauri_wrappers::search_chat,
+            tauri_wrappers::chat_message_count,
+            tauri_wrappers::get_chat_sync_state,
+            tauri_wrappers::get_current_sync,
+            tauri_wrappers::start_chat_sync,
+            tauri_wrappers::cancel_chat_sync,
+            tauri_wrappers::reset_chat_history,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

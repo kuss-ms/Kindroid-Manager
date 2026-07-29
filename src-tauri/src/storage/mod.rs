@@ -2,6 +2,7 @@ use async_trait::async_trait;
 use uuid::Uuid;
 
 use crate::domain::character::Character;
+use crate::domain::chat_message::{ChatMessage, ChatSyncState};
 use crate::domain::push_log::PushLogEntry;
 use crate::domain::target::Target;
 
@@ -59,4 +60,45 @@ pub trait Repository: Send + Sync {
 
     /// Delete the cover image (if any) for `character_id`.
     async fn delete_character_image_bytes(&self, id: Uuid) -> Result<(), StorageError>;
+
+    /// Insert chat messages, ignoring duplicates by (ai_id, kindroid_msg_id).
+    /// Returns the count of newly-inserted rows.
+    async fn upsert_chat_messages(
+        &self,
+        ai_id: &str,
+        msgs: &[ChatMessage],
+    ) -> Result<usize, StorageError>;
+
+    /// List chat messages for `ai_id`, paginated by `before_ts` (DESC, exclusive).
+    async fn list_chat_messages(
+        &self,
+        ai_id: &str,
+        before_ts: Option<i64>,
+        limit: u32,
+    ) -> Result<Vec<ChatMessage>, StorageError>;
+
+    /// FTS5 search within a single `ai_id`. The query is expected to be
+    /// already escaped by the caller.
+    async fn search_chat(
+        &self,
+        ai_id: &str,
+        query: &str,
+        limit: u32,
+        offset: u32,
+    ) -> Result<Vec<ChatMessage>, StorageError>;
+
+    /// Total number of messages known locally for `ai_id`.
+    async fn chat_message_count(&self, ai_id: &str) -> Result<u64, StorageError>;
+
+    async fn get_chat_sync_state(&self, ai_id: &str)
+        -> Result<Option<ChatSyncState>, StorageError>;
+
+    async fn upsert_chat_sync_state(&self, state: &ChatSyncState) -> Result<(), StorageError>;
+
+    /// Wipe all locally-cached chat history for `ai_id`: every row in
+    /// `chat_messages` (the FTS5 index is updated via the existing
+    /// `chat_messages_ad` trigger) plus the `chat_sync_state` row, so the
+    /// next sync starts cleanly from a zero cursor. Returns the number of
+    /// chat_messages rows that were deleted.
+    async fn reset_chat_history(&self, ai_id: &str) -> Result<usize, StorageError>;
 }

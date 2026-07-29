@@ -74,6 +74,38 @@ export interface TestTokenResult {
   status: number;
 }
 
+export interface ChatMessage {
+  id: Uuid;
+  ai_id: string;
+  kindroid_msg_id: string;
+  sender: string;
+  sender_type: string;
+  display_name: string | null;
+  timestamp: number;
+  message: string;
+  image_urls: string[];
+  image_description: string | null;
+  video_description: string | null;
+  internet_response: string | null;
+  link_url: string | null;
+  link_description: string | null;
+  fetched_at: string;
+}
+
+export type SyncStatusKind = 'idle' | 'running' | 'backoff' | 'cancelled' | 'error';
+
+export interface ChatSyncState {
+  ai_id: string;
+  last_synced_at: string;
+  last_timestamp: number;
+  full_sync_done: boolean;
+  is_syncing: boolean;
+  status_kind: SyncStatusKind;
+  status_message: string | null;
+  backoff_until: string | null;
+  total: number;
+}
+
 export const PERSONA_FIELDS = [
   'ai_name',
   'ai_gender',

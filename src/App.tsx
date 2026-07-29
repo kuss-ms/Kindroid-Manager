@@ -6,6 +6,7 @@ import { TargetsPage } from './pages/TargetsPage';
 import { PushPage } from './pages/PushPage';
 import { HistoryPage } from './pages/HistoryPage';
 import { HistoryDetailPage } from './pages/HistoryDetailPage';
+import { ChatHistoryPage } from './pages/ChatHistoryPage';
 import { SettingsPage } from './pages/SettingsPage';
 import { Toaster } from './components/Toaster';
 export default function App() {
@@ -24,6 +25,7 @@ export default function App() {
           <Route path="/push" element={<PushPage />} />{' '}
           <Route path="/history" element={<HistoryPage />} />{' '}
           <Route path="/history/:id" element={<HistoryDetailPage />} />{' '}
+          <Route path="/chat-history" element={<ChatHistoryPage />} />{' '}
           <Route path="/settings" element={<SettingsPage />} />{' '}
           <Route path="*" element={<Navigate to="/characters" replace />} />{' '}
         </Route>{' '}

@@ -3,8 +3,8 @@ use reqwest::header::{HeaderMap, HeaderValue, AUTHORIZATION, CONTENT_TYPE, RETRY
 use reqwest::Client;
 
 use super::{
-    parse_retry_after, ChatBreakRequest, HttpResponse, KindroidError, UpdateInfoRequest,
-    REQUEST_TIMEOUT,
+    parse_retry_after, ChatBreakRequest, ChatMessagesPage, HttpResponse, KindroidError,
+    ListChatMessagesRequest, UpdateInfoRequest, REQUEST_TIMEOUT,
 };
 
 #[async_trait]
@@ -21,6 +21,12 @@ pub trait KindroidClient: Send + Sync {
         base_url: &str,
         req: ChatBreakRequest,
     ) -> Result<HttpResponse, KindroidError>;
+    async fn list_chat_messages(
+        &self,
+        token: &str,
+        base_url: &str,
+        req: ListChatMessagesRequest,
+    ) -> Result<ChatMessagesPage, KindroidError>;
 }
 
 #[derive(Clone)]
@@ -58,6 +64,34 @@ impl HttpKindroidClient {
             .post(url)
             .headers(Self::build_headers(token))
             .json(&body)
+            .send()
+            .await
+        {
+            Ok(r) => r,
+            Err(e) => return Err(KindroidError::Network(e.to_string())),
+        };
+        let status = resp.status().as_u16();
+        let headers = resp.headers().clone();
+        let body = resp
+            .text()
+            .await
+            .unwrap_or_else(|e| format!("(read body error: {e})"));
+        let ok = (200..300).contains(&status);
+        if ok {
+            return Ok(HttpResponse {
+                status,
+                ok: true,
+                body,
+            });
+        }
+        Err(map_error(status, &headers, body))
+    }
+
+    async fn get_json(&self, url: &str, token: &str) -> Result<HttpResponse, KindroidError> {
+        let resp = match self
+            .http
+            .get(url)
+            .headers(Self::build_headers(token))
             .send()
             .await
         {
@@ -134,6 +168,77 @@ impl KindroidClient for HttpKindroidClient {
         });
         self.post_json(&url, token, body).await
     }
+
+    async fn list_chat_messages(
+        &self,
+        token: &str,
+        base_url: &str,
+        req: ListChatMessagesRequest,
+    ) -> Result<ChatMessagesPage, KindroidError> {
+        let limit = req.limit.clamp(1, 100);
+        let mut url = format!(
+            "{}/get-chat-messages?ai_id={}&limit={}",
+            base_url.trim_end_matches('/'),
+            urlencoding(&req.ai_id),
+            limit
+        );
+        if let Some(ts) = req.start_after_timestamp {
+            // Always pass the cursor (even when `0`) so the API's
+            // pagination behaves consistently across calls. The server
+            // treats `0` as "from the beginning" so this is safe.
+            url.push_str(&format!("&start_after_timestamp={ts}"));
+        }
+        let resp = self.get_json(&url, token).await?;
+        let parsed: ChatMessagesResponse =
+            serde_json::from_str(&resp.body).map_err(|e| KindroidError::Server {
+                status: resp.status,
+                body: format!("invalid chat-history JSON: {e}"),
+            })?;
+        let messages = parsed.messages;
+        let pagination = parsed.pagination;
+        let pagination_last_ts = pagination.as_ref().and_then(|p| p.last_timestamp);
+        let pagination_has_more = pagination.as_ref().and_then(|p| p.has_more);
+        // Prefer the server's `hasMore` flag; if absent, infer from the
+        // page size (a full page usually implies there's more).
+        let has_more = pagination_has_more.unwrap_or((messages.len() as u32) >= limit);
+        Ok(ChatMessagesPage {
+            messages,
+            has_more,
+            limit,
+            pagination_last_timestamp: pagination_last_ts,
+        })
+    }
+}
+
+#[derive(serde::Deserialize, Default)]
+struct ChatMessagesResponse {
+    #[serde(default)]
+    messages: Vec<super::RawChatMessage>,
+    #[serde(default)]
+    pagination: Option<ChatMessagesPagination>,
+}
+
+#[derive(serde::Deserialize, Default)]
+struct ChatMessagesPagination {
+    #[serde(default, rename = "lastTimestamp")]
+    last_timestamp: Option<i64>,
+    #[serde(default, rename = "hasMore")]
+    has_more: Option<bool>,
+}
+
+fn urlencoding(s: &str) -> String {
+    // Minimal percent-encoding for query-string values: only alphanumerics,
+    // `-`, `_`, `.`, `~` pass through.
+    let mut out = String::with_capacity(s.len());
+    for b in s.bytes() {
+        let is_unreserved = b.is_ascii_alphanumeric() || matches!(b, b'-' | b'_' | b'.' | b'~');
+        if is_unreserved {
+            out.push(b as char);
+        } else {
+            out.push_str(&format!("%{b:02X}"));
+        }
+    }
+    out
 }
 
 #[cfg(test)]
@@ -141,7 +246,7 @@ mod tests {
     use super::*;
     use serde_json::json;
     use std::time::Duration;
-    use wiremock::matchers::{header, method, path};
+    use wiremock::matchers::{header, method, path, query_param};
     use wiremock::{Mock, MockServer, ResponseTemplate};
 
     #[tokio::test]
@@ -344,5 +449,352 @@ mod tests {
             .await
             .unwrap();
         assert_eq!(r.status, 200);
+    }
+
+    #[tokio::test]
+    async fn list_chat_messages_200_with_results() {
+        let server = MockServer::start().await;
+        Mock::given(method("GET"))
+            .and(path("/get-chat-messages"))
+            .respond_with(
+                ResponseTemplate::new(200).set_body_string(
+                    json!({
+                        "messages": [
+                            {
+                                "id": "m1",
+                                "sender": "user",
+                                "sender_type": "user",
+                                "display_name": "Alice",
+                                "timestamp": 1_700_000_000_000i64,
+                                "message": "hello there",
+                                "image_urls": ["https://x/1.png"],
+                                "link_url": "https://example.com"
+                            },
+                            {
+                                "id": "m2",
+                                "sender": "ai",
+                                "sender_type": "ai",
+                                "display_name": null,
+                                "timestamp": 1_700_000_001_000i64,
+                                "message": null
+                            }
+                        ]
+                    })
+                    .to_string(),
+                ),
+            )
+            .mount(&server)
+            .await;
+        let c = HttpKindroidClient::new();
+        let page = c
+            .list_chat_messages(
+                "t",
+                &server.uri(),
+                ListChatMessagesRequest {
+                    ai_id: "ai_x".into(),
+                    limit: 100,
+                    start_after_timestamp: None,
+                },
+            )
+            .await
+            .unwrap();
+        assert_eq!(page.messages.len(), 2);
+        assert_eq!(page.messages[0].id, "m1");
+        assert_eq!(page.messages[0].message.as_deref(), Some("hello there"));
+        assert_eq!(page.messages[1].message, None);
+        // Two messages returned, but limit=100, so there isn't necessarily more.
+        assert!(!page.has_more);
+        // No pagination object → no cursor.
+        assert_eq!(page.pagination_last_timestamp, None);
+    }
+
+    #[tokio::test]
+    async fn list_chat_messages_200_full_page_signals_has_more() {
+        let server = MockServer::start().await;
+        // Build a 5-message response and use limit=5.
+        let mut msgs = Vec::new();
+        for i in 0..5 {
+            msgs.push(json!({
+                "id": format!("m{i}"),
+                "sender": "u",
+                "sender_type": "u",
+                "timestamp": i as i64,
+                "message": "x"
+            }));
+        }
+        let body = json!({ "messages": msgs }).to_string();
+        Mock::given(method("GET"))
+            .and(path("/get-chat-messages"))
+            .respond_with(ResponseTemplate::new(200).set_body_string(body))
+            .mount(&server)
+            .await;
+        let c = HttpKindroidClient::new();
+        let page = c
+            .list_chat_messages(
+                "t",
+                &server.uri(),
+                ListChatMessagesRequest {
+                    ai_id: "ai_x".into(),
+                    limit: 5,
+                    start_after_timestamp: None,
+                },
+            )
+            .await
+            .unwrap();
+        assert_eq!(page.messages.len(), 5);
+        assert!(page.has_more, "a full page implies there may be more");
+    }
+
+    #[tokio::test]
+    async fn list_chat_messages_200_parses_pagination_object() {
+        let server = MockServer::start().await;
+        let body = json!({
+            "messages": [
+                {
+                    "id": "m1",
+                    "sender": "u",
+                    "sender_type": "u",
+                    "timestamp": 1_700_000_000_000i64,
+                    "message": "x"
+                },
+                {
+                    "id": "m2",
+                    "sender": "u",
+                    "sender_type": "u",
+                    "timestamp": 1_700_000_001_000i64,
+                    "message": "y"
+                }
+            ],
+            "pagination": {
+                "lastTimestamp": 1_700_000_001_000i64,
+                "hasMore": true
+            }
+        })
+        .to_string();
+        Mock::given(method("GET"))
+            .and(path("/get-chat-messages"))
+            .and(query_param("start_after_timestamp", "0"))
+            .respond_with(ResponseTemplate::new(200).set_body_string(body))
+            .mount(&server)
+            .await;
+        let c = HttpKindroidClient::new();
+        let page = c
+            .list_chat_messages(
+                "t",
+                &server.uri(),
+                ListChatMessagesRequest {
+                    ai_id: "ai_x".into(),
+                    limit: 100,
+                    start_after_timestamp: Some(0),
+                },
+            )
+            .await
+            .unwrap();
+        assert_eq!(page.messages.len(), 2);
+        // Server's pagination object wins.
+        assert_eq!(page.pagination_last_timestamp, Some(1_700_000_001_000));
+        assert!(page.has_more);
+    }
+
+    #[tokio::test]
+    async fn list_chat_messages_200_last_page_has_more_false() {
+        let server = MockServer::start().await;
+        let body = json!({
+            "messages": [
+                {
+                    "id": "m1",
+                    "sender": "u",
+                    "sender_type": "u",
+                    "timestamp": 1_700_000_000_000i64,
+                    "message": "x"
+                }
+            ],
+            "pagination": {
+                "lastTimestamp": 1_700_000_000_000i64,
+                "hasMore": false
+            }
+        })
+        .to_string();
+        Mock::given(method("GET"))
+            .and(path("/get-chat-messages"))
+            .respond_with(ResponseTemplate::new(200).set_body_string(body))
+            .mount(&server)
+            .await;
+        let c = HttpKindroidClient::new();
+        let page = c
+            .list_chat_messages(
+                "t",
+                &server.uri(),
+                ListChatMessagesRequest {
+                    ai_id: "ai_x".into(),
+                    limit: 100,
+                    start_after_timestamp: None,
+                },
+            )
+            .await
+            .unwrap();
+        assert_eq!(page.messages.len(), 1);
+        // Server says we're done — has_more wins over the "full page" heuristic.
+        assert!(!page.has_more);
+        assert_eq!(page.pagination_last_timestamp, Some(1_700_000_000_000));
+    }
+
+    #[tokio::test]
+    async fn list_chat_messages_200_empty_page() {
+        let server = MockServer::start().await;
+        Mock::given(method("GET"))
+            .and(path("/get-chat-messages"))
+            .respond_with(
+                ResponseTemplate::new(200).set_body_string(json!({"messages": []}).to_string()),
+            )
+            .mount(&server)
+            .await;
+        let c = HttpKindroidClient::new();
+        let page = c
+            .list_chat_messages(
+                "t",
+                &server.uri(),
+                ListChatMessagesRequest {
+                    ai_id: "ai_x".into(),
+                    limit: 100,
+                    start_after_timestamp: None,
+                },
+            )
+            .await
+            .unwrap();
+        assert!(page.messages.is_empty());
+        assert!(!page.has_more);
+    }
+
+    #[tokio::test]
+    async fn list_chat_messages_400_maps_to_bad_request() {
+        let server = MockServer::start().await;
+        Mock::given(method("GET"))
+            .and(path("/get-chat-messages"))
+            .respond_with(ResponseTemplate::new(400).set_body_string("bad"))
+            .mount(&server)
+            .await;
+        let c = HttpKindroidClient::new();
+        let err = c
+            .list_chat_messages(
+                "t",
+                &server.uri(),
+                ListChatMessagesRequest {
+                    ai_id: "ai_x".into(),
+                    limit: 100,
+                    start_after_timestamp: None,
+                },
+            )
+            .await
+            .unwrap_err();
+        assert!(matches!(err, KindroidError::BadRequest { status: 400, .. }));
+    }
+
+    #[tokio::test]
+    async fn list_chat_messages_401_maps_to_auth() {
+        let server = MockServer::start().await;
+        Mock::given(method("GET"))
+            .and(path("/get-chat-messages"))
+            .respond_with(ResponseTemplate::new(401).set_body_string("nope"))
+            .mount(&server)
+            .await;
+        let c = HttpKindroidClient::new();
+        let err = c
+            .list_chat_messages(
+                "t",
+                &server.uri(),
+                ListChatMessagesRequest {
+                    ai_id: "ai_x".into(),
+                    limit: 100,
+                    start_after_timestamp: None,
+                },
+            )
+            .await
+            .unwrap_err();
+        assert!(matches!(err, KindroidError::Auth { status: 401, .. }));
+    }
+
+    #[tokio::test]
+    async fn list_chat_messages_429_with_retry_after() {
+        let server = MockServer::start().await;
+        Mock::given(method("GET"))
+            .and(path("/get-chat-messages"))
+            .respond_with(
+                ResponseTemplate::new(429)
+                    .insert_header("Retry-After", "42")
+                    .set_body_string("slow"),
+            )
+            .mount(&server)
+            .await;
+        let c = HttpKindroidClient::new();
+        let err = c
+            .list_chat_messages(
+                "t",
+                &server.uri(),
+                ListChatMessagesRequest {
+                    ai_id: "ai_x".into(),
+                    limit: 100,
+                    start_after_timestamp: None,
+                },
+            )
+            .await
+            .unwrap_err();
+        match err {
+            KindroidError::RateLimited { retry_after, .. } => {
+                assert_eq!(retry_after, Some(Duration::from_secs(42)));
+            }
+            other => panic!("expected RateLimited, got {other:?}"),
+        }
+    }
+
+    #[tokio::test]
+    async fn list_chat_messages_429_without_retry_after() {
+        let server = MockServer::start().await;
+        Mock::given(method("GET"))
+            .and(path("/get-chat-messages"))
+            .respond_with(ResponseTemplate::new(429).set_body_string("slow"))
+            .mount(&server)
+            .await;
+        let c = HttpKindroidClient::new();
+        let err = c
+            .list_chat_messages(
+                "t",
+                &server.uri(),
+                ListChatMessagesRequest {
+                    ai_id: "ai_x".into(),
+                    limit: 100,
+                    start_after_timestamp: None,
+                },
+            )
+            .await
+            .unwrap_err();
+        match err {
+            KindroidError::RateLimited { retry_after, .. } => assert!(retry_after.is_none()),
+            other => panic!("expected RateLimited, got {other:?}"),
+        }
+    }
+
+    #[tokio::test]
+    async fn list_chat_messages_500_maps_to_server() {
+        let server = MockServer::start().await;
+        Mock::given(method("GET"))
+            .and(path("/get-chat-messages"))
+            .respond_with(ResponseTemplate::new(500).set_body_string("boom"))
+            .mount(&server)
+            .await;
+        let c = HttpKindroidClient::new();
+        let err = c
+            .list_chat_messages(
+                "t",
+                &server.uri(),
+                ListChatMessagesRequest {
+                    ai_id: "ai_x".into(),
+                    limit: 100,
+                    start_after_timestamp: None,
+                },
+            )
+            .await
+            .unwrap_err();
+        assert!(matches!(err, KindroidError::Server { status: 500, .. }));
     }
 }

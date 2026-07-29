@@ -23,6 +23,13 @@ backend can be added later without touching the UI.
   not consume the metadata.
 - A push history with the full request/response body and a one-click
   re-push.
+- A **Chat History** viewer that pulls messages from the
+  `GET /get-chat-messages` endpoint into a local SQLite + FTS5 cache
+  per target. Runs a long-lived background sync, shows a live
+  progress indicator (request count + last message timestamp + batch
+  size), supports prefix / Porter-stem search, and a click-to-expand
+  detail pop-up. A **Reset** button clears the local cache and sync
+  cursor so you can do a clean full resync.
 - A "Test token" probe that does a best-effort reachability + auth
   check without mutating state.
 
@@ -112,6 +119,26 @@ to.
     the push. Then enable chat-break on a character with no greeting
     → confirm the textarea starts empty with the hint and the Push
     button stays disabled until a greeting is typed.
+12. Open **Chat History** with no targets → confirm the
+    "Add a target on the Targets page…" empty state.
+13. Add a target → return to Chat History, pick it. Click **Sync** →
+    the status flips to "Syncing…", the request counter advances,
+    and the message list refreshes as new pages arrive. Cancel the
+    sync mid-loop → status becomes `Cancelled`; clicking **Sync**
+    again resumes from the saved cursor.
+14. Type a word in the search bar → top hits render with a snippet;
+    search "run" finds "running" / "runs" (Porter stem). Click any
+    row → the detail pop-up shows the full message, image links,
+    link, and metadata.
+15. Disconnect the network, click **Sync** → status becomes `Error`
+    with a message; click **Sync** again to retry once the network is
+    back.
+16. With target A syncing, open Chat History for target B → the
+    **Sync** button on B is disabled with the tooltip
+    "Sync in progress for A". Cancel A to free the slot.
+17. Click **Reset** on a target that already has cached messages →
+    confirm the dialog, then verify the page shows no messages and
+    the sync state is gone. Click **Sync** to start a fresh backfill.
 
 ## Troubleshooting
 
@@ -120,13 +147,20 @@ to.
 - **Want to reset the local DB** — open Settings → "Open data folder"
   (or navigate to the app's data dir) and delete `kindroid-manager.db`.
   Characters and history are gone; the token is untouched (it lives in
-  the keychain).
+  the keychain). To wipe just the chat history for a single target,
+  open **Chat History**, pick the target, click **Reset** and confirm.
 - **401 / 403** — token is rejected. Re-enter it in Settings.
-- **429** — rate-limited. Wait a few seconds (the response includes
-  `Retry-After` if available) and retry. v1 does not auto-retry.
+- **429** — rate-limited. The chat-history sync loop honours the
+  `Retry-After` header on its own (status flips to `Paused until …`
+  with a countdown); the regular push endpoints do not auto-retry, so
+  wait a few seconds and retry manually.
 - **400** — Kindroid rejected the request body (often an empty field
   that the API doesn't accept). The full response body is in the
   History detail.
+- **Chat history stuck at "Syncing…"** — cancel the sync, check the
+  status message. If it reads `Rate-limited`, the loop is waiting for
+  the rate-limit window; if it reads `Error`, click **Sync** to retry.
+  Use **Reset** to start over from a clean cursor.
 
 ## Architecture
 

@@ -7,7 +7,7 @@
 
 #[cfg(not(test))]
 mod inner {
-    use crate::commands::{characters, history, push, settings, share_code, targets};
+    use crate::commands::{characters, chat_history, history, push, settings, share_code, targets};
     use tauri::State;
 
     type Repo = std::sync::Arc<dyn crate::storage::Repository>;
@@ -178,6 +178,83 @@ mod inner {
         client: State<'_, Client>,
     ) -> Result<settings::TestTokenResult, crate::error::AppError> {
         settings::test_token(repo.inner().clone(), client.inner().clone()).await
+    }
+
+    #[tauri::command]
+    pub async fn list_chat_messages(
+        repo: State<'_, Repo>,
+        ai_id: String,
+        before_ts: Option<i64>,
+        limit: u32,
+    ) -> Result<Vec<crate::domain::chat_message::ChatMessage>, crate::error::AppError> {
+        chat_history::list_chat_messages(repo.inner().clone(), ai_id, before_ts, limit).await
+    }
+
+    #[tauri::command]
+    pub async fn search_chat(
+        repo: State<'_, Repo>,
+        ai_id: String,
+        query: String,
+        limit: u32,
+        offset: u32,
+    ) -> Result<Vec<crate::domain::chat_message::ChatMessage>, crate::error::AppError> {
+        chat_history::search_chat(repo.inner().clone(), ai_id, query, limit, offset).await
+    }
+
+    #[tauri::command]
+    pub async fn chat_message_count(
+        repo: State<'_, Repo>,
+        ai_id: String,
+    ) -> Result<u64, crate::error::AppError> {
+        chat_history::chat_message_count(repo.inner().clone(), ai_id).await
+    }
+
+    #[tauri::command]
+    pub async fn get_chat_sync_state(
+        repo: State<'_, Repo>,
+        ai_id: String,
+    ) -> Result<Option<crate::domain::chat_message::ChatSyncState>, crate::error::AppError> {
+        chat_history::get_chat_sync_state(repo.inner().clone(), ai_id).await
+    }
+
+    #[tauri::command]
+    pub async fn get_current_sync(
+        registry: State<'_, std::sync::Arc<crate::commands::sync_registry::SyncRegistry>>,
+    ) -> Result<Option<String>, crate::error::AppError> {
+        chat_history::get_current_sync(registry.inner().clone()).await
+    }
+
+    #[tauri::command]
+    pub async fn start_chat_sync(
+        repo: State<'_, Repo>,
+        client: State<'_, Client>,
+        registry: State<'_, std::sync::Arc<crate::commands::sync_registry::SyncRegistry>>,
+        ai_id: String,
+        app: tauri::AppHandle,
+    ) -> Result<(), crate::error::AppError> {
+        chat_history::start_chat_sync(
+            repo.inner().clone(),
+            client.inner().clone(),
+            registry.inner().clone(),
+            ai_id,
+            app,
+        )
+        .await
+    }
+
+    #[tauri::command]
+    pub async fn cancel_chat_sync(
+        registry: State<'_, std::sync::Arc<crate::commands::sync_registry::SyncRegistry>>,
+    ) -> Result<(), crate::error::AppError> {
+        chat_history::cancel_chat_sync(registry.inner().clone()).await
+    }
+
+    #[tauri::command]
+    pub async fn reset_chat_history(
+        repo: State<'_, Repo>,
+        ai_id: String,
+    ) -> Result<usize, crate::error::AppError> {
+        chat_history::reset_chat_history(repo.inner().clone(), ai_id).await
     }
 }
 

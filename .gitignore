@@ -12,3 +12,4 @@ src-tauri/gen/schemas
 !.vscode/settings.json
 .DS_Store
 Thumbs.db
+/.kilo

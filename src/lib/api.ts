@@ -1,6 +1,8 @@
 import { invoke } from '@tauri-apps/api/core';
 import type {
   Character,
+  ChatMessage,
+  ChatSyncState,
   PushLogEntry,
   PushRequest,
   PushResult,
@@ -102,4 +104,36 @@ export const api = {
   setToken: (token: string) => invoke<void>('set_token', { token }),
   clearToken: () => invoke<void>('clear_token'),
   testToken: () => invoke<TestTokenResult>('test_token'),
+
+  // Chat history
+  listChatMessages: (aiId: string, beforeTs: number | null, limit: number) =>
+    invoke<ChatMessage[]>('list_chat_messages', { aiId, beforeTs, limit }),
+  searchChat: (aiId: string, query: string, limit: number, offset: number) =>
+    invoke<ChatMessage[]>('search_chat', { aiId, query, limit, offset }),
+  chatMessageCount: (aiId: string) => invoke<number>('chat_message_count', { aiId }),
+  getChatSyncState: (aiId: string) =>
+    invoke<ChatSyncState | null>('get_chat_sync_state', { aiId }),
+  getCurrentSync: () => invoke<string | null>('get_current_sync'),
+  startChatSync: (aiId: string) => invoke<void>('start_chat_sync', { aiId }),
+  cancelChatSync: () => invoke<void>('cancel_chat_sync'),
+  resetChatHistory: (aiId: string) => invoke<number>('reset_chat_history', { aiId }),
 };
+
+/**
+ * Escape an arbitrary user query into a safe FTS5 prefix-match expression.
+ *
+ * Each whitespace-separated token is double-quoted (so FTS5 treats it as
+ * a literal phrase), stripped of FTS5 metacharacters, with internal `"`
+ * doubled, and suffixed with `*` for prefix matching. The result is
+ * `token1* OR token2* OR token3*`. The Porter stemmer in
+ * `chat_messages_fts` collapses inflectional variants automatically.
+ */
+export function escapeFtsQuery(query: string): string {
+  const FTS_META = /[*()^:]/g;
+  const tokens = query
+    .split(/\s+/)
+    .map((t) => t.replace(FTS_META, ''))
+    .filter((t) => t.length > 0);
+  if (tokens.length === 0) return '';
+  return tokens.map((t) => `"${t.replace(/"/g, '""')}"*`).join(' OR ');
+}

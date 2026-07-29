@@ -3,6 +3,8 @@ use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
 use crate::domain::character::Character;
+#[allow(unused_imports)]
+use crate::domain::chat_message::{ChatMessage, ChatSyncState};
 use crate::domain::push_log::{truncate_body, PushLogEntry};
 use crate::error::{AppError, PushResult, StepResult};
 use crate::kindroid::{
@@ -292,11 +294,51 @@ mod tests {
             self.images.lock().unwrap().remove(&id);
             Ok(())
         }
+        async fn upsert_chat_messages(
+            &self,
+            _ai_id: &str,
+            _msgs: &[ChatMessage],
+        ) -> Result<usize, StorageError> {
+            Ok(0)
+        }
+        async fn list_chat_messages(
+            &self,
+            _ai_id: &str,
+            _before_ts: Option<i64>,
+            _limit: u32,
+        ) -> Result<Vec<ChatMessage>, StorageError> {
+            Ok(Vec::new())
+        }
+        async fn search_chat(
+            &self,
+            _ai_id: &str,
+            _query: &str,
+            _limit: u32,
+            _offset: u32,
+        ) -> Result<Vec<ChatMessage>, StorageError> {
+            Ok(Vec::new())
+        }
+        async fn chat_message_count(&self, _ai_id: &str) -> Result<u64, StorageError> {
+            Ok(0)
+        }
+        async fn get_chat_sync_state(
+            &self,
+            _ai_id: &str,
+        ) -> Result<Option<ChatSyncState>, StorageError> {
+            Ok(None)
+        }
+        async fn upsert_chat_sync_state(&self, _state: &ChatSyncState) -> Result<(), StorageError> {
+            Ok(())
+        }
+        async fn reset_chat_history(&self, _ai_id: &str) -> Result<usize, StorageError> {
+            Ok(0)
+        }
     }
 
     struct FakeClient {
         update: Mutex<Option<Result<HttpResponse, KindroidError>>>,
         chat_break: Mutex<Option<Result<HttpResponse, KindroidError>>>,
+        list_chat: Mutex<Option<Result<crate::kindroid::ChatMessagesPage, KindroidError>>>,
     }
     impl FakeClient {
         fn ok_both() -> Self {
@@ -311,6 +353,7 @@ mod tests {
                     ok: true,
                     body: "ok".into(),
                 }))),
+                list_chat: Mutex::new(None),
             }
         }
     }
@@ -346,6 +389,23 @@ mod tests {
                     status: 200,
                     ok: true,
                     body: "ok".into(),
+                }))
+        }
+        async fn list_chat_messages(
+            &self,
+            _t: &str,
+            _u: &str,
+            _r: crate::kindroid::ListChatMessagesRequest,
+        ) -> Result<crate::kindroid::ChatMessagesPage, KindroidError> {
+            self.list_chat
+                .lock()
+                .unwrap()
+                .take()
+                .unwrap_or(Ok(crate::kindroid::ChatMessagesPage {
+                    messages: Vec::new(),
+                    has_more: false,
+                    limit: 100,
+                    pagination_last_timestamp: None,
                 }))
         }
     }
@@ -445,6 +505,7 @@ mod tests {
                 ok: true,
                 body: "ok".into(),
             }))),
+            list_chat: Mutex::new(None),
         };
         let req = PushRequest {
             character_id: c.id,
@@ -475,6 +536,7 @@ mod tests {
                 status: 500,
                 body: "boom".into(),
             }))),
+            list_chat: Mutex::new(None),
         };
         let req = PushRequest {
             character_id: c.id,

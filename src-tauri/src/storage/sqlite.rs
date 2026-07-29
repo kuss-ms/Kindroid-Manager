@@ -8,6 +8,7 @@ use tokio::sync::Mutex;
 use uuid::Uuid;
 
 use crate::domain::character::Character;
+use crate::domain::chat_message::{ChatMessage, ChatSyncState, SyncStatusKind};
 use crate::domain::push_log::PushLogEntry;
 use crate::domain::target::Target;
 use crate::storage::{Repository, StorageError};
@@ -511,6 +512,211 @@ impl Repository for SqliteRepository {
         }
         Ok(())
     }
+
+    async fn upsert_chat_messages(
+        &self,
+        ai_id: &str,
+        msgs: &[ChatMessage],
+    ) -> Result<usize, StorageError> {
+        if msgs.is_empty() {
+            return Ok(0);
+        }
+        let conn = lock(&self.conn).await;
+        let mut inserted = 0usize;
+        let tx = conn
+            .unchecked_transaction()
+            .map_err(|e| StorageError::Database(e.to_string()))?;
+        for m in msgs {
+            let image_urls_json = serde_json::to_string(&m.image_urls)
+                .map_err(|e| StorageError::Database(e.to_string()))?;
+            let n = tx
+                .execute(
+                    "INSERT INTO chat_messages
+                       (id, ai_id, kindroid_msg_id, sender, sender_type, display_name,
+                        timestamp, message, image_urls, image_description, video_description,
+                        internet_response, link_url, link_description, fetched_at)
+                     VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,?12,?13,?14,?15)
+                     ON CONFLICT(ai_id, kindroid_msg_id) DO NOTHING",
+                    params![
+                        m.id.to_string(),
+                        ai_id,
+                        m.kindroid_msg_id,
+                        m.sender,
+                        m.sender_type,
+                        m.display_name,
+                        m.timestamp,
+                        m.message,
+                        image_urls_json,
+                        m.image_description,
+                        m.video_description,
+                        m.internet_response,
+                        m.link_url,
+                        m.link_description,
+                        m.fetched_at.to_rfc3339(),
+                    ],
+                )
+                .map_err(|e| StorageError::Database(e.to_string()))?;
+            inserted += n;
+        }
+        tx.commit()
+            .map_err(|e| StorageError::Database(e.to_string()))?;
+        Ok(inserted)
+    }
+
+    async fn list_chat_messages(
+        &self,
+        ai_id: &str,
+        before_ts: Option<i64>,
+        limit: u32,
+    ) -> Result<Vec<ChatMessage>, StorageError> {
+        let conn = lock(&self.conn).await;
+        let limit = limit.clamp(1, 500) as i64;
+        let mut stmt = match before_ts {
+            Some(_) => conn
+                .prepare(
+                    "SELECT id, ai_id, kindroid_msg_id, sender, sender_type, display_name,
+                            timestamp, message, image_urls, image_description, video_description,
+                            internet_response, link_url, link_description, fetched_at
+                     FROM chat_messages
+                     WHERE ai_id = ?1 AND timestamp < ?2
+                     ORDER BY timestamp DESC LIMIT ?3",
+                )
+                .map_err(|e| StorageError::Database(e.to_string()))?,
+            None => conn
+                .prepare(
+                    "SELECT id, ai_id, kindroid_msg_id, sender, sender_type, display_name,
+                            timestamp, message, image_urls, image_description, video_description,
+                            internet_response, link_url, link_description, fetched_at
+                     FROM chat_messages
+                     WHERE ai_id = ?1
+                     ORDER BY timestamp DESC LIMIT ?2",
+                )
+                .map_err(|e| StorageError::Database(e.to_string()))?,
+        };
+        let rows = match before_ts {
+            Some(ts) => stmt
+                .query_map(params![ai_id, ts, limit], row_to_chat_message)
+                .map_err(|e| StorageError::Database(e.to_string()))?,
+            None => stmt
+                .query_map(params![ai_id, limit], row_to_chat_message)
+                .map_err(|e| StorageError::Database(e.to_string()))?,
+        };
+        rows.map(|r| r.map_err(|e| StorageError::Database(e.to_string())))
+            .collect()
+    }
+
+    async fn search_chat(
+        &self,
+        ai_id: &str,
+        query: &str,
+        limit: u32,
+        offset: u32,
+    ) -> Result<Vec<ChatMessage>, StorageError> {
+        let limit = limit.clamp(1, 500) as i64;
+        let offset = offset as i64;
+        let conn = lock(&self.conn).await;
+        let mut stmt = conn
+            .prepare(
+                "SELECT cm.id, cm.ai_id, cm.kindroid_msg_id, cm.sender, cm.sender_type,
+                        cm.display_name, cm.timestamp, cm.message, cm.image_urls,
+                        cm.image_description, cm.video_description, cm.internet_response,
+                        cm.link_url, cm.link_description, cm.fetched_at
+                 FROM chat_messages_fts
+                 JOIN chat_messages cm ON cm.rowid = chat_messages_fts.rowid
+                 WHERE chat_messages_fts MATCH ?1 AND cm.ai_id = ?2
+                 ORDER BY rank
+                 LIMIT ?3 OFFSET ?4",
+            )
+            .map_err(|e| StorageError::Database(e.to_string()))?;
+        let rows = stmt
+            .query_map(params![query, ai_id, limit, offset], row_to_chat_message)
+            .map_err(|e| StorageError::Database(e.to_string()))?;
+        rows.map(|r| r.map_err(|e| StorageError::Database(e.to_string())))
+            .collect()
+    }
+
+    async fn chat_message_count(&self, ai_id: &str) -> Result<u64, StorageError> {
+        let conn = lock(&self.conn).await;
+        let n: i64 = conn
+            .query_row(
+                "SELECT COUNT(*) FROM chat_messages WHERE ai_id = ?1",
+                params![ai_id],
+                |r| r.get(0),
+            )
+            .map_err(|e| StorageError::Database(e.to_string()))?;
+        Ok(n.max(0) as u64)
+    }
+
+    async fn get_chat_sync_state(
+        &self,
+        ai_id: &str,
+    ) -> Result<Option<ChatSyncState>, StorageError> {
+        let conn = lock(&self.conn).await;
+        conn.query_row(
+            "SELECT ai_id, last_synced_at, last_timestamp, full_sync_done, is_syncing,
+                    status_kind, status_message, backoff_until, total
+             FROM chat_sync_state WHERE ai_id = ?1",
+            params![ai_id],
+            row_to_chat_sync_state,
+        )
+        .optional()
+        .map_err(|e| StorageError::Database(e.to_string()))
+    }
+
+    async fn upsert_chat_sync_state(&self, state: &ChatSyncState) -> Result<(), StorageError> {
+        let conn = lock(&self.conn).await;
+        conn.execute(
+            "INSERT INTO chat_sync_state
+               (ai_id, last_synced_at, last_timestamp, full_sync_done, is_syncing,
+                status_kind, status_message, backoff_until, total)
+             VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9)
+             ON CONFLICT(ai_id) DO UPDATE SET
+               last_synced_at=excluded.last_synced_at,
+               last_timestamp=excluded.last_timestamp,
+               full_sync_done=excluded.full_sync_done,
+               is_syncing=excluded.is_syncing,
+               status_kind=excluded.status_kind,
+               status_message=excluded.status_message,
+               backoff_until=excluded.backoff_until,
+               total=excluded.total",
+            params![
+                state.ai_id,
+                state.last_synced_at.to_rfc3339(),
+                state.last_timestamp,
+                state.full_sync_done as i32,
+                state.is_syncing as i32,
+                state.status_kind.as_str(),
+                state.status_message,
+                state.backoff_until.map(|d| d.to_rfc3339()),
+                state.total as i64,
+            ],
+        )
+        .map_err(|e| StorageError::Database(e.to_string()))?;
+        Ok(())
+    }
+
+    async fn reset_chat_history(&self, ai_id: &str) -> Result<usize, StorageError> {
+        let conn = lock(&self.conn).await;
+        let tx = conn
+            .unchecked_transaction()
+            .map_err(|e| StorageError::Database(e.to_string()))?;
+        // Delete messages first. The `chat_messages_ad` trigger on
+        // `chat_messages` removes the matching FTS5 rows automatically.
+        let deleted = tx
+            .execute(
+                "DELETE FROM chat_messages WHERE ai_id = ?1",
+                params![ai_id],
+            )
+            .map_err(|e| StorageError::Database(e.to_string()))?;
+        tx.execute(
+            "DELETE FROM chat_sync_state WHERE ai_id = ?1",
+            params![ai_id],
+        )
+        .map_err(|e| StorageError::Database(e.to_string()))?;
+        tx.commit()
+            .map_err(|e| StorageError::Database(e.to_string()))?;
+        Ok(deleted)
+    }
 }
 
 fn row_to_character(row: &rusqlite::Row<'_>) -> rusqlite::Result<Character> {
@@ -583,6 +789,63 @@ fn row_to_push_log(row: &rusqlite::Row<'_>) -> rusqlite::Result<PushLogEntry> {
         update_info_body: row.get(11)?,
         chat_break_status: cb_status.map(|s| s as u16),
         chat_break_body: row.get(13)?,
+    })
+}
+
+fn row_to_chat_message(row: &rusqlite::Row<'_>) -> rusqlite::Result<ChatMessage> {
+    let id_s: String = row.get(0)?;
+    let image_urls_s: String = row.get(8)?;
+    let fetched_s: String = row.get(14)?;
+    Ok(ChatMessage {
+        id: Uuid::parse_str(&id_s).map_err(|e| id_err(0, e))?,
+        ai_id: row.get(1)?,
+        kindroid_msg_id: row.get(2)?,
+        sender: row.get(3)?,
+        sender_type: row.get(4)?,
+        display_name: row.get(5)?,
+        timestamp: row.get(6)?,
+        message: row.get(7)?,
+        image_urls: serde_json::from_str(&image_urls_s).map_err(|e| id_err(8, e))?,
+        image_description: row.get(9)?,
+        video_description: row.get(10)?,
+        internet_response: row.get(11)?,
+        link_url: row.get(12)?,
+        link_description: row.get(13)?,
+        fetched_at: DateTime::parse_from_rfc3339(&fetched_s)
+            .map_err(|e| id_err(14, e))?
+            .with_timezone(&Utc),
+    })
+}
+
+fn row_to_chat_sync_state(row: &rusqlite::Row<'_>) -> rusqlite::Result<ChatSyncState> {
+    let ai_id: String = row.get(0)?;
+    let last_synced_s: String = row.get(1)?;
+    let last_timestamp: i64 = row.get(2)?;
+    let full_done: i32 = row.get(3)?;
+    let is_syncing: i32 = row.get(4)?;
+    let status_kind_s: String = row.get(5)?;
+    let status_message: Option<String> = row.get(6)?;
+    let backoff_s: Option<String> = row.get(7)?;
+    let total: i64 = row.get(8)?;
+    Ok(ChatSyncState {
+        ai_id,
+        last_synced_at: DateTime::parse_from_rfc3339(&last_synced_s)
+            .map_err(|e| id_err(1, e))?
+            .with_timezone(&Utc),
+        last_timestamp,
+        full_sync_done: full_done != 0,
+        is_syncing: is_syncing != 0,
+        status_kind: SyncStatusKind::parse(&status_kind_s),
+        status_message,
+        backoff_until: match backoff_s {
+            Some(s) => Some(
+                DateTime::parse_from_rfc3339(&s)
+                    .map_err(|e| id_err(7, e))?
+                    .with_timezone(&Utc),
+            ),
+            None => None,
+        },
+        total: total.max(0) as u64,
     })
 }
 
@@ -713,5 +976,234 @@ mod tests {
         assert_eq!(repo.get_setting("k").await.unwrap(), None);
         repo.set_setting("k", "v").await.unwrap();
         assert_eq!(repo.get_setting("k").await.unwrap().as_deref(), Some("v"));
+    }
+
+    fn chat_msg(ai_id: &str, kindroid_msg_id: &str, ts: i64, text: &str) -> ChatMessage {
+        ChatMessage {
+            id: Uuid::new_v4(),
+            ai_id: ai_id.into(),
+            kindroid_msg_id: kindroid_msg_id.into(),
+            sender: "user".into(),
+            sender_type: "user".into(),
+            display_name: None,
+            timestamp: ts,
+            message: text.into(),
+            image_urls: Vec::new(),
+            image_description: None,
+            video_description: None,
+            internet_response: None,
+            link_url: None,
+            link_description: None,
+            fetched_at: Utc::now(),
+        }
+    }
+
+    #[tokio::test]
+    async fn chat_messages_round_trip() {
+        let repo = SqliteRepository::open_in_memory().unwrap();
+        let t = target("T", "ai_x");
+        repo.upsert_target(t).await.unwrap();
+
+        let m1 = chat_msg("ai_x", "k1", 100, "hello");
+        let m2 = chat_msg("ai_x", "k2", 200, "world");
+        let inserted = repo
+            .upsert_chat_messages("ai_x", &[m1.clone(), m2.clone()])
+            .await
+            .unwrap();
+        assert_eq!(inserted, 2);
+        assert_eq!(repo.chat_message_count("ai_x").await.unwrap(), 2);
+
+        // Listing is DESC by timestamp.
+        let list = repo.list_chat_messages("ai_x", None, 50).await.unwrap();
+        assert_eq!(list.len(), 2);
+        assert_eq!(list[0].timestamp, 200);
+        assert_eq!(list[1].timestamp, 100);
+
+        // Pagination with before_ts.
+        let older = repo
+            .list_chat_messages("ai_x", Some(200), 50)
+            .await
+            .unwrap();
+        assert_eq!(older.len(), 1);
+        assert_eq!(older[0].kindroid_msg_id, "k1");
+    }
+
+    #[tokio::test]
+    async fn chat_messages_dedup_on_kindroid_msg_id() {
+        let repo = SqliteRepository::open_in_memory().unwrap();
+        let t = target("T", "ai_x");
+        repo.upsert_target(t).await.unwrap();
+
+        let m1 = chat_msg("ai_x", "k1", 100, "first");
+        let inserted = repo
+            .upsert_chat_messages("ai_x", std::slice::from_ref(&m1))
+            .await
+            .unwrap();
+        assert_eq!(inserted, 1);
+
+        // Re-insert the same (ai_id, kindroid_msg_id) — should be absorbed.
+        let m1_again = chat_msg("ai_x", "k1", 100, "different text");
+        let inserted2 = repo
+            .upsert_chat_messages("ai_x", &[m1_again])
+            .await
+            .unwrap();
+        assert_eq!(inserted2, 0);
+
+        let list = repo.list_chat_messages("ai_x", None, 50).await.unwrap();
+        assert_eq!(list.len(), 1);
+        assert_eq!(list[0].message, "first");
+    }
+
+    #[tokio::test]
+    async fn chat_messages_fts_search_finds_stems() {
+        let repo = SqliteRepository::open_in_memory().unwrap();
+        let t = target("T", "ai_x");
+        repo.upsert_target(t).await.unwrap();
+
+        let msgs = vec![
+            chat_msg("ai_x", "k1", 100, "running through the forest"),
+            chat_msg("ai_x", "k2", 200, "she runs fast"),
+            chat_msg("ai_x", "k3", 300, "completely unrelated"),
+        ];
+        repo.upsert_chat_messages("ai_x", &msgs).await.unwrap();
+
+        // Porter stemmer turns "running"/"runs" into "run".
+        let q = "\"run\"*";
+        let hits = repo.search_chat("ai_x", q, 50, 0).await.unwrap();
+        assert!(
+            hits.len() >= 2,
+            "expected at least 2 hits, got {}",
+            hits.len()
+        );
+
+        let q2 = "\"unrelated\"*";
+        let hits2 = repo.search_chat("ai_x", q2, 50, 0).await.unwrap();
+        assert_eq!(hits2.len(), 1);
+    }
+
+    #[tokio::test]
+    async fn chat_messages_target_cascade_delete() {
+        let repo = SqliteRepository::open_in_memory().unwrap();
+        let t = target("T", "ai_x");
+        let tid = t.id;
+        repo.upsert_target(t).await.unwrap();
+        repo.upsert_chat_messages("ai_x", &[chat_msg("ai_x", "k1", 100, "hello")])
+            .await
+            .unwrap();
+        assert_eq!(repo.chat_message_count("ai_x").await.unwrap(), 1);
+
+        repo.delete_target(tid).await.unwrap();
+        assert_eq!(repo.chat_message_count("ai_x").await.unwrap(), 0);
+        assert!(repo.get_chat_sync_state("ai_x").await.unwrap().is_none());
+    }
+
+    #[tokio::test]
+    async fn chat_sync_state_round_trip() {
+        let repo = SqliteRepository::open_in_memory().unwrap();
+        let t = target("T", "ai_x");
+        repo.upsert_target(t).await.unwrap();
+
+        let state = ChatSyncState {
+            ai_id: "ai_x".into(),
+            last_synced_at: Utc::now(),
+            last_timestamp: 12345,
+            full_sync_done: true,
+            is_syncing: false,
+            status_kind: SyncStatusKind::Cancelled,
+            status_message: Some("stopped".into()),
+            backoff_until: None,
+            total: 42,
+        };
+        repo.upsert_chat_sync_state(&state).await.unwrap();
+        let got = repo.get_chat_sync_state("ai_x").await.unwrap().unwrap();
+        assert_eq!(got.ai_id, "ai_x");
+        assert_eq!(got.last_timestamp, 12345);
+        assert!(got.full_sync_done);
+        assert!(!got.is_syncing);
+        assert_eq!(got.status_kind, SyncStatusKind::Cancelled);
+        assert_eq!(got.status_message.as_deref(), Some("stopped"));
+        assert_eq!(got.total, 42);
+
+        // Re-upsert updates in place.
+        let updated = ChatSyncState {
+            status_kind: SyncStatusKind::Idle,
+            total: 99,
+            ..state.clone()
+        };
+        repo.upsert_chat_sync_state(&updated).await.unwrap();
+        let got2 = repo.get_chat_sync_state("ai_x").await.unwrap().unwrap();
+        assert_eq!(got2.total, 99);
+        assert_eq!(got2.status_kind, SyncStatusKind::Idle);
+    }
+
+    #[tokio::test]
+    async fn reset_chat_history_wipes_messages_and_state() {
+        let repo = SqliteRepository::open_in_memory().unwrap();
+        let t_x = target("X", "ai_x");
+        let t_y = target("Y", "ai_y");
+        repo.upsert_target(t_x).await.unwrap();
+        repo.upsert_target(t_y).await.unwrap();
+
+        // Seed messages for both targets. Seed a sync state for ai_x only.
+        repo.upsert_chat_messages(
+            "ai_x",
+            std::slice::from_ref(&chat_msg("ai_x", "x1", 100, "hello")),
+        )
+        .await
+        .unwrap();
+        repo.upsert_chat_messages(
+            "ai_x",
+            std::slice::from_ref(&chat_msg("ai_x", "x2", 200, "world")),
+        )
+        .await
+        .unwrap();
+        repo.upsert_chat_messages(
+            "ai_y",
+            std::slice::from_ref(&chat_msg("ai_y", "y1", 100, "unrelated")),
+        )
+        .await
+        .unwrap();
+        repo.upsert_chat_sync_state(&ChatSyncState {
+            ai_id: "ai_x".into(),
+            last_synced_at: Utc::now(),
+            last_timestamp: 200,
+            full_sync_done: true,
+            is_syncing: false,
+            status_kind: SyncStatusKind::Idle,
+            status_message: None,
+            backoff_until: None,
+            total: 2,
+        })
+        .await
+        .unwrap();
+
+        assert_eq!(repo.chat_message_count("ai_x").await.unwrap(), 2);
+        assert_eq!(repo.chat_message_count("ai_y").await.unwrap(), 1);
+
+        let deleted = repo.reset_chat_history("ai_x").await.unwrap();
+        assert_eq!(deleted, 2, "two messages for ai_x were deleted");
+
+        // ai_x is fully wiped.
+        assert_eq!(repo.chat_message_count("ai_x").await.unwrap(), 0);
+        assert!(repo.get_chat_sync_state("ai_x").await.unwrap().is_none());
+
+        // FTS5 index was also wiped (the trigger fires on DELETE).
+        let fts_hits = repo
+            .search_chat("ai_x", "\"hello\"*", 50, 0)
+            .await
+            .unwrap();
+        assert!(fts_hits.is_empty(), "FTS5 entries for ai_x should be gone");
+
+        // ai_y is untouched.
+        assert_eq!(repo.chat_message_count("ai_y").await.unwrap(), 1);
+        let y_hits = repo
+            .search_chat("ai_y", "\"unrelated\"*", 50, 0)
+            .await
+            .unwrap();
+        assert_eq!(y_hits.len(), 1);
+
+        // Idempotent: calling reset again is a no-op.
+        let deleted_again = repo.reset_chat_history("ai_x").await.unwrap();
+        assert_eq!(deleted_again, 0);
     }
 }

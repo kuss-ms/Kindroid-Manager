@@ -26,6 +26,8 @@ pub enum AppError {
     Database { message: String },
     #[error("internal: {message}")]
     Internal { message: String },
+    #[error("sync already running for {ai_id}")]
+    SyncConflict { ai_id: String },
     #[error(transparent)]
     Secret(#[from] SecretStoreError),
     #[error(transparent)]
@@ -112,6 +114,9 @@ mod tests {
             AppError::share("malformed"),
             AppError::database("db down"),
             AppError::internal("nope"),
+            AppError::SyncConflict {
+                ai_id: "ai_1".into(),
+            },
         ];
         for v in variants {
             let json = serde_json::to_string(&v).expect("serialize");

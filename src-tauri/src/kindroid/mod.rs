@@ -26,6 +26,42 @@ pub struct HttpResponse {
     pub body: String,
 }
 
+#[derive(Debug, Clone)]
+pub struct ListChatMessagesRequest {
+    pub ai_id: String,
+    pub limit: u32,
+    pub start_after_timestamp: Option<i64>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ChatMessagesPage {
+    pub messages: Vec<RawChatMessage>,
+    pub has_more: bool,
+    pub limit: u32,
+    /// The cursor returned by the API in `pagination.lastTimestamp`. The
+    /// sync loop uses this to advance to the next page; it falls back to
+    /// the max of the inserted rows when this is `None` or `0`.
+    #[serde(default)]
+    pub pagination_last_timestamp: Option<i64>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+#[serde(default)]
+pub struct RawChatMessage {
+    pub id: String,
+    pub sender: String,
+    pub sender_type: String,
+    pub display_name: Option<String>,
+    pub timestamp: i64,
+    pub message: Option<String>,
+    pub image_urls: Option<Vec<String>>,
+    pub image_description: Option<String>,
+    pub video_description: Option<String>,
+    pub internet_response: Option<String>,
+    pub link_url: Option<String>,
+    pub link_description: Option<String>,
+}
+
 #[derive(Debug, Clone, Serialize, Error)]
 #[serde(tag = "kind", rename_all = "snake_case")]
 pub enum KindroidError {

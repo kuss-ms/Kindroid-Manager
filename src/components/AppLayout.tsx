@@ -109,7 +109,11 @@ export function AppLayout() {
           </NavLink>{' '}
           <NavLink to="/history" className={({ isActive }) => (isActive ? 'active' : '')}>
             {' '}
-            History{' '}
+            Push History{' '}
+          </NavLink>{' '}
+          <NavLink to="/chat-history" className={({ isActive }) => (isActive ? 'active' : '')}>
+            {' '}
+            Chat History{' '}
           </NavLink>{' '}
           <NavLink to="/settings" className={({ isActive }) => (isActive ? 'active' : '')}>
             {' '}

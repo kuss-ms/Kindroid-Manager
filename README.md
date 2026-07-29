@@ -33,12 +33,6 @@ backend can be added later without touching the UI.
 - A "Test token" probe that does a best-effort reachability + auth
   check without mutating state.
 
-## Out of scope for v1
-
-Tauri mobile builds, a remote-database mode, multi-account tokens,
-group chat endpoints, send-message / rewind, an auto-updater, and a
-formal accessibility audit. See the plan file for the full list.
-
 ## Screenshot
 
 _(TODO)_

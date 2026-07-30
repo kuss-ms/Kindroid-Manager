@@ -7,6 +7,7 @@ use tauri::{AppHandle, Emitter};
 use tokio::sync::watch;
 
 use crate::commands::push::{DEFAULT_BASE_URL, SETTING_BASE_URL};
+use crate::commands::sync_loop::compute_start_after_timestamp;
 use crate::commands::sync_registry::SyncRegistry;
 use crate::domain::chat_message::{ChatMessage, ChatSyncState, SyncStatusKind};
 use crate::error::AppError;
@@ -229,15 +230,14 @@ async fn drain_pages(
         let req = ListChatMessagesRequest {
             ai_id: ai_id.to_string(),
             limit: 100,
-            // Always pass the cursor once we have one. On the very first
-            // call of a brand-new sync `state.last_timestamp == 0` and we
-            // omit it; on every subsequent page — including the rest of
-            // the first-scan drain — we send it so the API walks forward.
-            start_after_timestamp: if state.last_timestamp > 0 {
-                Some(state.last_timestamp)
-            } else {
-                None
-            },
+            // Always pass the cursor once we have one. The drain walks
+            // forward without rewinding during the initial backfill; once
+            // `full_sync_done` is true, every subsequent poll rewinds by
+            // `OVERLAP_MS` so edits to recent messages are picked up.
+            start_after_timestamp: compute_start_after_timestamp(
+                state.last_timestamp,
+                state.full_sync_done,
+            ),
         };
         let page: ChatMessagesPage = match client.list_chat_messages(&token, &base_url, req).await {
             Ok(p) => p,
@@ -309,8 +309,13 @@ async fn drain_pages(
             })
             .collect();
 
-        let inserted = repo.upsert_chat_messages(ai_id, &incoming).await?;
-        state.total = state.total.saturating_add(inserted as u64);
+        let touched = repo.upsert_chat_messages(ai_id, &incoming).await?;
+        // `touched` is "inserts + content-actually-changed updates",
+        // thanks to the WHERE clause on the upsert. We don't add it to
+        // `state.total` because the same row can be touched on later
+        // polls; instead we recompute the unique message count from the
+        // DB so the displayed total stays exact.
+        state.total = repo.chat_message_count(ai_id).await?;
         // Advance the cursor. Prefer the server's `pagination.lastTimestamp`
         // (the API's documented cursor); fall back to the max of the
         // inserted rows when the field is missing or zero. In either case
@@ -328,7 +333,8 @@ async fn drain_pages(
         state.status_kind = SyncStatusKind::Running;
         state.status_message = None;
         state.backoff_until = None;
-        stats.last_batch_size = inserted as u64;
+        stats.last_batch_size = incoming.len() as u64;
+        let _ = touched; // surfaced via the per-poll progress bar in the UI
         repo.upsert_chat_sync_state(state).await?;
         emit_progress(app, ai_id, state, *stats);
 

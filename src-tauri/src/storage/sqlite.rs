@@ -522,13 +522,24 @@ impl Repository for SqliteRepository {
             return Ok(0);
         }
         let conn = lock(&self.conn).await;
-        let mut inserted = 0usize;
+        let mut touched = 0usize;
         let tx = conn
             .unchecked_transaction()
             .map_err(|e| StorageError::Database(e.to_string()))?;
         for m in msgs {
             let image_urls_json = serde_json::to_string(&m.image_urls)
                 .map_err(|e| StorageError::Database(e.to_string()))?;
+            // Use `ON CONFLICT DO UPDATE` so an edited message (same
+            // `kindroid_msg_id`, same `timestamp`, but updated content
+            // fields) overwrites the existing row in place. The local
+            // `id` (UUID) and `fetched_at` (only meaningful as a "first
+            // seen" timestamp) are preserved so FTS5 rowids stay stable.
+            //
+            // The WHERE clause compares every mutable content field with
+            // SQLite's NULL-safe `IS NOT` operator, so a no-op upsert
+            // (identical re-fetch) is skipped and doesn't trigger an FTS5
+            // delete+insert churn. The execute() return value therefore
+            // counts only inserts + rows whose content actually changed.
             let n = tx
                 .execute(
                     "INSERT INTO chat_messages
@@ -536,7 +547,23 @@ impl Repository for SqliteRepository {
                         timestamp, message, image_urls, image_description, video_description,
                         internet_response, link_url, link_description, fetched_at)
                      VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,?12,?13,?14,?15)
-                     ON CONFLICT(ai_id, kindroid_msg_id) DO NOTHING",
+                     ON CONFLICT(ai_id, kindroid_msg_id) DO UPDATE SET
+                       display_name      = excluded.display_name,
+                       message           = excluded.message,
+                       image_urls        = excluded.image_urls,
+                       image_description = excluded.image_description,
+                       video_description = excluded.video_description,
+                       internet_response = excluded.internet_response,
+                       link_url          = excluded.link_url,
+                       link_description  = excluded.link_description
+                     WHERE chat_messages.display_name      IS NOT excluded.display_name
+                        OR chat_messages.message           IS NOT excluded.message
+                        OR chat_messages.image_urls        IS NOT excluded.image_urls
+                        OR chat_messages.image_description IS NOT excluded.image_description
+                        OR chat_messages.video_description IS NOT excluded.video_description
+                        OR chat_messages.internet_response IS NOT excluded.internet_response
+                        OR chat_messages.link_url          IS NOT excluded.link_url
+                        OR chat_messages.link_description  IS NOT excluded.link_description",
                     params![
                         m.id.to_string(),
                         ai_id,
@@ -556,11 +583,11 @@ impl Repository for SqliteRepository {
                     ],
                 )
                 .map_err(|e| StorageError::Database(e.to_string()))?;
-            inserted += n;
+            touched += n;
         }
         tx.commit()
             .map_err(|e| StorageError::Database(e.to_string()))?;
-        Ok(inserted)
+        Ok(touched)
     }
 
     async fn list_chat_messages(
@@ -1041,17 +1068,112 @@ mod tests {
             .unwrap();
         assert_eq!(inserted, 1);
 
-        // Re-insert the same (ai_id, kindroid_msg_id) — should be absorbed.
-        let m1_again = chat_msg("ai_x", "k1", 100, "different text");
-        let inserted2 = repo
-            .upsert_chat_messages("ai_x", &[m1_again])
+        // Re-insert the same (ai_id, kindroid_msg_id) with DIFFERENT
+        // content — the upsert should update the row in place and
+        // report 1 (insert + actual update = 1 touch).
+        let m1_edited = chat_msg("ai_x", "k1", 100, "different text");
+        let touched = repo
+            .upsert_chat_messages("ai_x", std::slice::from_ref(&m1_edited))
             .await
             .unwrap();
-        assert_eq!(inserted2, 0);
+        assert_eq!(touched, 1);
 
         let list = repo.list_chat_messages("ai_x", None, 50).await.unwrap();
-        assert_eq!(list.len(), 1);
-        assert_eq!(list[0].message, "first");
+        assert_eq!(list.len(), 1, "still one row");
+        assert_eq!(
+            list[0].message, "different text",
+            "content should be updated in place"
+        );
+        // Local UUID survives the update so the FTS5 rowid stays stable.
+        assert_eq!(list[0].id, m1.id);
+    }
+
+    #[tokio::test]
+    async fn chat_messages_idempotent_on_same_content() {
+        let repo = SqliteRepository::open_in_memory().unwrap();
+        let t = target("T", "ai_x");
+        repo.upsert_target(t).await.unwrap();
+
+        let m1 = chat_msg("ai_x", "k1", 100, "stable");
+        let touched = repo
+            .upsert_chat_messages("ai_x", std::slice::from_ref(&m1))
+            .await
+            .unwrap();
+        assert_eq!(touched, 1);
+
+        // Re-insert with IDENTICAL content — the WHERE clause should
+        // skip the update entirely (no-op upsert).
+        let m1_again = chat_msg("ai_x", "k1", 100, "stable");
+        let touched_again = repo
+            .upsert_chat_messages("ai_x", std::slice::from_ref(&m1_again))
+            .await
+            .unwrap();
+        assert_eq!(touched_again, 0, "no-op upsert should not be counted");
+    }
+
+    #[tokio::test]
+    async fn chat_messages_partial_edit_updates_field() {
+        let repo = SqliteRepository::open_in_memory().unwrap();
+        let t = target("T", "ai_x");
+        repo.upsert_target(t).await.unwrap();
+
+        let mut m1 = chat_msg("ai_x", "k1", 100, "old body");
+        m1.image_urls = vec!["https://x/a.png".into()];
+        m1.link_url = Some("https://example.com".into());
+        repo.upsert_chat_messages("ai_x", std::slice::from_ref(&m1))
+            .await
+            .unwrap();
+
+        // Edit only the message body, leave the rest unchanged.
+        let mut m1_edited = m1.clone();
+        m1_edited.message = "new body".into();
+        let touched = repo
+            .upsert_chat_messages("ai_x", std::slice::from_ref(&m1_edited))
+            .await
+            .unwrap();
+        assert_eq!(touched, 1, "single field change should still be detected");
+
+        let list = repo.list_chat_messages("ai_x", None, 50).await.unwrap();
+        assert_eq!(list[0].message, "new body");
+        // Unchanged fields survive.
+        assert_eq!(list[0].image_urls, vec!["https://x/a.png".to_string()]);
+        assert_eq!(list[0].link_url.as_deref(), Some("https://example.com"));
+        // Sender / sender_type / timestamp are part of the message
+        // identity, so they were never updatable.
+        assert_eq!(list[0].sender, "user");
+        assert_eq!(list[0].timestamp, 100);
+    }
+
+    #[tokio::test]
+    async fn chat_messages_falls_back_to_max_timestamp_after_edit() {
+        let repo = SqliteRepository::open_in_memory().unwrap();
+        let t = target("T", "ai_x");
+        repo.upsert_target(t).await.unwrap();
+
+        let m1 = chat_msg("ai_x", "k1", 100, "old");
+        let m2 = chat_msg("ai_x", "k2", 200, "another");
+        repo.upsert_chat_messages("ai_x", &[m1.clone(), m2.clone()])
+            .await
+            .unwrap();
+
+        // Edit m1 in place; m2 stays the same. Cursor logic computes
+        // max(timestamps) of the response — for an overlap re-fetch the
+        // newest of the returned set is `m2`'s timestamp (200).
+        let mut m1_edited = m1.clone();
+        m1_edited.message = "edited".into();
+        repo.upsert_chat_messages("ai_x", &[m1_edited])
+            .await
+            .unwrap();
+
+        let list = repo.list_chat_messages("ai_x", None, 50).await.unwrap();
+        assert_eq!(list.len(), 2);
+        // Edited message is in place with new content.
+        let mut by_id = list.iter().map(|m| (m.kindroid_msg_id.as_str(), m)).collect::<Vec<_>>();
+        by_id.sort_by(|a, b| a.0.cmp(b.0));
+        let (k1_msg, _k2_msg) = (by_id[0].1, by_id[1].1);
+        assert_eq!(k1_msg.message, "edited");
+        // m1's UUID is preserved across the update.
+        assert_eq!(k1_msg.id, m1.id);
     }
 
     #[tokio::test]

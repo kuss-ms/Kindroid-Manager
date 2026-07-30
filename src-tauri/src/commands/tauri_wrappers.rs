@@ -186,8 +186,16 @@ mod inner {
         ai_id: String,
         before_ts: Option<i64>,
         limit: u32,
+        favourites_only: bool,
     ) -> Result<Vec<crate::domain::chat_message::ChatMessage>, crate::error::AppError> {
-        chat_history::list_chat_messages(repo.inner().clone(), ai_id, before_ts, limit).await
+        chat_history::list_chat_messages(
+            repo.inner().clone(),
+            ai_id,
+            before_ts,
+            limit,
+            favourites_only,
+        )
+        .await
     }
 
     #[tauri::command]
@@ -197,8 +205,33 @@ mod inner {
         query: String,
         limit: u32,
         offset: u32,
+        favourites_only: bool,
     ) -> Result<Vec<crate::domain::chat_message::ChatMessage>, crate::error::AppError> {
-        chat_history::search_chat(repo.inner().clone(), ai_id, query, limit, offset).await
+        chat_history::search_chat(
+            repo.inner().clone(),
+            ai_id,
+            query,
+            limit,
+            offset,
+            favourites_only,
+        )
+        .await
+    }
+
+    #[tauri::command]
+    pub async fn toggle_chat_message_favourite(
+        repo: State<'_, Repo>,
+        client: State<'_, Client>,
+        ai_id: String,
+        kindroid_msg_id: String,
+    ) -> Result<bool, crate::error::AppError> {
+        chat_history::toggle_chat_message_favourite(
+            repo.inner().clone(),
+            client.inner().clone(),
+            ai_id,
+            kindroid_msg_id,
+        )
+        .await
     }
 
     #[tauri::command]

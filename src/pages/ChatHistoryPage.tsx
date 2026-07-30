@@ -1,4 +1,4 @@
-import { useQuery, useQueryClient } from '@tanstack/react-query';
+import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { useEffect, useMemo, useState } from 'react';
 import { useSearchParams } from 'react-router-dom';
 import { listen, type UnlistenFn } from '@tauri-apps/api/event';
@@ -96,12 +96,15 @@ export function ChatHistoryPage() {
     return () => clearTimeout(handle);
   }, [searchInput]);
 
+  // Favourites-only filter (applied to browse + search).
+  const [favouritesOnly, setFavouritesOnly] = useState(false);
+
   // Browse pagination: cursor is the smallest timestamp currently shown;
   // next page reads older by setting beforeTs to that.
   const [browseOffset, setBrowseOffset] = useState(0);
   useEffect(() => {
     setBrowseOffset(0);
-  }, [selectedAiId, debouncedQuery]);
+  }, [selectedAiId, debouncedQuery, favouritesOnly]);
 
   const trimmedQuery = debouncedQuery.trim();
   const isSearching = trimmedQuery.length > 0;
@@ -130,13 +133,14 @@ export function ChatHistoryPage() {
 
   // Page of messages (browse mode).
   const browsePage = useQuery<ChatMessage[]>({
-    queryKey: ['chat-messages', selectedAiId, browseOffset],
+    queryKey: ['chat-messages', selectedAiId, browseOffset, favouritesOnly],
     queryFn: () => {
       if (!selectedAiId) return Promise.resolve([]);
       return api.listChatMessages(
         selectedAiId,
         browseOffset === 0 ? null : browseOffset,
         PAGE_SIZE,
+        favouritesOnly,
       );
     },
     enabled: !!selectedAiId && !isSearching,
@@ -144,7 +148,7 @@ export function ChatHistoryPage() {
 
   // Search results.
   const searchPage = useQuery<ChatMessage[]>({
-    queryKey: ['chat-search', selectedAiId, trimmedQuery, browseOffset],
+    queryKey: ['chat-search', selectedAiId, trimmedQuery, browseOffset, favouritesOnly],
     queryFn: () => {
       if (!selectedAiId || !trimmedQuery) return Promise.resolve([]);
       return api.searchChat(
@@ -152,6 +156,7 @@ export function ChatHistoryPage() {
         escapeFtsQuery(trimmedQuery),
         PAGE_SIZE,
         browseOffset,
+        favouritesOnly,
       );
     },
     enabled: !!selectedAiId && isSearching,
@@ -286,6 +291,131 @@ export function ChatHistoryPage() {
 
   // Modal state for the full-message view.
   const [openMessage, setOpenMessage] = useState<ChatMessage | null>(null);
+
+  // Optimistic favourite mutation. The server's response is the canonical
+  // value, so we reconcile the cache to it on success. On failure we
+  // roll back the optimistic flip and surface a toast.
+  const [pendingFavourites, setPendingFavourites] = useState<Set<string>>(new Set());
+  const setFavourite = useMutation<
+    boolean,
+    unknown,
+    { kindroidMsgId: string; prevFavourite: boolean },
+    { aiId: string; kindroidMsgId: string; prevFavourite: boolean }
+  >({
+    mutationFn: ({ kindroidMsgId }) => {
+      const aiId = selectedAiId;
+      if (!aiId) throw new Error('no target selected');
+      return api.setChatMessageFavourite(aiId, kindroidMsgId);
+    },
+    onMutate: ({ kindroidMsgId, prevFavourite }) => {
+      if (!selectedAiId) return { aiId: '', kindroidMsgId, prevFavourite };
+      setPendingFavourites((prev) => {
+        const next = new Set(prev);
+        next.add(kindroidMsgId);
+        return next;
+      });
+      // Optimistically flip the favourite on every cached page for this
+      // message. React Query keys include favouritesOnly + browseOffset,
+      // so we patch every variant via setQueriesData.
+      queryClient.setQueriesData<ChatMessage[]>(
+        { queryKey: ['chat-messages', selectedAiId] },
+        (old) =>
+          old
+            ? old.map((m) =>
+                m.kindroid_msg_id === kindroidMsgId
+                  ? { ...m, favourite: !prevFavourite }
+                  : m,
+              )
+            : old,
+      );
+      queryClient.setQueriesData<ChatMessage[]>(
+        { queryKey: ['chat-search', selectedAiId] },
+        (old) =>
+          old
+            ? old.map((m) =>
+                m.kindroid_msg_id === kindroidMsgId
+                  ? { ...m, favourite: !prevFavourite }
+                  : m,
+              )
+            : old,
+      );
+      // If the filter is on and we just unfavourited, drop the row so it
+      // disappears from the filtered list immediately.
+      if (favouritesOnly && prevFavourite) {
+        queryClient.setQueriesData<ChatMessage[]>(
+          { queryKey: ['chat-messages', selectedAiId] },
+          (old) => (old ? old.filter((m) => m.kindroid_msg_id !== kindroidMsgId) : old),
+        );
+        queryClient.setQueriesData<ChatMessage[]>(
+          { queryKey: ['chat-search', selectedAiId] },
+          (old) => (old ? old.filter((m) => m.kindroid_msg_id !== kindroidMsgId) : old),
+        );
+      }
+      return { aiId: selectedAiId, kindroidMsgId, prevFavourite };
+    },
+    onSuccess: (canonical, { kindroidMsgId }) => {
+      if (!selectedAiId) return;
+      // Reconcile every cache to the server's authoritative value. If the
+      // filter is on and the server cleared the pin, drop the row.
+      const aiId = selectedAiId;
+      const reconcile = (old: ChatMessage[] | undefined) => {
+        if (!old) return old;
+        if (favouritesOnly && !canonical) {
+          return old.filter((m) => m.kindroid_msg_id !== kindroidMsgId);
+        }
+        return old.map((m) =>
+          m.kindroid_msg_id === kindroidMsgId ? { ...m, favourite: canonical } : m,
+        );
+      };
+      queryClient.setQueriesData<ChatMessage[]>(
+        { queryKey: ['chat-messages', aiId] },
+        reconcile,
+      );
+      queryClient.setQueriesData<ChatMessage[]>(
+        { queryKey: ['chat-search', aiId] },
+        reconcile,
+      );
+      // Reflect in the open detail dialog too, if its message id matches.
+      setOpenMessage((cur) =>
+        cur && cur.kindroid_msg_id === kindroidMsgId ? { ...cur, favourite: canonical } : cur,
+      );
+      // Total visible count may shift if filter is on.
+      queryClient.invalidateQueries({ queryKey: ['chat-message-count', aiId] });
+    },
+    onError: (e, { kindroidMsgId, prevFavourite }, ctx) => {
+      if (!ctx?.aiId) {
+        toast('error', errorMessage(e));
+        return;
+      }
+      toast('error', errorMessage(e));
+      const aiId = ctx.aiId;
+      const restore = (old: ChatMessage[] | undefined) =>
+        old
+          ? old.map((m) =>
+              m.kindroid_msg_id === kindroidMsgId ? { ...m, favourite: prevFavourite } : m,
+            )
+          : old;
+      queryClient.setQueriesData<ChatMessage[]>(
+        { queryKey: ['chat-messages', aiId] },
+        restore,
+      );
+      queryClient.setQueriesData<ChatMessage[]>(
+        { queryKey: ['chat-search', aiId] },
+        restore,
+      );
+      setOpenMessage((cur) =>
+        cur && cur.kindroid_msg_id === kindroidMsgId ? { ...cur, favourite: prevFavourite } : cur,
+      );
+    },
+    onSettled: (_data, _err, { kindroidMsgId }) => {
+      setPendingFavourites((prev) => {
+        if (!prev.has(kindroidMsgId)) return prev;
+        const next = new Set(prev);
+        next.delete(kindroidMsgId);
+        return next;
+      });
+    },
+  });
 
   if (targets.isLoading) {
     return (
@@ -452,6 +582,18 @@ export function ChatHistoryPage() {
           onChange={(e) => setSearchInput(e.target.value)}
           style={{ flex: 1, minWidth: 200 }}
         />
+        <label
+          className="flex-row"
+          style={{ gap: 6, alignItems: 'center', cursor: 'pointer' }}
+          title="Show only messages you've favourited (pinned) here"
+        >
+          <input
+            type="checkbox"
+            checked={favouritesOnly}
+            onChange={(e) => setFavouritesOnly(e.target.checked)}
+          />
+          Favourites only
+        </label>
       </div>
 
       {isSearching && (
@@ -468,7 +610,14 @@ export function ChatHistoryPage() {
             key={m.id}
             message={m}
             query={trimmedQuery}
+            pending={pendingFavourites.has(m.kindroid_msg_id)}
             onOpen={() => setOpenMessage(m)}
+            onToggleFavourite={() =>
+              setFavourite.mutate({
+                kindroidMsgId: m.kindroid_msg_id,
+                prevFavourite: m.favourite,
+              })
+            }
           />
         ))}
         {messages.length === 0 && !activeList.isLoading && (
@@ -497,6 +646,16 @@ export function ChatHistoryPage() {
 
       <MessageDetailDialog
         message={openMessage}
+        pending={
+          openMessage !== null && pendingFavourites.has(openMessage.kindroid_msg_id)
+        }
+        onToggleFavourite={() => {
+          if (!openMessage) return;
+          setFavourite.mutate({
+            kindroidMsgId: openMessage.kindroid_msg_id,
+            prevFavourite: openMessage.favourite,
+          });
+        }}
         onClose={() => setOpenMessage(null)}
       />
 
@@ -516,11 +675,15 @@ export function ChatHistoryPage() {
 function MessageRow({
   message,
   query,
+  pending,
   onOpen,
+  onToggleFavourite,
 }: {
   message: ChatMessage;
   query: string;
+  pending: boolean;
   onOpen: () => void;
+  onToggleFavourite: () => void;
 }) {
   const when = new Date(message.timestamp).toLocaleString();
   const who = message.display_name || message.sender;
@@ -541,34 +704,99 @@ function MessageRow({
         padding: '8px 0',
         borderBottom: '1px solid var(--border)',
         cursor: 'pointer',
+        display: 'flex',
+        gap: 8,
+        alignItems: 'flex-start',
       }}
     >
-      <div style={{ display: 'flex', gap: 8, alignItems: 'baseline' }}>
-        <strong>{who}</strong>
-        <span className="muted" style={{ fontSize: 12 }}>
-          {when}
-        </span>
+      <div style={{ flex: 1, minWidth: 0 }}>
+        <div style={{ display: 'flex', gap: 8, alignItems: 'baseline' }}>
+          <strong>{who}</strong>
+          <span className="muted" style={{ fontSize: 12 }}>
+            {when}
+          </span>
+        </div>
+        <div style={{ marginTop: 2 }}>{snippet}</div>
+        {message.image_urls.length > 0 && (
+          <div className="muted" style={{ fontSize: 12 }}>
+            🖼 {message.image_urls.length} image{message.image_urls.length === 1 ? '' : 's'}
+          </div>
+        )}
+        {message.link_url && (
+          <div style={{ fontSize: 12 }}>
+            🔗 <a href={message.link_url} onClick={(e) => e.stopPropagation()}>
+              {message.link_description ?? message.link_url}
+            </a>
+          </div>
+        )}
       </div>
-      <div style={{ marginTop: 2 }}>{snippet}</div>
-      {message.image_urls.length > 0 && (
-        <div className="muted" style={{ fontSize: 12 }}>
-          🖼 {message.image_urls.length} image{message.image_urls.length === 1 ? '' : 's'}
-        </div>
-      )}
-      {message.link_url && (
-        <div style={{ fontSize: 12 }}>
-          🔗 <a href={message.link_url}>{message.link_description ?? message.link_url}</a>
-        </div>
-      )}
+      <HeartButton
+        active={message.favourite}
+        pending={pending}
+        onClick={onToggleFavourite}
+        label={message.favourite ? 'Unfavourite' : 'Favourite'}
+      />
     </div>
+  );
+}
+
+function HeartButton({
+  active,
+  pending,
+  onClick,
+  label,
+}: {
+  active: boolean;
+  pending: boolean;
+  onClick: () => void;
+  label: string;
+}) {
+  return (
+    <button
+      type="button"
+      className="btn btn-sm"
+      aria-label={label}
+      aria-pressed={active}
+      title={label}
+      disabled={pending}
+      onClick={(e) => {
+        e.stopPropagation();
+        e.preventDefault();
+        onClick();
+      }}
+      style={{
+        padding: '4px 6px',
+        lineHeight: 1,
+        background: 'transparent',
+        color: active ? 'var(--primary, #2563eb)' : 'var(--muted)',
+        border: '1px solid var(--border)',
+        opacity: pending ? 0.6 : 1,
+      }}
+    >
+      {active ? (
+        // Filled heart.
+        <svg width="16" height="16" viewBox="0 0 24 24" fill="currentColor" aria-hidden>
+          <path d="M12 21s-7.5-4.7-9.6-9.2C.6 7.5 3.4 4 7.2 4c2 0 3.6 1 4.8 2.6C13.2 5 14.8 4 16.8 4c3.8 0 6.6 3.5 4.8 7.8C19.5 16.3 12 21 12 21z" />
+        </svg>
+      ) : (
+        // Outline heart.
+        <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" aria-hidden>
+          <path d="M12 21s-7.5-4.7-9.6-9.2C.6 7.5 3.4 4 7.2 4c2 0 3.6 1 4.8 2.6C13.2 5 14.8 4 16.8 4c3.8 0 6.6 3.5 4.8 7.8C19.5 16.3 12 21 12 21z" />
+        </svg>
+      )}
+    </button>
   );
 }
 
 function MessageDetailDialog({
   message,
+  pending,
+  onToggleFavourite,
   onClose,
 }: {
   message: ChatMessage | null;
+  pending: boolean;
+  onToggleFavourite: () => void;
   onClose: () => void;
 }) {
   useEffect(() => {
@@ -599,9 +827,17 @@ function MessageDetailDialog({
       <div className="modal" style={{ maxWidth: 720, maxHeight: '85vh', overflow: 'auto' }}>
         <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'baseline' }}>
           <h3 style={{ marginBottom: 0 }}>{who}</h3>
-          <button className="btn btn-sm" onClick={onClose} aria-label="Close">
-            ✕
-          </button>
+          <div className="flex-row" style={{ gap: 6, alignItems: 'center' }}>
+            <HeartButton
+              active={message.favourite}
+              pending={pending}
+              onClick={onToggleFavourite}
+              label={message.favourite ? 'Unfavourite' : 'Favourite'}
+            />
+            <button className="btn btn-sm" onClick={onClose} aria-label="Close">
+              ✕
+            </button>
+          </div>
         </div>
         <div className="muted" style={{ fontSize: 12, marginTop: 4 }}>
           {when} · {message.sender_type}

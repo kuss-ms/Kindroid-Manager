@@ -545,8 +545,8 @@ impl Repository for SqliteRepository {
                     "INSERT INTO chat_messages
                        (id, ai_id, kindroid_msg_id, sender, sender_type, display_name,
                         timestamp, message, image_urls, image_description, video_description,
-                        internet_response, link_url, link_description, fetched_at)
-                     VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,?12,?13,?14,?15)
+                        internet_response, link_url, link_description, fetched_at, favourite)
+                     VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,?12,?13,?14,?15,?16)
                      ON CONFLICT(ai_id, kindroid_msg_id) DO UPDATE SET
                        display_name      = excluded.display_name,
                        message           = excluded.message,
@@ -580,6 +580,7 @@ impl Repository for SqliteRepository {
                         m.link_url,
                         m.link_description,
                         m.fetched_at.to_rfc3339(),
+                        m.favourite as i32,
                     ],
                 )
                 .map_err(|e| StorageError::Database(e.to_string()))?;
@@ -595,31 +596,36 @@ impl Repository for SqliteRepository {
         ai_id: &str,
         before_ts: Option<i64>,
         limit: u32,
+        favourites_only: bool,
     ) -> Result<Vec<ChatMessage>, StorageError> {
         let conn = lock(&self.conn).await;
         let limit = limit.clamp(1, 500) as i64;
-        let mut stmt = match before_ts {
-            Some(_) => conn
-                .prepare(
-                    "SELECT id, ai_id, kindroid_msg_id, sender, sender_type, display_name,
-                            timestamp, message, image_urls, image_description, video_description,
-                            internet_response, link_url, link_description, fetched_at
-                     FROM chat_messages
-                     WHERE ai_id = ?1 AND timestamp < ?2
-                     ORDER BY timestamp DESC LIMIT ?3",
-                )
-                .map_err(|e| StorageError::Database(e.to_string()))?,
-            None => conn
-                .prepare(
-                    "SELECT id, ai_id, kindroid_msg_id, sender, sender_type, display_name,
-                            timestamp, message, image_urls, image_description, video_description,
-                            internet_response, link_url, link_description, fetched_at
-                     FROM chat_messages
-                     WHERE ai_id = ?1
-                     ORDER BY timestamp DESC LIMIT ?2",
-                )
-                .map_err(|e| StorageError::Database(e.to_string()))?,
+        let fav_filter = if favourites_only {
+            " AND favourite = 1"
+        } else {
+            ""
         };
+        let sql = match before_ts {
+            Some(_) => format!(
+                "SELECT id, ai_id, kindroid_msg_id, sender, sender_type, display_name,
+                        timestamp, message, image_urls, image_description, video_description,
+                        internet_response, link_url, link_description, fetched_at, favourite
+                 FROM chat_messages
+                 WHERE ai_id = ?1 AND timestamp < ?2{fav_filter}
+                 ORDER BY timestamp DESC LIMIT ?3"
+            ),
+            None => format!(
+                "SELECT id, ai_id, kindroid_msg_id, sender, sender_type, display_name,
+                        timestamp, message, image_urls, image_description, video_description,
+                        internet_response, link_url, link_description, fetched_at, favourite
+                 FROM chat_messages
+                 WHERE ai_id = ?1{fav_filter}
+                 ORDER BY timestamp DESC LIMIT ?2"
+            ),
+        };
+        let mut stmt = conn
+            .prepare(&sql)
+            .map_err(|e| StorageError::Database(e.to_string()))?;
         let rows = match before_ts {
             Some(ts) => stmt
                 .query_map(params![ai_id, ts, limit], row_to_chat_message)
@@ -638,28 +644,60 @@ impl Repository for SqliteRepository {
         query: &str,
         limit: u32,
         offset: u32,
+        favourites_only: bool,
     ) -> Result<Vec<ChatMessage>, StorageError> {
         let limit = limit.clamp(1, 500) as i64;
         let offset = offset as i64;
         let conn = lock(&self.conn).await;
+        let fav_filter = if favourites_only {
+            " AND cm.favourite = 1"
+        } else {
+            ""
+        };
+        let sql = format!(
+            "SELECT cm.id, cm.ai_id, cm.kindroid_msg_id, cm.sender, cm.sender_type,
+                    cm.display_name, cm.timestamp, cm.message, cm.image_urls,
+                    cm.image_description, cm.video_description, cm.internet_response,
+                    cm.link_url, cm.link_description, cm.fetched_at, cm.favourite
+             FROM chat_messages_fts
+             JOIN chat_messages cm ON cm.rowid = chat_messages_fts.rowid
+             WHERE chat_messages_fts MATCH ?1 AND cm.ai_id = ?2{fav_filter}
+             ORDER BY rank
+             LIMIT ?3 OFFSET ?4"
+        );
         let mut stmt = conn
-            .prepare(
-                "SELECT cm.id, cm.ai_id, cm.kindroid_msg_id, cm.sender, cm.sender_type,
-                        cm.display_name, cm.timestamp, cm.message, cm.image_urls,
-                        cm.image_description, cm.video_description, cm.internet_response,
-                        cm.link_url, cm.link_description, cm.fetched_at
-                 FROM chat_messages_fts
-                 JOIN chat_messages cm ON cm.rowid = chat_messages_fts.rowid
-                 WHERE chat_messages_fts MATCH ?1 AND cm.ai_id = ?2
-                 ORDER BY rank
-                 LIMIT ?3 OFFSET ?4",
-            )
+            .prepare(&sql)
             .map_err(|e| StorageError::Database(e.to_string()))?;
         let rows = stmt
             .query_map(params![query, ai_id, limit, offset], row_to_chat_message)
             .map_err(|e| StorageError::Database(e.to_string()))?;
         rows.map(|r| r.map_err(|e| StorageError::Database(e.to_string())))
             .collect()
+    }
+
+    async fn set_chat_message_favourite(
+        &self,
+        ai_id: &str,
+        kindroid_msg_id: &str,
+        favourite: bool,
+    ) -> Result<bool, StorageError> {
+        let conn = lock(&self.conn).await;
+        conn.execute(
+            "UPDATE chat_messages SET favourite = ?1
+             WHERE ai_id = ?2 AND kindroid_msg_id = ?3",
+            params![favourite as i32, ai_id, kindroid_msg_id],
+        )
+        .map_err(|e| StorageError::Database(e.to_string()))?;
+        let current: Option<i32> = conn
+            .query_row(
+                "SELECT favourite FROM chat_messages
+                 WHERE ai_id = ?1 AND kindroid_msg_id = ?2",
+                params![ai_id, kindroid_msg_id],
+                |r| r.get(0),
+            )
+            .optional()
+            .map_err(|e| StorageError::Database(e.to_string()))?;
+        Ok(current.unwrap_or(0) != 0)
     }
 
     async fn chat_message_count(&self, ai_id: &str) -> Result<u64, StorageError> {
@@ -730,10 +768,7 @@ impl Repository for SqliteRepository {
         // Delete messages first. The `chat_messages_ad` trigger on
         // `chat_messages` removes the matching FTS5 rows automatically.
         let deleted = tx
-            .execute(
-                "DELETE FROM chat_messages WHERE ai_id = ?1",
-                params![ai_id],
-            )
+            .execute("DELETE FROM chat_messages WHERE ai_id = ?1", params![ai_id])
             .map_err(|e| StorageError::Database(e.to_string()))?;
         tx.execute(
             "DELETE FROM chat_sync_state WHERE ai_id = ?1",
@@ -762,17 +797,13 @@ impl Repository for SqliteRepository {
         );
         if !keep_ids.is_empty() {
             sql.push_str(" AND kindroid_msg_id NOT IN (");
-            let placeholders: Vec<String> = (4..=keep_ids.len() + 3)
-                .map(|i| format!("?{i}"))
-                .collect();
+            let placeholders: Vec<String> =
+                (4..=keep_ids.len() + 3).map(|i| format!("?{i}")).collect();
             sql.push_str(&placeholders.join(","));
             sql.push(')');
         }
-        let mut params: Vec<&dyn rusqlite::ToSql> = vec![
-            &ai_id,
-            &start_after,
-            &last_timestamp_inclusive,
-        ];
+        let mut params: Vec<&dyn rusqlite::ToSql> =
+            vec![&ai_id, &start_after, &last_timestamp_inclusive];
         params.extend(keep_ids.iter().map(|s| s as &dyn rusqlite::ToSql));
         let n = conn
             .execute(&sql, params.as_slice())
@@ -858,6 +889,7 @@ fn row_to_chat_message(row: &rusqlite::Row<'_>) -> rusqlite::Result<ChatMessage>
     let id_s: String = row.get(0)?;
     let image_urls_s: String = row.get(8)?;
     let fetched_s: String = row.get(14)?;
+    let fav: i32 = row.get(15)?;
     Ok(ChatMessage {
         id: Uuid::parse_str(&id_s).map_err(|e| id_err(0, e))?,
         ai_id: row.get(1)?,
@@ -876,6 +908,7 @@ fn row_to_chat_message(row: &rusqlite::Row<'_>) -> rusqlite::Result<ChatMessage>
         fetched_at: DateTime::parse_from_rfc3339(&fetched_s)
             .map_err(|e| id_err(14, e))?
             .with_timezone(&Utc),
+        favourite: fav != 0,
     })
 }
 
@@ -1057,6 +1090,20 @@ mod tests {
             link_url: None,
             link_description: None,
             fetched_at: Utc::now(),
+            favourite: false,
+        }
+    }
+
+    fn chat_msg_fav(
+        ai_id: &str,
+        kindroid_msg_id: &str,
+        ts: i64,
+        text: &str,
+        favourite: bool,
+    ) -> ChatMessage {
+        ChatMessage {
+            favourite,
+            ..chat_msg(ai_id, kindroid_msg_id, ts, text)
         }
     }
 
@@ -1076,14 +1123,17 @@ mod tests {
         assert_eq!(repo.chat_message_count("ai_x").await.unwrap(), 2);
 
         // Listing is DESC by timestamp.
-        let list = repo.list_chat_messages("ai_x", None, 50).await.unwrap();
+        let list = repo
+            .list_chat_messages("ai_x", None, 50, false)
+            .await
+            .unwrap();
         assert_eq!(list.len(), 2);
         assert_eq!(list[0].timestamp, 200);
         assert_eq!(list[1].timestamp, 100);
 
         // Pagination with before_ts.
         let older = repo
-            .list_chat_messages("ai_x", Some(200), 50)
+            .list_chat_messages("ai_x", Some(200), 50, false)
             .await
             .unwrap();
         assert_eq!(older.len(), 1);
@@ -1113,7 +1163,10 @@ mod tests {
             .unwrap();
         assert_eq!(touched, 1);
 
-        let list = repo.list_chat_messages("ai_x", None, 50).await.unwrap();
+        let list = repo
+            .list_chat_messages("ai_x", None, 50, false)
+            .await
+            .unwrap();
         assert_eq!(list.len(), 1, "still one row");
         assert_eq!(
             list[0].message, "different text",
@@ -1168,7 +1221,10 @@ mod tests {
             .unwrap();
         assert_eq!(touched, 1, "single field change should still be detected");
 
-        let list = repo.list_chat_messages("ai_x", None, 50).await.unwrap();
+        let list = repo
+            .list_chat_messages("ai_x", None, 50, false)
+            .await
+            .unwrap();
         assert_eq!(list[0].message, "new body");
         // Unchanged fields survive.
         assert_eq!(list[0].image_urls, vec!["https://x/a.png".to_string()]);
@@ -1200,10 +1256,16 @@ mod tests {
             .await
             .unwrap();
 
-        let list = repo.list_chat_messages("ai_x", None, 50).await.unwrap();
+        let list = repo
+            .list_chat_messages("ai_x", None, 50, false)
+            .await
+            .unwrap();
         assert_eq!(list.len(), 2);
         // Edited message is in place with new content.
-        let mut by_id = list.iter().map(|m| (m.kindroid_msg_id.as_str(), m)).collect::<Vec<_>>();
+        let mut by_id = list
+            .iter()
+            .map(|m| (m.kindroid_msg_id.as_str(), m))
+            .collect::<Vec<_>>();
         by_id.sort_by(|a, b| a.0.cmp(b.0));
         let (k1_msg, _k2_msg) = (by_id[0].1, by_id[1].1);
         assert_eq!(k1_msg.message, "edited");
@@ -1235,7 +1297,10 @@ mod tests {
             .unwrap();
         assert_eq!(deleted, 1, "only k2 should be deleted");
 
-        let list = repo.list_chat_messages("ai_x", None, 50).await.unwrap();
+        let list = repo
+            .list_chat_messages("ai_x", None, 50, false)
+            .await
+            .unwrap();
         assert_eq!(list.len(), 2);
         let ids: Vec<&str> = list.iter().map(|m| m.kindroid_msg_id.as_str()).collect();
         assert!(ids.contains(&"k1"));
@@ -1264,7 +1329,10 @@ mod tests {
             .unwrap();
         assert_eq!(deleted, 2);
 
-        let list = repo.list_chat_messages("ai_x", None, 50).await.unwrap();
+        let list = repo
+            .list_chat_messages("ai_x", None, 50, false)
+            .await
+            .unwrap();
         assert_eq!(list.len(), 1, "k1 (ts 100) is at the start_after boundary");
         assert_eq!(list[0].kindroid_msg_id, "k1");
     }
@@ -1295,18 +1363,12 @@ mod tests {
         repo.upsert_target(t_x).await.unwrap();
         repo.upsert_target(t_y).await.unwrap();
 
-        repo.upsert_chat_messages(
-            "ai_x",
-            &[chat_msg("ai_x", "x1", 100, "x-msg")],
-        )
-        .await
-        .unwrap();
-        repo.upsert_chat_messages(
-            "ai_y",
-            &[chat_msg("ai_y", "y1", 100, "y-msg")],
-        )
-        .await
-        .unwrap();
+        repo.upsert_chat_messages("ai_x", &[chat_msg("ai_x", "x1", 100, "x-msg")])
+            .await
+            .unwrap();
+        repo.upsert_chat_messages("ai_y", &[chat_msg("ai_y", "y1", 100, "y-msg")])
+            .await
+            .unwrap();
 
         // Delete against ai_x — ai_y's row must survive.
         let deleted = repo
@@ -1326,13 +1388,11 @@ mod tests {
 
         let m1 = chat_msg("ai_x", "k1", 100, "searchable-text");
         let m2 = chat_msg("ai_x", "k2", 200, "another-text");
-        repo.upsert_chat_messages("ai_x", &[m1, m2])
-            .await
-            .unwrap();
+        repo.upsert_chat_messages("ai_x", &[m1, m2]).await.unwrap();
 
         // Before deletion the FTS5 index has both messages.
         let hits = repo
-            .search_chat("ai_x", "\"searchable\"*", 50, 0)
+            .search_chat("ai_x", "\"searchable\"*", 50, 0, false)
             .await
             .unwrap();
         assert_eq!(hits.len(), 1);
@@ -1346,10 +1406,13 @@ mod tests {
         assert_eq!(deleted, 1);
 
         let hits = repo
-            .search_chat("ai_x", "\"searchable\"*", 50, 0)
+            .search_chat("ai_x", "\"searchable\"*", 50, 0, false)
             .await
             .unwrap();
-        assert!(hits.is_empty(), "FTS5 index should be wiped for the deleted row");
+        assert!(
+            hits.is_empty(),
+            "FTS5 index should be wiped for the deleted row"
+        );
     }
 
     #[tokio::test]
@@ -1367,7 +1430,7 @@ mod tests {
 
         // Porter stemmer turns "running"/"runs" into "run".
         let q = "\"run\"*";
-        let hits = repo.search_chat("ai_x", q, 50, 0).await.unwrap();
+        let hits = repo.search_chat("ai_x", q, 50, 0, false).await.unwrap();
         assert!(
             hits.len() >= 2,
             "expected at least 2 hits, got {}",
@@ -1375,7 +1438,7 @@ mod tests {
         );
 
         let q2 = "\"unrelated\"*";
-        let hits2 = repo.search_chat("ai_x", q2, 50, 0).await.unwrap();
+        let hits2 = repo.search_chat("ai_x", q2, 50, 0, false).await.unwrap();
         assert_eq!(hits2.len(), 1);
     }
 
@@ -1487,7 +1550,7 @@ mod tests {
 
         // FTS5 index was also wiped (the trigger fires on DELETE).
         let fts_hits = repo
-            .search_chat("ai_x", "\"hello\"*", 50, 0)
+            .search_chat("ai_x", "\"hello\"*", 50, 0, false)
             .await
             .unwrap();
         assert!(fts_hits.is_empty(), "FTS5 entries for ai_x should be gone");
@@ -1495,7 +1558,7 @@ mod tests {
         // ai_y is untouched.
         assert_eq!(repo.chat_message_count("ai_y").await.unwrap(), 1);
         let y_hits = repo
-            .search_chat("ai_y", "\"unrelated\"*", 50, 0)
+            .search_chat("ai_y", "\"unrelated\"*", 50, 0, false)
             .await
             .unwrap();
         assert_eq!(y_hits.len(), 1);
@@ -1503,5 +1566,153 @@ mod tests {
         // Idempotent: calling reset again is a no-op.
         let deleted_again = repo.reset_chat_history("ai_x").await.unwrap();
         assert_eq!(deleted_again, 0);
+    }
+
+    #[tokio::test]
+    async fn chat_message_favourite_round_trip() {
+        let repo = SqliteRepository::open_in_memory().unwrap();
+        let t = target("T", "ai_x");
+        repo.upsert_target(t).await.unwrap();
+
+        let mut m1 = chat_msg("ai_x", "k1", 100, "fav-target");
+        m1.favourite = true;
+        repo.upsert_chat_messages("ai_x", std::slice::from_ref(&m1))
+            .await
+            .unwrap();
+
+        let list = repo
+            .list_chat_messages("ai_x", None, 50, false)
+            .await
+            .unwrap();
+        assert!(list[0].favourite);
+
+        let stored = repo
+            .set_chat_message_favourite("ai_x", "k1", false)
+            .await
+            .unwrap();
+        assert!(!stored);
+
+        let list2 = repo
+            .list_chat_messages("ai_x", None, 50, false)
+            .await
+            .unwrap();
+        assert!(!list2[0].favourite);
+
+        // Toggling a non-existent row leaves state untouched and returns false.
+        let missing = repo
+            .set_chat_message_favourite("ai_x", "missing", true)
+            .await
+            .unwrap();
+        assert!(!missing);
+    }
+
+    #[tokio::test]
+    async fn chat_message_favourite_survives_upsert() {
+        let repo = SqliteRepository::open_in_memory().unwrap();
+        let t = target("T", "ai_x");
+        repo.upsert_target(t).await.unwrap();
+
+        let mut m1 = chat_msg("ai_x", "k1", 100, "first edition");
+        m1.favourite = true;
+        repo.upsert_chat_messages("ai_x", std::slice::from_ref(&m1))
+            .await
+            .unwrap();
+
+        // Subsequent sync that updates the content — favourite must survive.
+        let m1_edited = ChatMessage {
+            message: "second edition".into(),
+            ..chat_msg("ai_x", "k1", 100, "placeholder")
+        };
+        repo.upsert_chat_messages("ai_x", std::slice::from_ref(&m1_edited))
+            .await
+            .unwrap();
+
+        let list = repo
+            .list_chat_messages("ai_x", None, 50, false)
+            .await
+            .unwrap();
+        assert_eq!(list.len(), 1);
+        assert_eq!(list[0].message, "second edition");
+        assert!(
+            list[0].favourite,
+            "local favourite flag should survive content upsert"
+        );
+    }
+
+    #[tokio::test]
+    async fn chat_message_favourites_only_filter_browse() {
+        let repo = SqliteRepository::open_in_memory().unwrap();
+        let t = target("T", "ai_x");
+        repo.upsert_target(t).await.unwrap();
+
+        repo.upsert_chat_messages(
+            "ai_x",
+            &[
+                chat_msg_fav("ai_x", "k1", 100, "pinned-a", true),
+                chat_msg_fav("ai_x", "k2", 200, "unpinned", false),
+                chat_msg_fav("ai_x", "k3", 300, "pinned-b", true),
+            ],
+        )
+        .await
+        .unwrap();
+
+        let unfiltered = repo
+            .list_chat_messages("ai_x", None, 50, false)
+            .await
+            .unwrap();
+        assert_eq!(unfiltered.len(), 3);
+
+        let only_favs = repo
+            .list_chat_messages("ai_x", None, 50, true)
+            .await
+            .unwrap();
+        assert_eq!(only_favs.len(), 2);
+        let ids: Vec<&str> = only_favs
+            .iter()
+            .map(|m| m.kindroid_msg_id.as_str())
+            .collect();
+        assert!(ids.contains(&"k1"));
+        assert!(ids.contains(&"k3"));
+        assert!(!ids.contains(&"k2"));
+        // Every returned row really is favourited.
+        assert!(only_favs.iter().all(|m| m.favourite));
+
+        // Filter also applies to the paginated path (`before_ts`).
+        let older_favs = repo
+            .list_chat_messages("ai_x", Some(300), 50, true)
+            .await
+            .unwrap();
+        assert_eq!(older_favs.len(), 1);
+        assert_eq!(older_favs[0].kindroid_msg_id, "k1");
+    }
+
+    #[tokio::test]
+    async fn chat_message_favourites_only_filter_search() {
+        let repo = SqliteRepository::open_in_memory().unwrap();
+        let t = target("T", "ai_x");
+        repo.upsert_target(t).await.unwrap();
+
+        repo.upsert_chat_messages(
+            "ai_x",
+            &[
+                chat_msg_fav("ai_x", "k1", 100, "searchable pinned", true),
+                chat_msg_fav("ai_x", "k2", 200, "searchable plain", false),
+            ],
+        )
+        .await
+        .unwrap();
+
+        let unfiltered = repo
+            .search_chat("ai_x", "\"searchable\"*", 50, 0, false)
+            .await
+            .unwrap();
+        assert_eq!(unfiltered.len(), 2);
+
+        let only_favs = repo
+            .search_chat("ai_x", "\"searchable\"*", 50, 0, true)
+            .await
+            .unwrap();
+        assert_eq!(only_favs.len(), 1);
+        assert_eq!(only_favs[0].kindroid_msg_id, "k1");
     }
 }

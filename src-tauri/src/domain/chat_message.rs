@@ -19,6 +19,11 @@ pub struct ChatMessage {
     pub link_url: Option<String>,
     pub link_description: Option<String>,
     pub fetched_at: DateTime<Utc>,
+    // Local-only source of truth: the Kindroid `get-chat-messages` endpoint
+    // does not return `isPinned`, so any server-side pin state set by
+    // another client is invisible here until the user re-toggles.
+    #[serde(default)]
+    pub favourite: bool,
 }
 
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]

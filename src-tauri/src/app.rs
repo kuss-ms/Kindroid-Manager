@@ -50,6 +50,7 @@ pub fn run() {
             tauri_wrappers::test_token,
             tauri_wrappers::list_chat_messages,
             tauri_wrappers::search_chat,
+            tauri_wrappers::toggle_chat_message_favourite,
             tauri_wrappers::chat_message_count,
             tauri_wrappers::get_chat_sync_state,
             tauri_wrappers::get_current_sync,

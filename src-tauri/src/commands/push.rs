@@ -306,6 +306,7 @@ mod tests {
             _ai_id: &str,
             _before_ts: Option<i64>,
             _limit: u32,
+            _favourites_only: bool,
         ) -> Result<Vec<ChatMessage>, StorageError> {
             Ok(Vec::new())
         }
@@ -315,8 +316,17 @@ mod tests {
             _query: &str,
             _limit: u32,
             _offset: u32,
+            _favourites_only: bool,
         ) -> Result<Vec<ChatMessage>, StorageError> {
             Ok(Vec::new())
+        }
+        async fn set_chat_message_favourite(
+            &self,
+            _ai_id: &str,
+            _kindroid_msg_id: &str,
+            _favourite: bool,
+        ) -> Result<bool, StorageError> {
+            Ok(false)
         }
         async fn chat_message_count(&self, _ai_id: &str) -> Result<u64, StorageError> {
             Ok(0)
@@ -416,6 +426,14 @@ mod tests {
                     limit: 100,
                     pagination_last_timestamp: None,
                 }))
+        }
+        async fn toggle_message_pin(
+            &self,
+            _t: &str,
+            _u: &str,
+            _r: crate::kindroid::ToggleMessagePinRequest,
+        ) -> Result<crate::kindroid::ToggleMessagePinResponse, KindroidError> {
+            Ok(crate::kindroid::ToggleMessagePinResponse { is_pinned: true })
         }
     }
 

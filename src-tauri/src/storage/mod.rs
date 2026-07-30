@@ -62,7 +62,9 @@ pub trait Repository: Send + Sync {
     async fn delete_character_image_bytes(&self, id: Uuid) -> Result<(), StorageError>;
 
     /// Insert chat messages, ignoring duplicates by (ai_id, kindroid_msg_id).
-    /// Returns the count of newly-inserted rows.
+    /// Returns the count of newly-inserted rows. The local `id`, `fetched_at`
+    /// and `favourite` columns are preserved on UPDATE so user-set pin state
+    /// survives subsequent syncs.
     async fn upsert_chat_messages(
         &self,
         ai_id: &str,
@@ -70,22 +72,37 @@ pub trait Repository: Send + Sync {
     ) -> Result<usize, StorageError>;
 
     /// List chat messages for `ai_id`, paginated by `before_ts` (DESC, exclusive).
+    /// When `favourites_only` is true, only messages with `favourite = 1` are returned.
     async fn list_chat_messages(
         &self,
         ai_id: &str,
         before_ts: Option<i64>,
         limit: u32,
+        favourites_only: bool,
     ) -> Result<Vec<ChatMessage>, StorageError>;
 
     /// FTS5 search within a single `ai_id`. The query is expected to be
-    /// already escaped by the caller.
+    /// already escaped by the caller. `favourites_only` adds a SQL predicate
+    /// to the outer join (not to the FTS MATCH clause, so Porter stemming
+    /// keeps working).
     async fn search_chat(
         &self,
         ai_id: &str,
         query: &str,
         limit: u32,
         offset: u32,
+        favourites_only: bool,
     ) -> Result<Vec<ChatMessage>, StorageError>;
+
+    /// Set the local `favourite` flag for a message identified by
+    /// `(ai_id, kindroid_msg_id)`. Returns the new value, or `false` if no
+    /// matching row exists.
+    async fn set_chat_message_favourite(
+        &self,
+        ai_id: &str,
+        kindroid_msg_id: &str,
+        favourite: bool,
+    ) -> Result<bool, StorageError>;
 
     /// Total number of messages known locally for `ai_id`.
     async fn chat_message_count(&self, ai_id: &str) -> Result<u64, StorageError>;

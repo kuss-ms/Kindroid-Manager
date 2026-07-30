@@ -241,13 +241,13 @@ async fn drain_pages(
         // boundary plus one position just outside the window). If we
         // have fewer than 12 messages locally, we rewind to the oldest
         // so every locally-known message is re-checked.
-        let start_after = compute_local_rewind(&**repo, ai_id, state.full_sync_done, prev_cursor).await?;
+        let start_after =
+            compute_local_rewind(&**repo, ai_id, state.full_sync_done, prev_cursor).await?;
 
         let token = match Secrets::get() {
             Ok(t) => t,
             Err(_) => {
-                finalize_error(repo, app, ai_id, "API token cleared", state.total, *stats)
-                    .await;
+                finalize_error(repo, app, ai_id, "API token cleared", state.total, *stats).await;
                 return Ok(DrainOutcome::Error);
             }
         };
@@ -549,12 +549,7 @@ async fn finalize_error(
     );
 }
 
-fn emit_progress(
-    app: &AppHandle,
-    ai_id: &str,
-    state: &ChatSyncState,
-    stats: SyncLoopStats,
-) {
+fn emit_progress(app: &AppHandle, ai_id: &str, state: &ChatSyncState, stats: SyncLoopStats) {
     let _ = app.emit(
         "chat-sync-progress",
         SyncProgress {
@@ -597,6 +592,11 @@ impl From<crate::kindroid::RawChatMessage> for ChatMessage {
             link_url: m.link_url,
             link_description: m.link_description,
             fetched_at: Utc::now(),
+            // `get-chat-messages` does not return isPinned; the local
+            // DB keeps user-set pin state via `set_chat_message_favourite`
+            // and survives subsequent syncs because the upsert omits
+            // `favourite` from both SET and WHERE.
+            favourite: false,
         }
     }
 }

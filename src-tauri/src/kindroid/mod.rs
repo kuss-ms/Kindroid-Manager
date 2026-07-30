@@ -20,6 +20,21 @@ pub struct ChatBreakRequest {
 }
 
 #[derive(Debug, Clone, Serialize)]
+pub struct ToggleMessagePinRequest {
+    pub ai_id: String,
+    pub message_id: String,
+}
+
+/// Server response from `POST /toggle-message-pin` — the canonical pin state
+/// after the toggle. The frontend should reconcile the local cache to this
+/// value rather than relying on the optimistic flip.
+#[derive(Debug, Clone, Deserialize)]
+pub struct ToggleMessagePinResponse {
+    #[serde(rename = "isPinned")]
+    pub is_pinned: bool,
+}
+
+#[derive(Debug, Clone, Serialize)]
 pub struct HttpResponse {
     pub status: u16,
     pub ok: bool,

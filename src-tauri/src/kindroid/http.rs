@@ -4,7 +4,8 @@ use reqwest::Client;
 
 use super::{
     parse_retry_after, ChatBreakRequest, ChatMessagesPage, HttpResponse, KindroidError,
-    ListChatMessagesRequest, UpdateInfoRequest, REQUEST_TIMEOUT,
+    ListChatMessagesRequest, ToggleMessagePinRequest, ToggleMessagePinResponse, UpdateInfoRequest,
+    REQUEST_TIMEOUT,
 };
 
 #[async_trait]
@@ -27,6 +28,12 @@ pub trait KindroidClient: Send + Sync {
         base_url: &str,
         req: ListChatMessagesRequest,
     ) -> Result<ChatMessagesPage, KindroidError>;
+    async fn toggle_message_pin(
+        &self,
+        token: &str,
+        base_url: &str,
+        req: ToggleMessagePinRequest,
+    ) -> Result<ToggleMessagePinResponse, KindroidError>;
 }
 
 #[derive(Clone)]
@@ -206,6 +213,24 @@ impl KindroidClient for HttpKindroidClient {
             has_more,
             limit,
             pagination_last_timestamp: pagination_last_ts,
+        })
+    }
+
+    async fn toggle_message_pin(
+        &self,
+        token: &str,
+        base_url: &str,
+        req: ToggleMessagePinRequest,
+    ) -> Result<ToggleMessagePinResponse, KindroidError> {
+        let url = format!("{}/toggle-message-pin", base_url.trim_end_matches('/'));
+        let body = serde_json::json!({
+            "ai_id": req.ai_id,
+            "message_id": req.message_id,
+        });
+        let resp = self.post_json(&url, token, body).await?;
+        serde_json::from_str(&resp.body).map_err(|e| KindroidError::Server {
+            status: resp.status,
+            body: format!("invalid toggle-message-pin JSON: {e}"),
         })
     }
 }
@@ -791,6 +816,155 @@ mod tests {
                     ai_id: "ai_x".into(),
                     limit: 100,
                     start_after_timestamp: None,
+                },
+            )
+            .await
+            .unwrap_err();
+        assert!(matches!(err, KindroidError::Server { status: 500, .. }));
+    }
+
+    #[tokio::test]
+    async fn toggle_message_pin_200_true() {
+        let server = MockServer::start().await;
+        Mock::given(method("POST"))
+            .and(path("/toggle-message-pin"))
+            .respond_with(
+                ResponseTemplate::new(200).set_body_string(json!({ "isPinned": true }).to_string()),
+            )
+            .mount(&server)
+            .await;
+        let c = HttpKindroidClient::new();
+        let r = c
+            .toggle_message_pin(
+                "t",
+                &server.uri(),
+                ToggleMessagePinRequest {
+                    ai_id: "ai_x".into(),
+                    message_id: "m1".into(),
+                },
+            )
+            .await
+            .unwrap();
+        assert!(r.is_pinned);
+    }
+
+    #[tokio::test]
+    async fn toggle_message_pin_200_false() {
+        let server = MockServer::start().await;
+        Mock::given(method("POST"))
+            .and(path("/toggle-message-pin"))
+            .respond_with(
+                ResponseTemplate::new(200)
+                    .set_body_string(json!({ "isPinned": false }).to_string()),
+            )
+            .mount(&server)
+            .await;
+        let c = HttpKindroidClient::new();
+        let r = c
+            .toggle_message_pin(
+                "t",
+                &server.uri(),
+                ToggleMessagePinRequest {
+                    ai_id: "ai_x".into(),
+                    message_id: "m1".into(),
+                },
+            )
+            .await
+            .unwrap();
+        assert!(!r.is_pinned);
+    }
+
+    #[tokio::test]
+    async fn toggle_message_pin_invalid_json_maps_to_server() {
+        let server = MockServer::start().await;
+        Mock::given(method("POST"))
+            .and(path("/toggle-message-pin"))
+            .respond_with(ResponseTemplate::new(200).set_body_string("not-json"))
+            .mount(&server)
+            .await;
+        let c = HttpKindroidClient::new();
+        let err = c
+            .toggle_message_pin(
+                "t",
+                &server.uri(),
+                ToggleMessagePinRequest {
+                    ai_id: "ai_x".into(),
+                    message_id: "m1".into(),
+                },
+            )
+            .await
+            .unwrap_err();
+        match err {
+            KindroidError::Server { status, body } => {
+                assert_eq!(status, 200);
+                assert!(body.contains("invalid toggle-message-pin JSON"));
+            }
+            other => panic!("expected Server, got {other:?}"),
+        }
+    }
+
+    #[tokio::test]
+    async fn toggle_message_pin_401_maps_to_auth() {
+        let server = MockServer::start().await;
+        Mock::given(method("POST"))
+            .and(path("/toggle-message-pin"))
+            .respond_with(ResponseTemplate::new(401).set_body_string("nope"))
+            .mount(&server)
+            .await;
+        let c = HttpKindroidClient::new();
+        let err = c
+            .toggle_message_pin(
+                "t",
+                &server.uri(),
+                ToggleMessagePinRequest {
+                    ai_id: "ai_x".into(),
+                    message_id: "m1".into(),
+                },
+            )
+            .await
+            .unwrap_err();
+        assert!(matches!(err, KindroidError::Auth { status: 401, .. }));
+    }
+
+    #[tokio::test]
+    async fn toggle_message_pin_404_maps_to_not_found() {
+        let server = MockServer::start().await;
+        Mock::given(method("POST"))
+            .and(path("/toggle-message-pin"))
+            .respond_with(ResponseTemplate::new(404).set_body_string(""))
+            .mount(&server)
+            .await;
+        let c = HttpKindroidClient::new();
+        let err = c
+            .toggle_message_pin(
+                "t",
+                &server.uri(),
+                ToggleMessagePinRequest {
+                    ai_id: "ai_x".into(),
+                    message_id: "missing".into(),
+                },
+            )
+            .await
+            .unwrap_err();
+        assert!(matches!(err, KindroidError::NotFound { status: 404, .. }));
+    }
+
+    #[tokio::test]
+    async fn toggle_message_pin_500_maps_to_server() {
+        let server = MockServer::start().await;
+        Mock::given(method("POST"))
+            .and(path("/toggle-message-pin"))
+            .respond_with(ResponseTemplate::new(500).set_body_string("boom"))
+            .mount(&server)
+            .await;
+        let c = HttpKindroidClient::new();
+        let err = c
+            .toggle_message_pin(
+                "t",
+                &server.uri(),
+                ToggleMessagePinRequest {
+                    ai_id: "ai_x".into(),
+                    message_id: "m1".into(),
                 },
             )
             .await

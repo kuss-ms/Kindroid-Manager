@@ -106,10 +106,32 @@ export const api = {
   testToken: () => invoke<TestTokenResult>('test_token'),
 
   // Chat history
-  listChatMessages: (aiId: string, beforeTs: number | null, limit: number) =>
-    invoke<ChatMessage[]>('list_chat_messages', { aiId, beforeTs, limit }),
-  searchChat: (aiId: string, query: string, limit: number, offset: number) =>
-    invoke<ChatMessage[]>('search_chat', { aiId, query, limit, offset }),
+  listChatMessages: (
+    aiId: string,
+    beforeTs: number | null,
+    limit: number,
+    favouritesOnly: boolean,
+  ) =>
+    invoke<ChatMessage[]>('list_chat_messages', {
+      aiId,
+      beforeTs,
+      limit,
+      favouritesOnly,
+    }),
+  searchChat: (
+    aiId: string,
+    query: string,
+    limit: number,
+    offset: number,
+    favouritesOnly: boolean,
+  ) =>
+    invoke<ChatMessage[]>('search_chat', {
+      aiId,
+      query,
+      limit,
+      offset,
+      favouritesOnly,
+    }),
   chatMessageCount: (aiId: string) => invoke<number>('chat_message_count', { aiId }),
   getChatSyncState: (aiId: string) =>
     invoke<ChatSyncState | null>('get_chat_sync_state', { aiId }),
@@ -117,6 +139,8 @@ export const api = {
   startChatSync: (aiId: string) => invoke<void>('start_chat_sync', { aiId }),
   cancelChatSync: () => invoke<void>('cancel_chat_sync'),
   resetChatHistory: (aiId: string) => invoke<number>('reset_chat_history', { aiId }),
+  setChatMessageFavourite: (aiId: string, kindroidMsgId: string) =>
+    invoke<boolean>('toggle_chat_message_favourite', { aiId, kindroidMsgId }),
 };
 
 /**

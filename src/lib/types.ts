@@ -90,6 +90,7 @@ export interface ChatMessage {
   link_url: string | null;
   link_description: string | null;
   fetched_at: string;
+  favourite: boolean;
 }
 
 export type SyncStatusKind = 'idle' | 'running' | 'backoff' | 'cancelled' | 'error';

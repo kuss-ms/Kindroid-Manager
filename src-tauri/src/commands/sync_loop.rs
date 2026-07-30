@@ -61,7 +61,7 @@ pub async fn compute_local_rewind(
         return Ok(Some(last_timestamp));
     }
     let msgs = repo
-        .list_chat_messages(ai_id, None, REWIND_MESSAGE_COUNT)
+        .list_chat_messages(ai_id, None, REWIND_MESSAGE_COUNT, false)
         .await?;
     if msgs.is_empty() {
         return Ok(None);

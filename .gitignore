@@ -13,3 +13,4 @@ src-tauri/gen/schemas
 .DS_Store
 Thumbs.db
 /.kilo
+/src-tauri/images

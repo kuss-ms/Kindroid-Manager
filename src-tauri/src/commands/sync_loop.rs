@@ -24,41 +24,54 @@ pub fn escape_fts_query(query: &str) -> String {
     }
 }
 
-/// Overlap window applied to the cursor after the first full sync. Each
-/// subsequent poll re-fetches and re-upserts the last few minutes of
-/// messages; the server replies with current content (an edited message
-/// keeps its `kindroid_msg_id` / `timestamp`) and the upsert picks up
-/// the change.
-pub const OVERLAP_MINUTES: i64 = 3;
-pub const OVERLAP_MS: i64 = OVERLAP_MINUTES * 60 * 1000;
+/// How many of the most recent local messages to re-check on every
+/// post-full-sync poll. Kindroid allows editing and deleting only the
+/// last 10 messages; the +2 margin covers the strict-`>` API
+/// boundary plus one position just outside the edit window.
+pub const REWIND_MESSAGE_COUNT: u32 = 12;
 
-/// Compute the `start_after_timestamp` to send to the API.
+/// Compute the `start_after_timestamp` for an outgoing chat-history
+/// request based on the **local DB** rather than the cursor or
+/// wall-clock time. The cursor can drift arbitrarily far past the
+/// user's editable messages (the AI keeps responding and the cursor
+/// advances with every new message), so anchoring the rewind to
+/// `cursor − X` or `now() − X` either misses older messages or wastes
+/// bandwidth. Anchoring to the local 12 newest messages keeps the
+/// rewind window exactly aligned with the user's edit window.
 ///
-///   * `last_timestamp == 0`: first call — return `None`.
-///   * During the initial backfill (`full_sync_done == false`):
-///     pass the cursor through unchanged so the drain walks forward
-///     through the history without re-fetching.
-///   * After the first full sync (`full_sync_done == true`): rewind
-///     the cursor by `OVERLAP_MS` so each poll re-confirms the last
-///     few minutes and catches edits. If the rewind underflows
-///     (very first poll after a brand-new sync) fall back to the
-///     original cursor.
-pub fn compute_start_after_timestamp(
-    last_timestamp: i64,
+///   * `last_timestamp == 0` and `!full_sync_done`: first call —
+///     return `None`.
+///   * During the initial backfill (`full_sync_done == false`): pass
+///     the cursor through unchanged so the drain walks forward
+///     without re-fetching.
+///   * After the first full sync: rewind to the timestamp of the
+///     oldest of the 12 most recent local messages (or the oldest
+///     message if we have < 12), minus 1 so the boundary message is
+///     strictly inside the response window.
+pub async fn compute_local_rewind(
+    repo: &dyn crate::storage::Repository,
+    ai_id: &str,
     full_sync_done: bool,
-) -> Option<i64> {
-    if last_timestamp <= 0 {
-        return None;
+    last_timestamp: i64,
+) -> Result<Option<i64>, crate::error::AppError> {
+    if last_timestamp <= 0 && !full_sync_done {
+        return Ok(None);
     }
     if !full_sync_done {
-        return Some(last_timestamp);
+        return Ok(Some(last_timestamp));
     }
-    let rewound = last_timestamp.saturating_sub(OVERLAP_MS);
-    if rewound > 0 {
-        Some(rewound)
-    } else {
-        Some(last_timestamp)
+    let msgs = repo
+        .list_chat_messages(ai_id, None, REWIND_MESSAGE_COUNT)
+        .await?;
+    if msgs.is_empty() {
+        return Ok(None);
     }
+    // `msgs` is sorted DESC by timestamp. The oldest of the returned
+    // list is either the 12th-most-recent (if we have >= 12) or the
+    // actual oldest (if < 12). Subtracting 1 puts the boundary message
+    // strictly inside the response window (the API uses `>`).
+    let boundary = msgs.last().unwrap().timestamp - 1;
+    Ok(Some(boundary.max(0)))
 }
 
 #[cfg(test)]
@@ -96,46 +109,5 @@ mod tests {
         assert_eq!(escape_fts_query(""), "");
         assert_eq!(escape_fts_query("   "), "");
         assert_eq!(escape_fts_query("***"), "");
-    }
-
-    #[test]
-    fn compute_cursor_returns_none_for_zero_cursor() {
-        assert_eq!(compute_start_after_timestamp(0, false), None);
-        assert_eq!(compute_start_after_timestamp(0, true), None);
-    }
-
-    #[test]
-    fn compute_cursor_passes_through_during_initial_backfill() {
-        // During the drain we walk forward without rewinding; we send
-        // the cursor straight through.
-        assert_eq!(
-            compute_start_after_timestamp(1_700_000_000_000, false),
-            Some(1_700_000_000_000)
-        );
-    }
-
-    #[test]
-    fn compute_cursor_rewinds_after_full_sync() {
-        // After the first sync, rewind by 3 min (180_000 ms).
-        let cursor = 1_700_000_180_000;
-        assert_eq!(
-            compute_start_after_timestamp(cursor, true),
-            Some(cursor - OVERLAP_MS)
-        );
-    }
-
-    #[test]
-    fn compute_cursor_falls_back_when_rewind_underflows() {
-        // If the cursor is within OVERLAP_MS of zero (very first poll on
-        // a brand-new sync), fall back to the original cursor rather
-        // than returning 0 / None.
-        assert_eq!(
-            compute_start_after_timestamp(60_000, true),
-            Some(60_000)
-        );
-        assert_eq!(
-            compute_start_after_timestamp(OVERLAP_MS - 1, true),
-            Some(OVERLAP_MS - 1)
-        );
     }
 }

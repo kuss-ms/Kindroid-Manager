@@ -7,7 +7,7 @@ use tauri::{AppHandle, Emitter};
 use tokio::sync::watch;
 
 use crate::commands::push::{DEFAULT_BASE_URL, SETTING_BASE_URL};
-use crate::commands::sync_loop::compute_start_after_timestamp;
+use crate::commands::sync_loop::compute_local_rewind;
 use crate::commands::sync_registry::SyncRegistry;
 use crate::domain::chat_message::{ChatMessage, ChatSyncState, SyncStatusKind};
 use crate::error::AppError;
@@ -232,8 +232,16 @@ async fn drain_pages(
         }
 
         let prev_cursor = state.last_timestamp;
-        let start_after =
-            compute_start_after_timestamp(prev_cursor, state.full_sync_done);
+        // Compute the rewind from the local DB rather than the cursor
+        // or wall-clock time. Kindroid only lets the user edit and
+        // delete the last 10 messages, so we only ever need to re-check
+        // those. We use the 12 most recent local messages as the
+        // boundary (`REWIND_MESSAGE_COUNT` with a +2 margin over the
+        // 10-position edit window to handle the strict-`>` API
+        // boundary plus one position just outside the window). If we
+        // have fewer than 12 messages locally, we rewind to the oldest
+        // so every locally-known message is re-checked.
+        let start_after = compute_local_rewind(&**repo, ai_id, state.full_sync_done, prev_cursor).await?;
 
         let token = match Secrets::get() {
             Ok(t) => t,

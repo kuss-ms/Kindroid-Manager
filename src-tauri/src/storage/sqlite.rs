@@ -744,6 +744,41 @@ impl Repository for SqliteRepository {
             .map_err(|e| StorageError::Database(e.to_string()))?;
         Ok(deleted)
     }
+
+    async fn delete_missing_chat_messages(
+        &self,
+        ai_id: &str,
+        start_after: i64,
+        last_timestamp_inclusive: i64,
+        keep_ids: &[&str],
+    ) -> Result<usize, StorageError> {
+        if start_after >= last_timestamp_inclusive {
+            // Empty range — nothing to do.
+            return Ok(0);
+        }
+        let conn = lock(&self.conn).await;
+        let mut sql = String::from(
+            "DELETE FROM chat_messages WHERE ai_id = ?1 AND timestamp > ?2 AND timestamp <= ?3",
+        );
+        if !keep_ids.is_empty() {
+            sql.push_str(" AND kindroid_msg_id NOT IN (");
+            let placeholders: Vec<String> = (4..=keep_ids.len() + 3)
+                .map(|i| format!("?{i}"))
+                .collect();
+            sql.push_str(&placeholders.join(","));
+            sql.push(')');
+        }
+        let mut params: Vec<&dyn rusqlite::ToSql> = vec![
+            &ai_id,
+            &start_after,
+            &last_timestamp_inclusive,
+        ];
+        params.extend(keep_ids.iter().map(|s| s as &dyn rusqlite::ToSql));
+        let n = conn
+            .execute(&sql, params.as_slice())
+            .map_err(|e| StorageError::Database(e.to_string()))?;
+        Ok(n)
+    }
 }
 
 fn row_to_character(row: &rusqlite::Row<'_>) -> rusqlite::Result<Character> {
@@ -1174,6 +1209,147 @@ mod tests {
         assert_eq!(k1_msg.message, "edited");
         // m1's UUID is preserved across the update.
         assert_eq!(k1_msg.id, m1.id);
+    }
+
+    #[tokio::test]
+    async fn delete_missing_removes_messages_not_in_keep_ids() {
+        let repo = SqliteRepository::open_in_memory().unwrap();
+        let t = target("T", "ai_x");
+        repo.upsert_target(t).await.unwrap();
+
+        let m1 = chat_msg("ai_x", "k1", 100, "a");
+        let m2 = chat_msg("ai_x", "k2", 200, "b");
+        let m3 = chat_msg("ai_x", "k3", 300, "c");
+        repo.upsert_chat_messages("ai_x", &[m1.clone(), m2.clone(), m3.clone()])
+            .await
+            .unwrap();
+
+        // Range (100, 300]: k2 (ts 200) is in the range but not in
+        // keep_ids; k1 (ts 100) is at the start_after boundary and
+        // excluded by `>`; k3 (ts 300) is at the upper bound and
+        // included but in keep_ids.
+        let keep: Vec<&str> = vec!["k3"];
+        let deleted = repo
+            .delete_missing_chat_messages("ai_x", 100, 300, &keep)
+            .await
+            .unwrap();
+        assert_eq!(deleted, 1, "only k2 should be deleted");
+
+        let list = repo.list_chat_messages("ai_x", None, 50).await.unwrap();
+        assert_eq!(list.len(), 2);
+        let ids: Vec<&str> = list.iter().map(|m| m.kindroid_msg_id.as_str()).collect();
+        assert!(ids.contains(&"k1"));
+        assert!(ids.contains(&"k3"));
+        assert!(!ids.contains(&"k2"));
+    }
+
+    #[tokio::test]
+    async fn delete_missing_with_empty_keep_ids_removes_everything_in_range() {
+        let repo = SqliteRepository::open_in_memory().unwrap();
+        let t = target("T", "ai_x");
+        repo.upsert_target(t).await.unwrap();
+
+        let m1 = chat_msg("ai_x", "k1", 100, "a");
+        let m2 = chat_msg("ai_x", "k2", 200, "b");
+        let m3 = chat_msg("ai_x", "k3", 300, "c");
+        repo.upsert_chat_messages("ai_x", &[m1.clone(), m2.clone(), m3.clone()])
+            .await
+            .unwrap();
+
+        // Empty keep_ids (e.g. the API returned an empty page on the
+        // final has_more = false poll) — delete every row in (100, 300].
+        let deleted = repo
+            .delete_missing_chat_messages("ai_x", 100, 300, &[])
+            .await
+            .unwrap();
+        assert_eq!(deleted, 2);
+
+        let list = repo.list_chat_messages("ai_x", None, 50).await.unwrap();
+        assert_eq!(list.len(), 1, "k1 (ts 100) is at the start_after boundary");
+        assert_eq!(list[0].kindroid_msg_id, "k1");
+    }
+
+    #[tokio::test]
+    async fn delete_missing_with_empty_range_is_a_noop() {
+        let repo = SqliteRepository::open_in_memory().unwrap();
+        let t = target("T", "ai_x");
+        repo.upsert_target(t).await.unwrap();
+        let m1 = chat_msg("ai_x", "k1", 100, "a");
+        repo.upsert_chat_messages("ai_x", std::slice::from_ref(&m1))
+            .await
+            .unwrap();
+
+        let deleted = repo
+            .delete_missing_chat_messages("ai_x", 200, 200, &["k1"])
+            .await
+            .unwrap();
+        assert_eq!(deleted, 0);
+        assert_eq!(repo.chat_message_count("ai_x").await.unwrap(), 1);
+    }
+
+    #[tokio::test]
+    async fn delete_missing_only_affects_targeted_ai_id() {
+        let repo = SqliteRepository::open_in_memory().unwrap();
+        let t_x = target("X", "ai_x");
+        let t_y = target("Y", "ai_y");
+        repo.upsert_target(t_x).await.unwrap();
+        repo.upsert_target(t_y).await.unwrap();
+
+        repo.upsert_chat_messages(
+            "ai_x",
+            &[chat_msg("ai_x", "x1", 100, "x-msg")],
+        )
+        .await
+        .unwrap();
+        repo.upsert_chat_messages(
+            "ai_y",
+            &[chat_msg("ai_y", "y1", 100, "y-msg")],
+        )
+        .await
+        .unwrap();
+
+        // Delete against ai_x — ai_y's row must survive.
+        let deleted = repo
+            .delete_missing_chat_messages("ai_x", 50, 200, &[])
+            .await
+            .unwrap();
+        assert_eq!(deleted, 1);
+        assert_eq!(repo.chat_message_count("ai_x").await.unwrap(), 0);
+        assert_eq!(repo.chat_message_count("ai_y").await.unwrap(), 1);
+    }
+
+    #[tokio::test]
+    async fn delete_missing_updates_fts5_index() {
+        let repo = SqliteRepository::open_in_memory().unwrap();
+        let t = target("T", "ai_x");
+        repo.upsert_target(t).await.unwrap();
+
+        let m1 = chat_msg("ai_x", "k1", 100, "searchable-text");
+        let m2 = chat_msg("ai_x", "k2", 200, "another-text");
+        repo.upsert_chat_messages("ai_x", &[m1, m2])
+            .await
+            .unwrap();
+
+        // Before deletion the FTS5 index has both messages.
+        let hits = repo
+            .search_chat("ai_x", "\"searchable\"*", 50, 0)
+            .await
+            .unwrap();
+        assert_eq!(hits.len(), 1);
+
+        // Delete k1 — the FTS5 index entry must go too (via the
+        // chat_messages_ad trigger).
+        let deleted = repo
+            .delete_missing_chat_messages("ai_x", 50, 200, &["k2"])
+            .await
+            .unwrap();
+        assert_eq!(deleted, 1);
+
+        let hits = repo
+            .search_chat("ai_x", "\"searchable\"*", 50, 0)
+            .await
+            .unwrap();
+        assert!(hits.is_empty(), "FTS5 index should be wiped for the deleted row");
     }
 
     #[tokio::test]

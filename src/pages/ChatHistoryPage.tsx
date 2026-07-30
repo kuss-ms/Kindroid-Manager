@@ -16,6 +16,7 @@ interface LiveProgress {
   requests: number;
   last_batch_size: number;
   last_batch_had_messages: boolean;
+  last_deleted_count: number;
   last_timestamp: number;
   status_kind: SyncStatusKind;
   status_message: string | null;
@@ -173,6 +174,7 @@ export function ChatHistoryPage() {
         requests: number;
         last_batch_size: number;
         last_batch_had_messages: boolean;
+        last_deleted_count: number;
       }>('chat-sync-progress', (event) => {
         const p = event.payload;
         if (selectedAiId && p.ai_id !== selectedAiId) return;
@@ -205,6 +207,7 @@ export function ChatHistoryPage() {
           requests: p.requests,
           last_batch_size: 0,
           last_batch_had_messages: false,
+          last_deleted_count: 0,
           received_at: Date.now(),
         });
         queryClient.invalidateQueries({ queryKey: ['chat-sync-state'] });
@@ -233,6 +236,7 @@ export function ChatHistoryPage() {
         requests: 0,
         last_batch_size: 0,
         last_batch_had_messages: false,
+        last_deleted_count: 0,
         received_at: Date.now(),
       });
       queryClient.invalidateQueries({ queryKey: ['chat-sync-state'] });
@@ -349,8 +353,12 @@ export function ChatHistoryPage() {
 
   if (currentSyncing === selectedAiId) {
     showCancel = true;
-    if (liveProgress && liveProgress.last_batch_size > 0) {
-      body = `Latest page returned ${liveProgress.last_batch_size} message${liveProgress.last_batch_size === 1 ? '' : 's'}.`;
+    const lastDel = liveProgress?.last_deleted_count ?? 0;
+    const lastBatch = liveProgress?.last_batch_size ?? 0;
+    if (lastDel > 0) {
+      body = `Latest page returned ${lastBatch} message${lastBatch === 1 ? '' : 's'}; removed ${lastDel} deleted on server.`;
+    } else if (lastBatch > 0) {
+      body = `Latest page returned ${lastBatch} message${lastBatch === 1 ? '' : 's'}.`;
     } else {
       body = `Last updated: ${localTime(state?.last_synced_at) || '—'}`;
     }

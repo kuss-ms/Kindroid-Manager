@@ -333,6 +333,15 @@ mod tests {
         async fn reset_chat_history(&self, _ai_id: &str) -> Result<usize, StorageError> {
             Ok(0)
         }
+        async fn delete_missing_chat_messages(
+            &self,
+            _ai_id: &str,
+            _start_after: i64,
+            _last_timestamp_inclusive: i64,
+            _keep_ids: &[&str],
+        ) -> Result<usize, StorageError> {
+            Ok(0)
+        }
     }
 
     struct FakeClient {

@@ -28,6 +28,7 @@ const MAX_PAGES_PER_CYCLE: u64 = 200;
 struct SyncLoopStats {
     requests: u64,
     last_batch_size: u64,
+    last_deleted_count: u64,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -48,6 +49,9 @@ pub struct SyncProgress {
     /// Whether the latest call returned a non-empty page (helps the UI
     /// distinguish "still fetching" from "caught up to the cursor").
     pub last_batch_had_messages: bool,
+    /// Number of local messages removed by the latest poll because they
+    /// were no longer present on the server (deletion detection).
+    pub last_deleted_count: u64,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -102,24 +106,31 @@ pub async fn run_sync_loop(
     .await
     {
         tracing::error!(ai_id = %ai_id, error = %e, "sync loop exited with error");
+        // Preserve the existing cursor + total + full_sync_done so the
+        // user can resume by clicking Sync again. We only flip to
+        // `Error` and reset `is_syncing`.
+        let existing = repo.get_chat_sync_state(&ai_id).await.ok().flatten();
+        let last_timestamp = existing.as_ref().map(|s| s.last_timestamp).unwrap_or(0);
+        let full_sync_done = existing.as_ref().map(|s| s.full_sync_done).unwrap_or(false);
+        let total = existing.as_ref().map(|s| s.total).unwrap_or(0);
         let _ = repo
             .upsert_chat_sync_state(&ChatSyncState {
                 ai_id: ai_id.clone(),
                 last_synced_at: Utc::now(),
-                last_timestamp: 0,
-                full_sync_done: false,
+                last_timestamp,
+                full_sync_done,
                 is_syncing: false,
                 status_kind: SyncStatusKind::Error,
                 status_message: Some(e.to_string()),
                 backoff_until: None,
-                total: 0,
+                total,
             })
             .await;
         let _ = app.emit(
             "chat-sync-complete",
             SyncComplete {
                 ai_id: ai_id.clone(),
-                total: 0,
+                total,
                 status_kind: "error".into(),
                 status_message: Some(e.to_string()),
                 requests: 0,
@@ -195,7 +206,12 @@ async fn run_loop_inner(
 /// Inner loop: keep paging the API until the page is empty, `has_more` is
 /// false, or we hit the per-cycle safety cap. 429s are honoured in place
 /// (sleep, then retry the same cursor). Non-429 errors are reported to
-/// the caller.
+/// the caller. On every complete page (`has_more = false`) the loop
+/// also sweeps the `(start_after, prev_cursor]` window for messages
+/// that were deleted on the server and removes them locally — partial
+/// pages (where we don't yet know whether the messages with `ts >
+/// lastTimestamp` still exist) defer this to the final page of the
+/// cycle.
 async fn drain_pages(
     repo: &Arc<dyn Repository>,
     client: &Arc<dyn KindroidClient>,
@@ -215,10 +231,15 @@ async fn drain_pages(
             return Ok(DrainOutcome::Drained);
         }
 
+        let prev_cursor = state.last_timestamp;
+        let start_after =
+            compute_start_after_timestamp(prev_cursor, state.full_sync_done);
+
         let token = match Secrets::get() {
             Ok(t) => t,
             Err(_) => {
-                finalize_error(repo, app, ai_id, "API token cleared", state.total, *stats).await;
+                finalize_error(repo, app, ai_id, "API token cleared", state.total, *stats)
+                    .await;
                 return Ok(DrainOutcome::Error);
             }
         };
@@ -230,14 +251,7 @@ async fn drain_pages(
         let req = ListChatMessagesRequest {
             ai_id: ai_id.to_string(),
             limit: 100,
-            // Always pass the cursor once we have one. The drain walks
-            // forward without rewinding during the initial backfill; once
-            // `full_sync_done` is true, every subsequent poll rewinds by
-            // `OVERLAP_MS` so edits to recent messages are picked up.
-            start_after_timestamp: compute_start_after_timestamp(
-                state.last_timestamp,
-                state.full_sync_done,
-            ),
+            start_after_timestamp: start_after,
         };
         let page: ChatMessagesPage = match client.list_chat_messages(&token, &base_url, req).await {
             Ok(p) => p,
@@ -287,8 +301,12 @@ async fn drain_pages(
         pages_this_cycle += 1;
 
         if page.messages.is_empty() {
-            // Caught up: nothing more to fetch at this cursor.
+            // Empty page. We can't tell whether the API is just at the
+            // end of history (`has_more = false`) or the response was
+            // truncated, but the only safe call on an empty response is
+            // to do nothing and let the next poll try again.
             stats.last_batch_size = 0;
+            stats.last_deleted_count = 0;
             repo.upsert_chat_sync_state(state).await?;
             emit_progress(app, ai_id, state, *stats);
             return Ok(DrainOutcome::Drained);
@@ -316,6 +334,7 @@ async fn drain_pages(
         // polls; instead we recompute the unique message count from the
         // DB so the displayed total stays exact.
         state.total = repo.chat_message_count(ai_id).await?;
+
         // Advance the cursor. Prefer the server's `pagination.lastTimestamp`
         // (the API's documented cursor); fall back to the max of the
         // inserted rows when the field is missing or zero. In either case
@@ -326,6 +345,39 @@ async fn drain_pages(
         if let Some(next) = api_cursor.or(computed_cursor) {
             state.last_timestamp = next;
         }
+
+        // Server-side deletion detection. Only do this on a complete
+        // response (`has_more = false`): the API has returned every
+        // message with `ts > start_after`, so local messages in
+        // `(start_after, prev_cursor]` that aren't in the response have
+        // been confirmed-deleted on the server. On a partial page we
+        // defer — we don't yet know whether messages with `ts >
+        // lastTimestamp` still exist, and over-deleting would be wrong.
+        if !page.has_more && prev_cursor > 0 {
+            if let Some(sa) = start_after {
+                let keep_ids: Vec<&str> = incoming
+                    .iter()
+                    .map(|m| m.kindroid_msg_id.as_str())
+                    .collect();
+                let deleted = repo
+                    .delete_missing_chat_messages(ai_id, sa, prev_cursor, &keep_ids)
+                    .await?;
+                if deleted > 0 {
+                    tracing::info!(
+                        ai_id = %ai_id,
+                        deleted,
+                        "removed messages that were deleted on the server"
+                    );
+                }
+                stats.last_deleted_count = deleted as u64;
+                // The deletes may have changed the row count, so refresh
+                // the cached total.
+                state.total = repo.chat_message_count(ai_id).await?;
+            }
+        } else {
+            stats.last_deleted_count = 0;
+        }
+
         state.last_synced_at = Utc::now();
         if !state.full_sync_done && !page.has_more {
             state.full_sync_done = true;
@@ -507,6 +559,7 @@ fn emit_progress(
             requests: stats.requests,
             last_batch_size: stats.last_batch_size,
             last_batch_had_messages: stats.last_batch_size > 0,
+            last_deleted_count: stats.last_deleted_count,
         },
     );
 }

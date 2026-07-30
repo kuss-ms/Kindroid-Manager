@@ -101,4 +101,20 @@ pub trait Repository: Send + Sync {
     /// next sync starts cleanly from a zero cursor. Returns the number of
     /// chat_messages rows that were deleted.
     async fn reset_chat_history(&self, ai_id: &str) -> Result<usize, StorageError>;
+
+    /// Delete chat messages for `ai_id` whose timestamp is in
+    /// `(start_after, last_timestamp_inclusive]` AND whose
+    /// `kindroid_msg_id` is NOT in `keep_ids`. Used after a sync response
+    /// to remove messages that were deleted on the server side. The
+    /// `keep_ids` list may be empty — in that case every row in the
+    /// range is removed (e.g. the API returned an empty page). The
+    /// `chat_messages_ad` FTS5 trigger fires per row, so the search
+    /// index stays consistent. Returns the number of rows deleted.
+    async fn delete_missing_chat_messages(
+        &self,
+        ai_id: &str,
+        start_after: i64,
+        last_timestamp_inclusive: i64,
+        keep_ids: &[&str],
+    ) -> Result<usize, StorageError>;
 }

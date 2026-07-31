@@ -78,6 +78,7 @@ src-tauri/src/
 
 ## Key conventions
 
+- **Git commit messages**: subject line only, imperative mood, ≤ 60 characters, no body. Match the existing log style (e.g. `Cursor-based chat history pagination`, `Add chat message favourite (pin) feature`, `Rewind chat sync by recent local messages`, `Version bumped to 0.2.1`). No multi-paragraph explanations, no `Co-Authored-By` trailers, no "this commit…" preambles. The diff and PR description carry the details; the commit subject is for `git log --oneline` scanning.
 - All Tauri `invoke` calls live in `src/lib/api.ts` only — pages/components never import from `@tauri-apps/api/core`.
 - `commands/tauri_wrappers.rs` is the only file that imports `tauri::State` or wraps a function in `#[tauri::command]`. Tests skip it via `#[cfg(not(test))]`.
 - The `app::run` entry installs `Arc<dyn Repository>`, `Arc<dyn KindroidClient>`, and `Arc<SyncRegistry>` into Tauri state; commands take them out via `State` and call into `commands::*` plain async functions.

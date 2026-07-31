@@ -157,7 +157,7 @@ export function SettingsPage() {
         {' '}
         <h3>About</h3>{' '}
         <p className="muted" style={{ fontSize: 12 }}>
-          Kindroid Manager v0.2.1
+          Kindroid Manager v0.2.2
         </p>{' '}
       </div>{' '}
       <ConfirmDialog

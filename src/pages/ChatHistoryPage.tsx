@@ -99,11 +99,21 @@ export function ChatHistoryPage() {
   // Favourites-only filter (applied to browse + search).
   const [favouritesOnly, setFavouritesOnly] = useState(false);
 
-  // Browse pagination: cursor is the smallest timestamp currently shown;
-  // next page reads older by setting beforeTs to that.
-  const [browseOffset, setBrowseOffset] = useState(0);
+  // Browse pagination: stack of `before_ts` cursors, each one is the
+  // oldest message's timestamp on the corresponding page. The top of
+  // the stack is the page currently shown; pushing a new cursor
+  // advances to the next older page, popping goes back to a newer one.
+  // The root of the stack is `null` (newest page, no `before_ts`).
+  const [browseCursorStack, setBrowseCursorStack] = useState<Array<number | null>>([null]);
+  const browseCursor = browseCursorStack[browseCursorStack.length - 1] ?? null;
   useEffect(() => {
-    setBrowseOffset(0);
+    setBrowseCursorStack([null]);
+  }, [selectedAiId, debouncedQuery, favouritesOnly]);
+
+  // Search keeps a plain numeric offset (search_chat uses SQL OFFSET).
+  const [searchOffset, setSearchOffset] = useState(0);
+  useEffect(() => {
+    setSearchOffset(0);
   }, [selectedAiId, debouncedQuery, favouritesOnly]);
 
   const trimmedQuery = debouncedQuery.trim();
@@ -133,12 +143,12 @@ export function ChatHistoryPage() {
 
   // Page of messages (browse mode).
   const browsePage = useQuery<ChatMessage[]>({
-    queryKey: ['chat-messages', selectedAiId, browseOffset, favouritesOnly],
+    queryKey: ['chat-messages', selectedAiId, browseCursor, favouritesOnly],
     queryFn: () => {
       if (!selectedAiId) return Promise.resolve([]);
       return api.listChatMessages(
         selectedAiId,
-        browseOffset === 0 ? null : browseOffset,
+        browseCursor,
         PAGE_SIZE,
         favouritesOnly,
       );
@@ -148,14 +158,14 @@ export function ChatHistoryPage() {
 
   // Search results.
   const searchPage = useQuery<ChatMessage[]>({
-    queryKey: ['chat-search', selectedAiId, trimmedQuery, browseOffset, favouritesOnly],
+    queryKey: ['chat-search', selectedAiId, trimmedQuery, searchOffset, favouritesOnly],
     queryFn: () => {
       if (!selectedAiId || !trimmedQuery) return Promise.resolve([]);
       return api.searchChat(
         selectedAiId,
         escapeFtsQuery(trimmedQuery),
         PAGE_SIZE,
-        browseOffset,
+        searchOffset,
         favouritesOnly,
       );
     },
@@ -630,15 +640,33 @@ export function ChatHistoryPage() {
       <div className="flex-row" style={{ marginTop: 12 }}>
         <button
           className="btn"
-          disabled={browseOffset === 0}
-          onClick={() => setBrowseOffset(Math.max(0, browseOffset - PAGE_SIZE))}
+          disabled={isSearching ? searchOffset === 0 : browseCursorStack.length <= 1}
+          onClick={() => {
+            if (isSearching) {
+              setSearchOffset(Math.max(0, searchOffset - PAGE_SIZE));
+            } else {
+              setBrowseCursorStack((stack) => (stack.length > 1 ? stack.slice(0, -1) : stack));
+            }
+          }}
         >
           ← {isSearching ? 'Prev' : 'Newer'}
         </button>
         <button
           className="btn"
-          disabled={messages.length < PAGE_SIZE || browseOffset + PAGE_SIZE >= SEARCH_LIMIT}
-          onClick={() => setBrowseOffset(browseOffset + PAGE_SIZE)}
+          disabled={
+            messages.length < PAGE_SIZE ||
+            (isSearching && searchOffset + PAGE_SIZE >= SEARCH_LIMIT)
+          }
+          onClick={() => {
+            if (isSearching) {
+              setSearchOffset(searchOffset + PAGE_SIZE);
+            } else {
+              const oldest = messages[messages.length - 1];
+              if (oldest) {
+                setBrowseCursorStack((stack) => [...stack, oldest.timestamp]);
+              }
+            }
+          }}
         >
           {isSearching ? 'Next' : 'Older'} →
         </button>

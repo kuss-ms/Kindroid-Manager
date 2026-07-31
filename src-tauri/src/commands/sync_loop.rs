@@ -1,27 +1,99 @@
-/// Escape an arbitrary user query into a safe FTS5 prefix-match expression.
+/// Escape an arbitrary user query into a safe FTS5 expression.
 ///
-/// Each whitespace-separated token is double-quoted (so FTS5 treats it as
-/// a literal phrase), stripped of FTS5 metacharacters, with internal `"`
-/// doubled, and suffixed with `*` for prefix matching. The result is
-/// `token1* OR token2* OR token3*`.
+/// Tokens are whitespace-separated. A token wrapped in `"..."` becomes an
+/// **exact phrase** match (no wildcard). An unwrapped token becomes a
+/// **prefix** match (suffix `*`). All parts are joined with ` AND ` so that
+/// every term (or phrase) must be present in a matching message.
+///
+/// Each raw token / phrase is stripped of FTS5 metacharacters
+/// (`*`, `(`, `)`, `:`, `^`), any internal `"` is doubled so it survives
+/// FTS5 phrase parsing, and the cleaned text is then re-wrapped. Empty
+/// parts after cleaning are dropped. An unmatched opening quote is
+/// forgiving: the remainder of the input is treated as a plain unquoted
+/// token rather than producing an error.
+///
+/// FTS5 examples produced by this function:
+///
+/// * `hello world`         → `"hello"* AND "world"*`
+/// * `"hello world"`       → `"hello world"`
+/// * `hello "world peace"` → `"hello"* AND "world peace"`
+/// * `he*y :foo^bar`       → `"hey"* AND "foobar"*`
+/// * empty / whitespace    → `""`
 pub fn escape_fts_query(query: &str) -> String {
-    let mut out: Vec<String> = Vec::new();
-    for token in query.split_whitespace() {
-        let stripped: String = token
-            .chars()
-            .filter(|c| !matches!(c, '*' | '(' | ')' | ':' | '^'))
-            .collect();
-        if stripped.is_empty() {
-            continue;
+    const META: &[char] = &['*', '(', ')', ':', '^'];
+
+    let mut parts: Vec<String> = Vec::new();
+    let bytes = query.as_bytes();
+    let mut i = 0;
+    while i < bytes.len() {
+        // Skip whitespace between tokens.
+        while i < bytes.len() && bytes[i].is_ascii_whitespace() {
+            i += 1;
         }
-        let escaped = stripped.replace('"', "\"\"");
-        out.push(format!("\"{escaped}\"*"));
+        if i >= bytes.len() {
+            break;
+        }
+
+        if bytes[i] == b'"' {
+            // Quoted phrase: read until the next '"' or end-of-input.
+            i += 1;
+            let start = i;
+            while i < bytes.len() && bytes[i] != b'"' {
+                i += 1;
+            }
+            let raw = &query[start..i];
+            let closed = i < bytes.len();
+            // If we landed on a closing quote, advance past it.
+            if closed {
+                i += 1;
+            }
+            // FTS5 tokenisation matches our linear scan: an unmatched
+            // opening quote falls back to being treated as a plain token
+            // (so the user still gets prefix-matching feedback instead of
+            // a silently different search mode).
+            if let Some(part) = if closed {
+                build_phrase(raw, META)
+            } else {
+                build_token(raw, META)
+            } {
+                parts.push(part);
+            }
+        } else {
+            // Plain token: read until whitespace or a `"`.
+            let start = i;
+            while i < bytes.len() && !bytes[i].is_ascii_whitespace() && bytes[i] != b'"' {
+                i += 1;
+            }
+            let raw = &query[start..i];
+            if let Some(token) = build_token(raw, META) {
+                parts.push(token);
+            }
+        }
     }
-    if out.is_empty() {
+
+    if parts.is_empty() {
         String::new()
     } else {
-        out.join(" OR ")
+        parts.join(" AND ")
     }
+}
+
+fn build_token(raw: &str, meta: &[char]) -> Option<String> {
+    let cleaned: String = raw.chars().filter(|c| !meta.contains(c)).collect();
+    if cleaned.is_empty() {
+        return None;
+    }
+    let escaped = cleaned.replace('"', "\"\"");
+    Some(format!("\"{escaped}\"*"))
+}
+
+fn build_phrase(raw: &str, meta: &[char]) -> Option<String> {
+    let cleaned: String = raw.chars().filter(|c| !meta.contains(c)).collect();
+    if cleaned.is_empty() {
+        return None;
+    }
+    let escaped = cleaned.replace('"', "\"\"");
+    Some(format!("\"{escaped}\""))
 }
 
 /// How many of the most recent local messages to re-check on every
@@ -79,35 +151,104 @@ mod tests {
     use super::*;
 
     #[test]
-    fn escape_fts_query_basic() {
-        let q = escape_fts_query("hello world");
-        assert_eq!(q, "\"hello\"* OR \"world\"*");
+    fn unquoted_tokens_become_prefix_anded() {
+        assert_eq!(escape_fts_query("hello world"), "\"hello\"* AND \"world\"*");
     }
 
     #[test]
-    fn escape_fts_query_strips_metachars_and_doubles_quotes() {
-        let q = escape_fts_query("he*y (wor)ld :foo^bar \"quoted\"");
-        // The metachar strip keeps `"` (it's a phrase delimiter, not a
-        // content character), then `replace('"', "\"\"")` doubles it.
-        // Wrapping then adds one extra pair, so the inner `"quoted"`
-        // becomes `"""quoted"""*` (1 wrap-quote + 2 escaped + 2 escaped +
-        // 1 wrap-quote on each side).
+    fn quoted_text_becomes_exact_phrase() {
+        assert_eq!(escape_fts_query("\"hello world\""), "\"hello world\"");
+    }
+
+    #[test]
+    fn mixed_quoted_and_unquoted_are_anded() {
         assert_eq!(
-            q,
-            "\"hey\"* OR \"world\"* OR \"foobar\"* OR \"\"\"quoted\"\"\"*"
+            escape_fts_query("hello \"world peace\""),
+            "\"hello\"* AND \"world peace\""
         );
     }
 
     #[test]
-    fn escape_fts_query_preserves_unicode_and_digits() {
-        let q = escape_fts_query("hello-world 2024 café");
-        assert_eq!(q, "\"hello-world\"* OR \"2024\"* OR \"café\"*");
+    fn multiple_phrases_are_anded() {
+        assert_eq!(
+            escape_fts_query("\"foo bar\" \"baz qux\""),
+            "\"foo bar\" AND \"baz qux\""
+        );
     }
 
     #[test]
-    fn escape_fts_query_empty() {
+    fn strips_metachars_from_both_tokens_and_phrases() {
+        assert_eq!(
+            escape_fts_query("he*y (wor)ld :foo^bar"),
+            "\"hey\"* AND \"world\"* AND \"foobar\"*"
+        );
+        assert_eq!(escape_fts_query("\"he*y :foo\""), "\"hey foo\"");
+    }
+
+    #[test]
+    fn embedded_quote_tokenizes_like_fts5() {
+        // FTS5 treats each standalone `"` as a phrase boundary, so an
+        // input like `"he said "hi"` parses the same way FTS5 itself
+        // would: phrase `he said ` AND token `hi`. This matches the
+        // reference behaviour of the upstream `chat_messages_fts`
+        // tokenizer; trying to be cleverer would diverge from it.
+        assert_eq!(
+            escape_fts_query("\"he said \"hi\""),
+            "\"he said \" AND \"hi\"*"
+        );
+    }
+
+    #[test]
+    fn preserves_unicode_and_digits_and_hyphens() {
+        assert_eq!(
+            escape_fts_query("hello-world 2024 café"),
+            "\"hello-world\"* AND \"2024\"* AND \"café\"*"
+        );
+    }
+
+    #[test]
+    fn unmatched_open_quote_treats_rest_as_plain_token() {
+        assert_eq!(
+            escape_fts_query("hello \"world"),
+            "\"hello\"* AND \"world\"*"
+        );
+    }
+
+    #[test]
+    fn empty_inputs_return_empty_string() {
         assert_eq!(escape_fts_query(""), "");
         assert_eq!(escape_fts_query("   "), "");
+        assert_eq!(escape_fts_query("\t\n"), "");
+    }
+
+    #[test]
+    fn drops_tokens_that_are_only_metacharacters() {
+        assert_eq!(escape_fts_query("*** hello"), "\"hello\"*");
         assert_eq!(escape_fts_query("***"), "");
+        // A quoted phrase that is only metacharacters is also dropped.
+        assert_eq!(escape_fts_query("\"***\" hello"), "\"hello\"*");
+    }
+
+    #[test]
+    fn preserves_quoted_single_word_phrase() {
+        // `"hello"` is a phrase of length 1 — no wildcard, no AND merge.
+        assert_eq!(
+            escape_fts_query("\"hello\" world"),
+            "\"hello\" AND \"world\"*"
+        );
+    }
+
+    #[test]
+    fn empty_phrase_is_dropped() {
+        // `""` produces an empty phrase after cleaning, so it's dropped.
+        assert_eq!(escape_fts_query("\"\" hello"), "\"hello\"*");
+    }
+
+    #[test]
+    fn handles_multiple_kinds_of_whitespace() {
+        assert_eq!(
+            escape_fts_query("hello\tworld\nfoo"),
+            "\"hello\"* AND \"world\"* AND \"foo\"*"
+        );
     }
 }

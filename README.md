@@ -27,7 +27,9 @@ backend can be added later without touching the UI.
   `GET /get-chat-messages` endpoint into a local SQLite + FTS5 cache
   per target. Runs a long-lived background sync, shows a live
   progress indicator (request count + last message timestamp + batch
-  size), supports prefix / Porter-stem search, and a click-to-expand
+  size), supports prefix/Porter-stem search with AND-of-terms
+  semantics (wrap a phrase in `"…"` for an exact match), and a
+  click-to-expand
   detail pop-up. A **Reset** button clears the local cache and sync
   cursor so you can do a clean full resync.
 - A "Test token" probe that does a best-effort reachability + auth
@@ -121,7 +123,9 @@ to.
     sync mid-loop → status becomes `Cancelled`; clicking **Sync**
     again resumes from the saved cursor.
 14. Type a word in the search bar → top hits render with a snippet;
-    search "run" finds "running" / "runs" (Porter stem). Click any
+    search "run" finds "running" / "runs" (Porter stem). Two words
+    ("hello world") require both terms; `"hello world"` (quoted) is an
+    exact phrase match. Click any
     row → the detail pop-up shows the full message, image links,
     link, and metadata.
 15. Disconnect the network, click **Sync** → status becomes `Error`

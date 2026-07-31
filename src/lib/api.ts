@@ -133,8 +133,7 @@ export const api = {
       favouritesOnly,
     }),
   chatMessageCount: (aiId: string) => invoke<number>('chat_message_count', { aiId }),
-  getChatSyncState: (aiId: string) =>
-    invoke<ChatSyncState | null>('get_chat_sync_state', { aiId }),
+  getChatSyncState: (aiId: string) => invoke<ChatSyncState | null>('get_chat_sync_state', { aiId }),
   getCurrentSync: () => invoke<string | null>('get_current_sync'),
   startChatSync: (aiId: string) => invoke<void>('start_chat_sync', { aiId }),
   cancelChatSync: () => invoke<void>('cancel_chat_sync'),
@@ -144,20 +143,57 @@ export const api = {
 };
 
 /**
- * Escape an arbitrary user query into a safe FTS5 prefix-match expression.
+ * Escape an arbitrary user query into a safe FTS5 expression.
  *
- * Each whitespace-separated token is double-quoted (so FTS5 treats it as
- * a literal phrase), stripped of FTS5 metacharacters, with internal `"`
- * doubled, and suffixed with `*` for prefix matching. The result is
- * `token1* OR token2* OR token3*`. The Porter stemmer in
- * `chat_messages_fts` collapses inflectional variants automatically.
+ * Tokens are whitespace-separated. A token wrapped in `"..."` becomes an
+ * **exact phrase** match (no wildcard). An unwrapped token becomes a
+ * **prefix** match (suffix `*`). All parts are joined with ` AND ` so that
+ * every term (or phrase) must be present in a matching message.
+ *
+ * Each raw token / phrase is stripped of FTS5 metacharacters
+ * (`*`, `(`, `)`, `:`, `^`), any internal `"` is doubled so it survives
+ * FTS5 phrase parsing, and the cleaned text is then re-wrapped. Empty
+ * parts after cleaning are dropped. An unmatched opening quote is
+ * forgiving: the remainder of the input is treated as a plain unquoted
+ * token rather than producing an error.
+ *
+ * The Porter stemmer in `chat_messages_fts` collapses inflectional
+ * variants automatically, both for standalone tokens and for the words
+ * inside quoted phrases.
  */
 export function escapeFtsQuery(query: string): string {
   const FTS_META = /[*()^:]/g;
-  const tokens = query
-    .split(/\s+/)
-    .map((t) => t.replace(FTS_META, ''))
-    .filter((t) => t.length > 0);
-  if (tokens.length === 0) return '';
-  return tokens.map((t) => `"${t.replace(/"/g, '""')}"*`).join(' OR ');
+  const parts: string[] = [];
+  const len = query.length;
+  let i = 0;
+
+  while (i < len) {
+    while (i < len && /\s/.test(query[i]!)) i++;
+    if (i >= len) break;
+
+    if (query[i] === '"') {
+      i++;
+      const start = i;
+      while (i < len && query[i] !== '"') i++;
+      const raw = query.slice(start, i);
+      const closed = i < len;
+      if (closed) i++;
+      // FTS5 tokenisation matches our linear scan: an unmatched opening
+      // quote falls back to being treated as a plain token (so the user
+      // still gets prefix-matching feedback instead of a silently
+      // different search mode).
+      const cleaned = raw.replace(FTS_META, '').replace(/"/g, '""');
+      if (cleaned.length > 0) {
+        parts.push(closed ? `"${cleaned}"` : `"${cleaned}"*`);
+      }
+    } else {
+      const start = i;
+      while (i < len && !/\s/.test(query[i]!) && query[i] !== '"') i++;
+      const raw = query.slice(start, i);
+      const cleaned = raw.replace(FTS_META, '').replace(/"/g, '""');
+      if (cleaned.length > 0) parts.push(`"${cleaned}"*`);
+    }
+  }
+
+  return parts.length === 0 ? '' : parts.join(' AND ');
 }

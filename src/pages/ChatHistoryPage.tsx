@@ -146,12 +146,7 @@ export function ChatHistoryPage() {
     queryKey: ['chat-messages', selectedAiId, browseCursor, favouritesOnly],
     queryFn: () => {
       if (!selectedAiId) return Promise.resolve([]);
-      return api.listChatMessages(
-        selectedAiId,
-        browseCursor,
-        PAGE_SIZE,
-        favouritesOnly,
-      );
+      return api.listChatMessages(selectedAiId, browseCursor, PAGE_SIZE, favouritesOnly);
     },
     enabled: !!selectedAiId && !isSearching,
   });
@@ -332,9 +327,7 @@ export function ChatHistoryPage() {
         (old) =>
           old
             ? old.map((m) =>
-                m.kindroid_msg_id === kindroidMsgId
-                  ? { ...m, favourite: !prevFavourite }
-                  : m,
+                m.kindroid_msg_id === kindroidMsgId ? { ...m, favourite: !prevFavourite } : m,
               )
             : old,
       );
@@ -343,9 +336,7 @@ export function ChatHistoryPage() {
         (old) =>
           old
             ? old.map((m) =>
-                m.kindroid_msg_id === kindroidMsgId
-                  ? { ...m, favourite: !prevFavourite }
-                  : m,
+                m.kindroid_msg_id === kindroidMsgId ? { ...m, favourite: !prevFavourite } : m,
               )
             : old,
       );
@@ -377,14 +368,8 @@ export function ChatHistoryPage() {
           m.kindroid_msg_id === kindroidMsgId ? { ...m, favourite: canonical } : m,
         );
       };
-      queryClient.setQueriesData<ChatMessage[]>(
-        { queryKey: ['chat-messages', aiId] },
-        reconcile,
-      );
-      queryClient.setQueriesData<ChatMessage[]>(
-        { queryKey: ['chat-search', aiId] },
-        reconcile,
-      );
+      queryClient.setQueriesData<ChatMessage[]>({ queryKey: ['chat-messages', aiId] }, reconcile);
+      queryClient.setQueriesData<ChatMessage[]>({ queryKey: ['chat-search', aiId] }, reconcile);
       // Reflect in the open detail dialog too, if its message id matches.
       setOpenMessage((cur) =>
         cur && cur.kindroid_msg_id === kindroidMsgId ? { ...cur, favourite: canonical } : cur,
@@ -405,14 +390,8 @@ export function ChatHistoryPage() {
               m.kindroid_msg_id === kindroidMsgId ? { ...m, favourite: prevFavourite } : m,
             )
           : old;
-      queryClient.setQueriesData<ChatMessage[]>(
-        { queryKey: ['chat-messages', aiId] },
-        restore,
-      );
-      queryClient.setQueriesData<ChatMessage[]>(
-        { queryKey: ['chat-search', aiId] },
-        restore,
-      );
+      queryClient.setQueriesData<ChatMessage[]>({ queryKey: ['chat-messages', aiId] }, restore);
+      queryClient.setQueriesData<ChatMessage[]>({ queryKey: ['chat-search', aiId] }, restore);
       setOpenMessage((cur) =>
         cur && cur.kindroid_msg_id === kindroidMsgId ? { ...cur, favourite: prevFavourite } : cur,
       );
@@ -445,17 +424,14 @@ export function ChatHistoryPage() {
         <div className="page-header">
           <h2>Chat History</h2>
         </div>
-        <div className="empty">
-          Add a target on the Targets page to enable chat history.
-        </div>
+        <div className="empty">Add a target on the Targets page to enable chat history.</div>
       </div>
     );
   }
 
   const currentSyncing = current.data;
   const state = syncState.data ?? null;
-  const statusKind: SyncStatusKind =
-    liveProgress?.status_kind ?? state?.status_kind ?? 'idle';
+  const statusKind: SyncStatusKind = liveProgress?.status_kind ?? state?.status_kind ?? 'idle';
   const total = liveProgress?.total ?? state?.total ?? messageCount.data ?? 0;
 
   // Build the progress indicator subtitle. During a sync we combine the
@@ -610,7 +586,7 @@ export function ChatHistoryPage() {
         <p className="muted" style={{ marginTop: 8 }}>
           {messages.length === 0
             ? `No matches for "${trimmedQuery}".`
-            : `Showing ${messages.length} matches (prefix search, Porter stemmed).`}
+            : `Showing ${messages.length} matches. All terms required (Porter stemmed); wrap a phrase in "quotes" for an exact match.`}
         </p>
       )}
 
@@ -654,8 +630,7 @@ export function ChatHistoryPage() {
         <button
           className="btn"
           disabled={
-            messages.length < PAGE_SIZE ||
-            (isSearching && searchOffset + PAGE_SIZE >= SEARCH_LIMIT)
+            messages.length < PAGE_SIZE || (isSearching && searchOffset + PAGE_SIZE >= SEARCH_LIMIT)
           }
           onClick={() => {
             if (isSearching) {
@@ -674,9 +649,7 @@ export function ChatHistoryPage() {
 
       <MessageDetailDialog
         message={openMessage}
-        pending={
-          openMessage !== null && pendingFavourites.has(openMessage.kindroid_msg_id)
-        }
+        pending={openMessage !== null && pendingFavourites.has(openMessage.kindroid_msg_id)}
         onToggleFavourite={() => {
           if (!openMessage) return;
           setFavourite.mutate({
@@ -752,7 +725,8 @@ function MessageRow({
         )}
         {message.link_url && (
           <div style={{ fontSize: 12 }}>
-            🔗 <a href={message.link_url} onClick={(e) => e.stopPropagation()}>
+            🔗{' '}
+            <a href={message.link_url} onClick={(e) => e.stopPropagation()}>
               {message.link_description ?? message.link_url}
             </a>
           </div>
@@ -808,7 +782,15 @@ function HeartButton({
         </svg>
       ) : (
         // Outline heart.
-        <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" aria-hidden>
+        <svg
+          width="16"
+          height="16"
+          viewBox="0 0 24 24"
+          fill="none"
+          stroke="currentColor"
+          strokeWidth="2"
+          aria-hidden
+        >
           <path d="M12 21s-7.5-4.7-9.6-9.2C.6 7.5 3.4 4 7.2 4c2 0 3.6 1 4.8 2.6C13.2 5 14.8 4 16.8 4c3.8 0 6.6 3.5 4.8 7.8C19.5 16.3 12 21 12 21z" />
         </svg>
       )}

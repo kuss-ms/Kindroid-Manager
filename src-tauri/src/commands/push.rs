@@ -106,10 +106,19 @@ pub async fn do_push(
     };
 
     let fields_sent = req.fields.clone();
-    // After a successful push (update-info OK, chat-break optional),
-    // keep the target's local label in sync with the source character's
-    // name so the Targets list reflects the persona that was just pushed.
-    target.label = character.name.clone();
+    // If the AI name was part of this push, keep the target's local label
+    // in sync with the AI name so the Targets list reflects the persona
+    // that was just pushed. The local `character.name` is intentionally
+    // NOT used — the label mirrors the AI identity that lives on the
+    // server. Skip the update when the AI name is missing or empty so we
+    // never blank out an existing label.
+    if req.fields.iter().any(|f| f == "ai_name") {
+        if let Some(ai_name) = character.ai_name.as_ref() {
+            if !ai_name.is_empty() {
+                target.label = ai_name.clone();
+            }
+        }
+    }
     let target = repo.upsert_target(target).await?;
     let entry = PushLogEntry {
         id: Uuid::new_v4(),
@@ -617,7 +626,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn successful_push_renames_target_to_character_name() {
+    async fn push_with_ai_name_renames_target_to_ai_name() {
         set_token();
         let (c, t) = fixtures();
         let original_label = t.label.clone();
@@ -632,7 +641,47 @@ mod tests {
         let res = do_push(&repo, &client, req).await.unwrap();
         assert!(res.update_info.ok, "update-info should have succeeded");
         let updated = repo.get_target(t.id).await.unwrap();
-        assert_eq!(updated.label, c.name);
+        assert_eq!(updated.label, c.ai_name.as_deref().unwrap());
         assert_ne!(updated.label, original_label);
+        assert_ne!(updated.label, c.name);
+    }
+
+    #[tokio::test]
+    async fn push_without_ai_name_does_not_rename_target() {
+        set_token();
+        let (c, t) = fixtures();
+        let original_label = t.label.clone();
+        let repo = FakeRepo::new(c.clone(), t.clone());
+        let client = FakeClient::ok_both();
+        let req = PushRequest {
+            character_id: c.id,
+            target_id: t.id,
+            fields: vec!["ai_backstory".into()],
+            chat_break: None,
+        };
+        let res = do_push(&repo, &client, req).await.unwrap();
+        assert!(res.update_info.ok, "update-info should have succeeded");
+        let updated = repo.get_target(t.id).await.unwrap();
+        assert_eq!(updated.label, original_label);
+    }
+
+    #[tokio::test]
+    async fn push_with_empty_ai_name_does_not_rename_target() {
+        set_token();
+        let (mut c, t) = fixtures();
+        c.ai_name = Some(String::new());
+        let original_label = t.label.clone();
+        let repo = FakeRepo::new(c.clone(), t.clone());
+        let client = FakeClient::ok_both();
+        let req = PushRequest {
+            character_id: c.id,
+            target_id: t.id,
+            fields: vec!["ai_name".into()],
+            chat_break: None,
+        };
+        let res = do_push(&repo, &client, req).await.unwrap();
+        assert!(res.update_info.ok);
+        let updated = repo.get_target(t.id).await.unwrap();
+        assert_eq!(updated.label, original_label);
     }
 }

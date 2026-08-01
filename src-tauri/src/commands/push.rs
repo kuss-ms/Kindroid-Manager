@@ -115,6 +115,11 @@ pub async fn do_create_new_kin(
         }
     }
 
+    create_body.insert(
+        "ai_avatar".to_string(),
+        serde_json::Value::String("-1".to_string()),
+    );
+
     let base_url = repo
         .get_setting(SETTING_BASE_URL)
         .await?
@@ -915,7 +920,8 @@ mod tests {
                 "ai_gender": "Female",
                 "ai_backstory": "Backstory",
                 "custom_avatar_description": "Long dark hair",
-                "custom_greeting": "Hello!"
+                "custom_greeting": "Hello!",
+                "ai_avatar": "-1"
             })
         );
         assert_eq!(

@@ -19,8 +19,8 @@ export function SettingsPage() {
   const [confirmClearAi, setConfirmClearAi] = useState(false);
   const {
     register,
-    handleSubmit,
     reset,
+    watch,
     formState: { errors, isDirty },
   } = useForm<{ base_url: string }>({
     resolver: zodResolver(settingsSchema),
@@ -43,19 +43,21 @@ export function SettingsPage() {
     if (aiSettings.data)
       resetAi({ base_url: aiSettings.data.base_url, model: aiSettings.data.model });
   }, [aiSettings.data, resetAi]);
-  const saveSettings = useMutation({
-    mutationFn: (input: { base_url: string }) => api.setSettings(input),
+  const saveAll = useMutation({
+    mutationFn: async () => {
+      const values = { base_url: watch('base_url').trim() };
+      const ok = await settingsSchema.safeParseAsync(values);
+      if (!ok.success) {
+        throw new Error(ok.error.issues[0]?.message ?? 'Invalid base URL');
+      }
+      await api.setSettings({ base_url: values.base_url });
+      if (token.trim().length > 0) {
+        await api.setToken(token.trim());
+      }
+    },
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ['settings'] });
       toast('success', 'Settings saved');
-    },
-    onError: (e) => toast('error', errorMessage(e)),
-  });
-  const saveToken = useMutation({
-    mutationFn: (t: string) => api.setToken(t),
-    onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: ['settings'] });
-      toast('success', 'Token saved to OS keychain');
       setToken('');
     },
     onError: (e) => toast('error', errorMessage(e)),
@@ -141,12 +143,21 @@ export function SettingsPage() {
           </span>
         </div>
         <form onSubmit={(e) => e.preventDefault()} className="flex-col" style={{ marginTop: 12 }}>
-          <label className="form-label">Token</label>
+          <label className="form-label">Base URL</label>
+          <input
+            className="input"
+            placeholder="https://api.kindroid.ai/v1"
+            {...register('base_url')}
+          />
+          {errors.base_url && <span className="form-error">{errors.base_url.message}</span>}
+          <label className="form-label" style={{ marginTop: 8 }}>
+            Token
+          </label>
           <div className="flex-row">
             <input
               type={showToken ? 'text' : 'password'}
               className="input input-mono"
-              placeholder="kn_…"
+              placeholder="kn_… (leave empty to keep existing)"
               value={token}
               onChange={(e) => setToken(e.target.value)}
               style={{ flex: 1 }}
@@ -155,12 +166,12 @@ export function SettingsPage() {
               {showToken ? 'Hide' : 'Show'}
             </button>
           </div>
-          <div className="flex-row" style={{ marginTop: 8 }}>
+          <div className="flex-row" style={{ marginTop: 12 }}>
             <button
               type="button"
               className="btn btn-primary"
-              disabled={token.trim().length === 0}
-              onClick={() => saveToken.mutate(token.trim())}
+              disabled={!isDirty && token.trim().length === 0}
+              onClick={() => saveAll.mutate()}
             >
               Save
             </button>
@@ -170,7 +181,7 @@ export function SettingsPage() {
               disabled={!settings.data?.token_configured}
               onClick={() => setConfirmClear(true)}
             >
-              Clear
+              Clear token
             </button>
             <button
               type="button"
@@ -178,7 +189,7 @@ export function SettingsPage() {
               disabled={!settings.data?.token_configured || testToken.isPending}
               onClick={() => testToken.mutate()}
             >
-              {testToken.isPending ? 'Testing…' : 'Test'}
+              {testToken.isPending ? 'Testing…' : 'Test connection'}
             </button>
           </div>
           {testToken.data && (
@@ -187,26 +198,6 @@ export function SettingsPage() {
               validity.
             </p>
           )}
-          <label className="form-label" style={{ marginTop: 16 }}>
-            Base URL
-          </label>
-          <div className="flex-row">
-            <input
-              className="input"
-              placeholder="https://api.kindroid.ai/v1"
-              {...register('base_url')}
-              style={{ flex: 1 }}
-            />
-            <button
-              type="button"
-              className="btn btn-primary"
-              disabled={!isDirty}
-              onClick={handleSubmit((v) => saveSettings.mutate({ base_url: v.base_url.trim() }))}
-            >
-              Save
-            </button>
-          </div>
-          {errors.base_url && <span className="form-error">{errors.base_url.message}</span>}
         </form>
       </div>
       <div className="card">

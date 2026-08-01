@@ -5,7 +5,7 @@ import { api, errorMessage } from '../lib/api';
 import { ConfirmDialog } from '../components/ConfirmDialog';
 import { defaultSelected, FieldChecklist } from '../components/FieldChecklist';
 import { toast } from '../components/Toaster';
-import type { Character, PushResult, StepResult } from '../lib/types';
+import type { Character, JournalEntry, PushResult, StepResult } from '../lib/types';
 export function PushPage() {
   const queryClient = useQueryClient();
   const navigate = useNavigate();
@@ -16,6 +16,7 @@ export function PushPage() {
   const [greeting, setGreeting] = useState(params.get('greeting') ?? '');
   const [wipeCascaded, setWipeCascaded] = useState(params.get('wipe') === '1');
   const [selected, setSelected] = useState<Set<string>>(new Set());
+  const [selectedJournal, setSelectedJournal] = useState<Set<string>>(new Set());
   const [confirmOpen, setConfirmOpen] = useState(false);
   const [result, setResult] = useState<PushResult | null>(null);
   const characters = useQuery<Character[]>({
@@ -36,7 +37,13 @@ export function PushPage() {
     queryFn: () => (targetId ? api.getTarget(targetId) : Promise.resolve(null)),
     enabled: !!targetId,
   });
+  const journalEntries = useQuery<JournalEntry[]>({
+    queryKey: ['journal-entries', characterId],
+    queryFn: () => (characterId ? api.listJournalEntries(characterId) : Promise.resolve([])),
+    enabled: !!characterId,
+  });
   const fieldsParam = params.get('fields');
+  const journalParams = params.get('journalEntryIds');
   useEffect(() => {
     if (!character.data) return;
     if (fieldsParam) {
@@ -45,6 +52,14 @@ export function PushPage() {
       setSelected(defaultSelected(character.data));
     }
   }, [character.data, fieldsParam, params]);
+
+  useEffect(() => {
+    if (!journalParams) {
+      setSelectedJournal(new Set());
+      return;
+    }
+    setSelectedJournal(new Set(journalParams.split(',').filter(Boolean)));
+  }, [journalParams, params]);
 
   // Pre-fill the greeting from the character whenever the character
   // loads or changes. Without this, the chat-break textarea stays
@@ -55,18 +70,23 @@ export function PushPage() {
   const push = useMutation<PushResult, unknown, void>({
     mutationFn: () => {
       if (!character.data || !target.data) throw new Error('pick character & target');
+      const journalIds = Array.from(selectedJournal);
       const req = {
         character_id: character.data.id,
         target_id: target.data.id,
         fields: Array.from(selected),
         chat_break: chatBreak ? { greeting, wipe_cascaded: wipeCascaded } : null,
+        journalEntryIds: journalIds.length ? journalIds : null,
       };
       return api.pushToTarget(req);
     },
     onSuccess: (res: PushResult) => {
       setResult(res);
       queryClient.invalidateQueries({ queryKey: ['push-history'] });
-      toast('success', `update-info ${res.update_info.ok ? 'OK' : 'failed'}`);
+      const journalCount = res.journal_entries?.length ?? 0;
+      const okCount = res.journal_entries?.filter((j) => j.ok).length ?? 0;
+      const tail = journalCount > 0 ? `, ${okCount}/${journalCount} journal entries sent` : '';
+      toast('success', `update-info ${res.update_info.ok ? 'OK' : 'failed'}${tail}`);
     },
     onError: (e) => toast('error', errorMessage(e)),
   });
@@ -83,13 +103,29 @@ export function PushPage() {
     if (!target.data || !chatBreak) return null;
     return { ai_id: target.data.ai_id, greeting, wipe_cascaded: wipeCascaded };
   }, [target.data, chatBreak, greeting, wipeCascaded]);
+  const journalSelected = selectedJournal.size;
+  const journalList = useMemo(() => journalEntries.data ?? [], [journalEntries.data]);
+  const previewJournal = useMemo(() => {
+    if (!target.data || journalList.length === 0) return null;
+    const set = selectedJournal;
+    return journalList
+      .filter((e) => set.has(e.id))
+      .map((e) => ({
+        ai_id: target.data!.ai_id,
+        entry: e.entry,
+        keyphrases: e.keyphrases,
+      }));
+  }, [journalList, selectedJournal, target.data]);
   const canPush =
     !!character.data &&
     !!target.data &&
-    (selected.size > 0 || chatBreak) &&
+    (selected.size > 0 || journalSelected > 0 || chatBreak) &&
     (!chatBreak || greeting.trim().length > 0) &&
     !push.isPending;
   const fieldCount = selected.size;
+  const journalLabel = journalSelected
+    ? ` + ${journalSelected} journal${journalSelected === 1 ? '' : 's'}`
+    : '';
   const targetLabel = target.data ? `${target.data.label} — ${target.data.ai_id}` : '';
   const avatarDescription = character.data?.ai_avatar_description?.trim() ?? '';
   const copyAvatar = async () => {
@@ -173,6 +209,64 @@ export function PushPage() {
           />{' '}
         </div>
       )}{' '}
+      {journalList.length > 0 && (
+        <div className="card">
+          <h3 style={{ marginBottom: 8 }}>Journal entries</h3>
+          <p className="muted" style={{ fontSize: 12, marginBottom: 8 }}>
+            Selected entries become one <code>POST /journal-create</code> call each, sent after{' '}
+            <code>/update-info</code> and before <code>/chat-break</code>. Local only; failures
+            don&apos;t abort the push.
+          </p>
+          <div
+            style={{
+              display: 'flex',
+              gap: 8,
+              fontSize: 12,
+              marginBottom: 6,
+            }}
+          >
+            <button
+              type="button"
+              className="btn btn-sm"
+              onClick={() => setSelectedJournal(new Set(journalList.map((e) => e.id)))}
+            >
+              Select all
+            </button>
+            <button
+              type="button"
+              className="btn btn-sm"
+              onClick={() => setSelectedJournal(new Set())}
+            >
+              Clear
+            </button>
+          </div>
+          {journalList.map((e) => (
+            <label key={e.id} className="checkbox" style={{ marginTop: 4 }}>
+              <input
+                type="checkbox"
+                checked={selectedJournal.has(e.id)}
+                onChange={(ev) => {
+                  const next = new Set(selectedJournal);
+                  if (ev.target.checked) next.add(e.id);
+                  else next.delete(e.id);
+                  setSelectedJournal(next);
+                }}
+              />
+              <span>
+                <span className="mono" style={{ fontSize: 11 }}>
+                  {e.id.slice(0, 8)}
+                </span>{' '}
+                — {e.entry.slice(0, 80)}
+                {e.keyphrases.length > 0 && (
+                  <span className="muted" style={{ marginLeft: 6 }}>
+                    ({e.keyphrases.join(', ')})
+                  </span>
+                )}
+              </span>
+            </label>
+          ))}
+        </div>
+      )}{' '}
       <div className="card">
         {' '}
         <h3>Chat break</h3>{' '}
@@ -231,6 +325,12 @@ export function PushPage() {
           {' '}
           <summary>update-info body</summary> <pre>{JSON.stringify(previewBody, null, 2)}</pre>{' '}
         </details>{' '}
+        {previewJournal && previewJournal.length > 0 && (
+          <details style={{ marginTop: 8 }}>
+            <summary>journal-create bodies ({previewJournal.length})</summary>
+            <pre>{JSON.stringify(previewJournal, null, 2)}</pre>
+          </details>
+        )}
         {previewChatBreak && (
           <details style={{ marginTop: 8 }}>
             {' '}
@@ -260,8 +360,8 @@ export function PushPage() {
             title={
               !character.data || !target.data
                 ? 'Pick a character and target'
-                : !selected.size && !chatBreak
-                  ? 'Select at least one field or enable chat-break'
+                : !selected.size && !journalSelected && !chatBreak
+                  ? 'Select at least one field, journal entry, or enable chat-break'
                   : chatBreak && !greeting.trim()
                     ? 'Type a greeting for chat-break'
                     : ''
@@ -272,7 +372,7 @@ export function PushPage() {
             {' '}
             {push.isPending
               ? 'Pushing…'
-              : `Push ${fieldCount} field${fieldCount === 1 ? '' : 's'} to ${target.data?.label ?? 'target'}`}{' '}
+              : `Push ${fieldCount} field${fieldCount === 1 ? '' : 's'}${journalLabel} to ${target.data?.label ?? 'target'}`}{' '}
           </button>{' '}
         </div>{' '}
       </div>{' '}
@@ -280,6 +380,14 @@ export function PushPage() {
         <div className="card">
           {' '}
           <h3>Result</h3> <StepRow label="update-info" step={result.update_info} />{' '}
+          {result.journal_entries && result.journal_entries.length > 0 && (
+            <div style={{ marginTop: 8 }}>
+              <h4 style={{ margin: '8px 0 4px', fontSize: 13 }}>journal entries</h4>
+              {result.journal_entries.map((s) => (
+                <StepRow key={s.id} label={`journal ${s.id.slice(0, 8)}`} step={s} />
+              ))}
+            </div>
+          )}
           {result.chat_break && (
             <div style={{ marginTop: 4 }}>
               {' '}
@@ -298,7 +406,7 @@ export function PushPage() {
       <ConfirmDialog
         open={confirmOpen}
         title="Confirm push"
-        body={`Push ${fieldCount} field${fieldCount === 1 ? '' : 's'}${chatBreak ? ' + chat-break' : ''} to ${targetLabel || 'target'}?`}
+        body={`Push ${fieldCount} field${fieldCount === 1 ? '' : 's'}${journalSelected ? ` and ${journalSelected} journal entr${journalSelected === 1 ? 'y' : 'ies'}` : ''}${chatBreak ? ' and chat-break' : ''} to ${targetLabel || 'target'}?`}
         confirmLabel="Push"
         onConfirm={() => {
           setConfirmOpen(false);

@@ -221,4 +221,16 @@ mod tests {
         let json = serde_json::to_string(&partial).unwrap();
         assert!(!json.contains("notes"));
     }
+
+    #[test]
+    fn journal_entries_are_not_in_share_code() {
+        // Journal entries live in a child table and never enter
+        // `PartialCharacter` — encode + decode round-trip must not surface
+        // any journal-related key.
+        let c = make_full_character();
+        let code = encode(&c);
+        let partial = decode(&code).expect("decode");
+        let json = serde_json::to_string(&partial).unwrap();
+        assert!(!json.to_lowercase().contains("journal"));
+    }
 }

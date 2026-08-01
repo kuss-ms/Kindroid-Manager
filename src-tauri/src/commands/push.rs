@@ -5,10 +5,12 @@ use uuid::Uuid;
 use crate::domain::character::Character;
 #[allow(unused_imports)]
 use crate::domain::chat_message::{ChatMessage, ChatSyncState};
+use crate::domain::journal_entry::JournalEntry;
 use crate::domain::push_log::{truncate_body, PushLogEntry};
-use crate::error::{AppError, PushResult, StepResult};
+use crate::error::{AppError, JournalEntryStep, PushResult, StepResult};
 use crate::kindroid::{
-    ChatBreakRequest, HttpResponse, KindroidClient, KindroidError, UpdateInfoRequest,
+    ChatBreakRequest, HttpResponse, JournalCreateRequest, KindroidClient, KindroidError,
+    UpdateInfoRequest,
 };
 use crate::security::secrets::Secrets;
 use crate::storage::Repository;
@@ -23,6 +25,8 @@ pub struct PushRequest {
     pub target_id: Uuid,
     pub fields: Vec<String>,
     pub chat_break: Option<ChatBreakInput>,
+    #[serde(default)]
+    pub journal_entry_ids: Option<Vec<String>>,
 }
 
 #[derive(Debug, Serialize, Deserialize)]
@@ -67,7 +71,30 @@ pub async fn do_push(
         }
         None => None,
     };
-    if req.fields.is_empty() && chat_break.is_none() {
+
+    // Resolve journal entries to push (if any were requested).
+    let journal_entries: Vec<JournalEntry> =
+        match req.journal_entry_ids.as_ref().filter(|ids| !ids.is_empty()) {
+            Some(ids) => {
+                let all = repo.list_journal_entries(character.id).await?;
+                let mut ordered: Vec<JournalEntry> = all
+                    .into_iter()
+                    .filter(|e| ids.iter().any(|i| i == &e.id))
+                    .collect();
+                // Preserve request ordering for visual consistency.
+                ordered.sort_by_key(|e| ids.iter().position(|i| i == &e.id).unwrap_or(usize::MAX));
+                if ordered.is_empty() {
+                    return Err(AppError::invalid("no matching journal entries"));
+                }
+                for e in &ordered {
+                    JournalEntry::validate(&e.entry, &e.keyphrases).map_err(AppError::invalid)?;
+                }
+                ordered
+            }
+            None => Vec::new(),
+        };
+
+    if req.fields.is_empty() && chat_break.is_none() && journal_entries.is_empty() {
         return Err(AppError::NothingToPush);
     }
 
@@ -83,9 +110,37 @@ pub async fn do_push(
         .update_info(&token, &base_url, UpdateInfoRequest { body })
         .await;
 
-    let (update_info_result, chat_break_result) = match update_resp {
+    let (update_info_result, journal_entries_result, chat_break_result) = match update_resp {
         Ok(r) => {
             let step = step_result(r);
+            let journal_steps = if journal_entries.is_empty() {
+                Vec::new()
+            } else {
+                let mut out = Vec::with_capacity(journal_entries.len());
+                for e in &journal_entries {
+                    let keyphrases = e.keyphrases.clone();
+                    let req = JournalCreateRequest {
+                        ai_id: &target.ai_id,
+                        entry: &e.entry,
+                        keyphrases: &keyphrases,
+                    };
+                    let resp = client.journal_create(&token, &base_url, req).await;
+                    let (status, ok, message) = match resp {
+                        Ok(r2) => (r2.status, r2.ok, truncate_body(&r2.body)),
+                        Err(err) => {
+                            let s = error_step_result(&err);
+                            (s.status, s.ok, s.message)
+                        }
+                    };
+                    out.push(JournalEntryStep {
+                        id: e.id.clone(),
+                        status,
+                        ok,
+                        message,
+                    });
+                }
+                out
+            };
             let cb_step = if let Some((greeting, wipe)) = chat_break {
                 let cb_req = ChatBreakRequest {
                     ai_id: target.ai_id.clone(),
@@ -100,12 +155,22 @@ pub async fn do_push(
             } else {
                 None
             };
-            (step, cb_step)
+            (step, journal_steps, cb_step)
         }
-        Err(e) => (error_step_result(&e), None),
+        Err(e) => (error_step_result(&e), Vec::new(), None),
     };
 
     let fields_sent = req.fields.clone();
+    let journal_ids_sent = if journal_entries_result.is_empty() {
+        None
+    } else {
+        Some(
+            journal_entries_result
+                .iter()
+                .map(|s| s.id.clone())
+                .collect::<Vec<_>>(),
+        )
+    };
     // If the AI name was part of this push, keep the target's local label
     // in sync with the AI name so the Targets list reflects the persona
     // that was just pushed. The local `character.name` is intentionally
@@ -138,11 +203,13 @@ pub async fn do_push(
         update_info_body: update_info_result.message.clone(),
         chat_break_status: chat_break_result.as_ref().map(|s| s.status),
         chat_break_body: chat_break_result.as_ref().map(|s| s.message.clone()),
+        journal_entry_ids: journal_ids_sent,
     };
     let stored = repo.append_push_log(entry).await?;
 
     Ok(PushResult {
         update_info: update_info_result,
+        journal_entries: journal_entries_result,
         chat_break: chat_break_result,
         log_id: stored.id,
     })
@@ -189,6 +256,7 @@ mod tests {
         targets: Mutex<Vec<Target>>,
         log: Mutex<Vec<PushLogEntry>>,
         images: Mutex<std::collections::HashMap<Uuid, Vec<u8>>>,
+        journal: Mutex<Vec<JournalEntry>>,
     }
 
     impl FakeRepo {
@@ -198,7 +266,11 @@ mod tests {
                 targets: Mutex::new(vec![t]),
                 log: Mutex::new(Vec::new()),
                 images: Mutex::new(std::collections::HashMap::new()),
+                journal: Mutex::new(Vec::new()),
             }
+        }
+        fn set_journal(&self, entries: Vec<JournalEntry>) {
+            *self.journal.lock().unwrap() = entries;
         }
     }
 
@@ -361,13 +433,53 @@ mod tests {
         ) -> Result<usize, StorageError> {
             Ok(0)
         }
+        async fn list_journal_entries(
+            &self,
+            character_id: Uuid,
+        ) -> Result<Vec<JournalEntry>, StorageError> {
+            Ok(self
+                .journal
+                .lock()
+                .unwrap()
+                .iter()
+                .filter(|e| e.character_id == character_id)
+                .cloned()
+                .collect())
+        }
+        async fn upsert_journal_entry(&self, entry: &JournalEntry) -> Result<(), StorageError> {
+            self.journal.lock().unwrap().push(entry.clone());
+            Ok(())
+        }
+        async fn delete_journal_entry(
+            &self,
+            character_id: Uuid,
+            entry_id: &str,
+        ) -> Result<(), StorageError> {
+            let mut g = self.journal.lock().unwrap();
+            let before = g.len();
+            g.retain(|e| !(e.id == entry_id && e.character_id == character_id));
+            if g.len() == before {
+                return Err(StorageError::NotFound);
+            }
+            Ok(())
+        }
     }
 
     struct FakeClient {
         update: Mutex<Option<Result<HttpResponse, KindroidError>>>,
         chat_break: Mutex<Option<Result<HttpResponse, KindroidError>>>,
         list_chat: Mutex<Option<Result<crate::kindroid::ChatMessagesPage, KindroidError>>>,
+        journal_results: Mutex<Vec<Result<HttpResponse, KindroidError>>>,
+        journal_calls: Mutex<Vec<JournalCallRecord>>,
     }
+
+    #[derive(Debug, Clone)]
+    struct JournalCallRecord {
+        ai_id: String,
+        entry: String,
+        keyphrases: Vec<String>,
+    }
+
     impl FakeClient {
         fn ok_both() -> Self {
             Self {
@@ -382,7 +494,15 @@ mod tests {
                     body: "ok".into(),
                 }))),
                 list_chat: Mutex::new(None),
+                journal_results: Mutex::new(Vec::new()),
+                journal_calls: Mutex::new(Vec::new()),
             }
+        }
+        fn push_journal_result(&self, r: Result<HttpResponse, KindroidError>) {
+            self.journal_results.lock().unwrap().push(r);
+        }
+        fn journal_calls(&self) -> Vec<JournalCallRecord> {
+            self.journal_calls.lock().unwrap().clone()
         }
     }
     #[async_trait]
@@ -444,6 +564,26 @@ mod tests {
         ) -> Result<crate::kindroid::ToggleMessagePinResponse, KindroidError> {
             Ok(crate::kindroid::ToggleMessagePinResponse { is_pinned: true })
         }
+        async fn journal_create(
+            &self,
+            _t: &str,
+            _u: &str,
+            r: crate::kindroid::JournalCreateRequest<'_>,
+        ) -> Result<HttpResponse, KindroidError> {
+            self.journal_calls.lock().unwrap().push(JournalCallRecord {
+                ai_id: r.ai_id.to_string(),
+                entry: r.entry.to_string(),
+                keyphrases: r.keyphrases.to_vec(),
+            });
+            let scripted = self.journal_results.lock().unwrap().pop();
+            scripted.unwrap_or_else(|| {
+                Ok(HttpResponse {
+                    status: 200,
+                    ok: true,
+                    body: "ok".into(),
+                })
+            })
+        }
     }
 
     fn fixtures() -> (Character, Target) {
@@ -492,6 +632,7 @@ mod tests {
             target_id: t.id,
             fields: vec!["ai_name".into()],
             chat_break: None,
+            journal_entry_ids: None,
         };
         let res = do_push(&repo, &client, req).await.unwrap();
         assert!(res.update_info.ok);
@@ -515,6 +656,7 @@ mod tests {
                 greeting: "Hi there".into(),
                 wipe_cascaded: true,
             }),
+            journal_entry_ids: None,
         };
         let res = do_push(&repo, &client, req).await.unwrap();
         assert!(res.update_info.ok);
@@ -542,6 +684,8 @@ mod tests {
                 body: "ok".into(),
             }))),
             list_chat: Mutex::new(None),
+            journal_results: Mutex::new(Vec::new()),
+            journal_calls: Mutex::new(Vec::new()),
         };
         let req = PushRequest {
             character_id: c.id,
@@ -551,6 +695,7 @@ mod tests {
                 greeting: "Hi".into(),
                 wipe_cascaded: false,
             }),
+            journal_entry_ids: None,
         };
         let res = do_push(&repo, &client, req).await.unwrap();
         assert!(!res.update_info.ok);
@@ -573,6 +718,8 @@ mod tests {
                 body: "boom".into(),
             }))),
             list_chat: Mutex::new(None),
+            journal_results: Mutex::new(Vec::new()),
+            journal_calls: Mutex::new(Vec::new()),
         };
         let req = PushRequest {
             character_id: c.id,
@@ -582,6 +729,7 @@ mod tests {
                 greeting: "Hi".into(),
                 wipe_cascaded: false,
             }),
+            journal_entry_ids: None,
         };
         let res = do_push(&repo, &client, req).await.unwrap();
         assert!(res.update_info.ok);
@@ -601,6 +749,7 @@ mod tests {
             target_id: t.id,
             fields: vec![],
             chat_break: None,
+            journal_entry_ids: None,
         };
         let err = do_push(&repo, &client, req).await.unwrap_err();
         matches!(err, AppError::NothingToPush);
@@ -620,6 +769,7 @@ mod tests {
                 greeting: "   ".into(),
                 wipe_cascaded: false,
             }),
+            journal_entry_ids: None,
         };
         let err = do_push(&repo, &client, req).await.unwrap_err();
         matches!(err, AppError::MissingGreeting);
@@ -637,6 +787,7 @@ mod tests {
             target_id: t.id,
             fields: vec!["ai_name".into()],
             chat_break: None,
+            journal_entry_ids: None,
         };
         let res = do_push(&repo, &client, req).await.unwrap();
         assert!(res.update_info.ok, "update-info should have succeeded");
@@ -658,6 +809,7 @@ mod tests {
             target_id: t.id,
             fields: vec!["ai_backstory".into()],
             chat_break: None,
+            journal_entry_ids: None,
         };
         let res = do_push(&repo, &client, req).await.unwrap();
         assert!(res.update_info.ok, "update-info should have succeeded");
@@ -678,10 +830,162 @@ mod tests {
             target_id: t.id,
             fields: vec!["ai_name".into()],
             chat_break: None,
+            journal_entry_ids: None,
         };
         let res = do_push(&repo, &client, req).await.unwrap();
         assert!(res.update_info.ok);
         let updated = repo.get_target(t.id).await.unwrap();
         assert_eq!(updated.label, original_label);
+    }
+
+    fn make_entry(character_id: Uuid, id: &str, entry: &str, kp: &[&str]) -> JournalEntry {
+        let now = Utc::now();
+        JournalEntry {
+            id: id.to_string(),
+            character_id,
+            entry: entry.to_string(),
+            keyphrases: kp.iter().map(|s| s.to_string()).collect(),
+            created_at: now,
+            updated_at: now,
+        }
+    }
+
+    #[tokio::test]
+    async fn journal_skipped_when_no_ids() {
+        set_token();
+        let (c, t) = fixtures();
+        let repo = FakeRepo::new(c.clone(), t.clone());
+        let client = FakeClient::ok_both();
+        let req = PushRequest {
+            character_id: c.id,
+            target_id: t.id,
+            fields: vec!["ai_name".into()],
+            chat_break: None,
+            journal_entry_ids: Some(Vec::new()),
+        };
+        let res = do_push(&repo, &client, req).await.unwrap();
+        assert!(res.journal_entries.is_empty());
+        assert!(client.journal_calls().is_empty());
+    }
+
+    #[tokio::test]
+    async fn update_info_failure_skips_journal() {
+        set_token();
+        let (c, t) = fixtures();
+        let repo = FakeRepo::new(c.clone(), t.clone());
+        let client = FakeClient {
+            update: Mutex::new(Some(Err(KindroidError::Auth {
+                status: 401,
+                body: "nope".into(),
+            }))),
+            chat_break: Mutex::new(Some(Ok(HttpResponse {
+                status: 200,
+                ok: true,
+                body: "ok".into(),
+            }))),
+            list_chat: Mutex::new(None),
+            journal_results: Mutex::new(Vec::new()),
+            journal_calls: Mutex::new(Vec::new()),
+        };
+        repo.set_journal(vec![make_entry(c.id, "je-1", "e1", &[])]);
+        let req = PushRequest {
+            character_id: c.id,
+            target_id: t.id,
+            fields: vec!["ai_name".into()],
+            chat_break: None,
+            journal_entry_ids: Some(vec!["je-1".to_string()]),
+        };
+        let res = do_push(&repo, &client, req).await.unwrap();
+        assert!(!res.update_info.ok);
+        assert!(res.journal_entries.is_empty());
+        assert!(client.journal_calls().is_empty());
+    }
+
+    #[tokio::test]
+    async fn update_info_success_runs_journal_in_order() {
+        set_token();
+        let (c, t) = fixtures();
+        let repo = FakeRepo::new(c.clone(), t.clone());
+        let client = FakeClient::ok_both();
+        let e1 = make_entry(c.id, "je-1", "first", &["a"]);
+        let e2 = make_entry(c.id, "je-2", "second", &["b", "c"]);
+        repo.set_journal(vec![e1.clone(), e2.clone()]);
+        // Request them in reverse order to confirm we honour the request order.
+        let req = PushRequest {
+            character_id: c.id,
+            target_id: t.id,
+            fields: vec![],
+            chat_break: None,
+            journal_entry_ids: Some(vec!["je-2".into(), "je-1".into()]),
+        };
+        let res = do_push(&repo, &client, req).await.unwrap();
+        assert_eq!(res.journal_entries.len(), 2);
+        assert!(res.journal_entries.iter().all(|s| s.ok));
+        let calls = client.journal_calls();
+        assert_eq!(calls.len(), 2);
+        assert_eq!(calls[0].entry, "second");
+        assert_eq!(calls[1].entry, "first");
+        // chat-break did not run.
+        assert!(res.chat_break.is_none());
+    }
+
+    #[tokio::test]
+    async fn journal_partial_failure_continues() {
+        set_token();
+        let (c, t) = fixtures();
+        let repo = FakeRepo::new(c.clone(), t.clone());
+        let client = FakeClient::ok_both();
+        // Push results are popped LIFO in FakeClient.journal_create.
+        client.push_journal_result(Ok(HttpResponse {
+            status: 200,
+            ok: true,
+            body: "ok".into(),
+        }));
+        client.push_journal_result(Err(KindroidError::Server {
+            status: 500,
+            body: "boom".into(),
+        }));
+        let e1 = make_entry(c.id, "je-1", "first", &[]);
+        let e2 = make_entry(c.id, "je-2", "second", &[]);
+        repo.set_journal(vec![e1, e2]);
+        let req = PushRequest {
+            character_id: c.id,
+            target_id: t.id,
+            fields: vec![],
+            chat_break: None,
+            journal_entry_ids: Some(vec!["je-1".into(), "je-2".into()]),
+        };
+        let res = do_push(&repo, &client, req).await.unwrap();
+        assert_eq!(res.journal_entries.len(), 2);
+        assert!(!res.journal_entries[0].ok);
+        assert_eq!(res.journal_entries[0].status, 500);
+        assert!(res.journal_entries[1].ok);
+    }
+
+    #[tokio::test]
+    async fn journal_validation_error_short_circuits() {
+        set_token();
+        let (c, t) = fixtures();
+        let repo = FakeRepo::new(c.clone(), t.clone());
+        let client = FakeClient::ok_both();
+        let bad = JournalEntry {
+            id: "je-bad".into(),
+            character_id: c.id,
+            entry: "a".repeat(501),
+            keyphrases: vec![],
+            created_at: Utc::now(),
+            updated_at: Utc::now(),
+        };
+        repo.set_journal(vec![bad]);
+        let req = PushRequest {
+            character_id: c.id,
+            target_id: t.id,
+            fields: vec![],
+            chat_break: None,
+            journal_entry_ids: Some(vec!["je-bad".into()]),
+        };
+        let err = do_push(&repo, &client, req).await.unwrap_err();
+        assert!(matches!(err, AppError::Invalid { .. }));
+        assert!(client.journal_calls().is_empty());
     }
 }

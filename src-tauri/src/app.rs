@@ -57,6 +57,9 @@ pub fn run() {
             tauri_wrappers::start_chat_sync,
             tauri_wrappers::cancel_chat_sync,
             tauri_wrappers::reset_chat_history,
+            tauri_wrappers::list_journal_entries,
+            tauri_wrappers::save_journal_entry,
+            tauri_wrappers::delete_journal_entry,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

@@ -25,6 +25,13 @@ pub struct ToggleMessagePinRequest {
     pub message_id: String,
 }
 
+#[derive(Debug, Clone)]
+pub struct JournalCreateRequest<'a> {
+    pub ai_id: &'a str,
+    pub entry: &'a str,
+    pub keyphrases: &'a [String],
+}
+
 /// Server response from `POST /toggle-message-pin` — the canonical pin state
 /// after the toggle. The frontend should reconcile the local cache to this
 /// value rather than relying on the optimistic flip.

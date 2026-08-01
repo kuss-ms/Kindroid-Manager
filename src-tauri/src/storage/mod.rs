@@ -3,6 +3,7 @@ use uuid::Uuid;
 
 use crate::domain::character::Character;
 use crate::domain::chat_message::{ChatMessage, ChatSyncState};
+use crate::domain::journal_entry::JournalEntry;
 use crate::domain::push_log::PushLogEntry;
 use crate::domain::target::Target;
 
@@ -134,4 +135,20 @@ pub trait Repository: Send + Sync {
         last_timestamp_inclusive: i64,
         keep_ids: &[&str],
     ) -> Result<usize, StorageError>;
+
+    async fn list_journal_entries(
+        &self,
+        character_id: Uuid,
+    ) -> Result<Vec<JournalEntry>, StorageError>;
+
+    /// Insert or replace by id. Caller is responsible for `created_at`
+    /// preservation (the commands layer looks up the existing entry on
+    /// edits and reuses its `created_at`).
+    async fn upsert_journal_entry(&self, entry: &JournalEntry) -> Result<(), StorageError>;
+
+    async fn delete_journal_entry(
+        &self,
+        character_id: Uuid,
+        entry_id: &str,
+    ) -> Result<(), StorageError>;
 }

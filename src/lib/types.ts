@@ -41,6 +41,7 @@ export interface PushLogEntry {
   update_info_body: string;
   chat_break_status?: number | null;
   chat_break_body?: string | null;
+  journal_entry_ids?: string[] | null;
 }
 
 export interface StepResult {
@@ -49,8 +50,31 @@ export interface StepResult {
   message: string;
 }
 
+export interface JournalEntryStep {
+  id: string;
+  status: number;
+  ok: boolean;
+  message: string;
+}
+
+export interface JournalEntry {
+  id: string;
+  characterId: string;
+  entry: string;
+  keyphrases: string[];
+  createdAt: string;
+  updatedAt: string;
+}
+
+export interface JournalEntryInput {
+  id?: string | null;
+  entry: string;
+  keyphrases: string[];
+}
+
 export interface PushResult {
   update_info: StepResult;
+  journal_entries: JournalEntryStep[];
   chat_break?: StepResult | null;
   log_id: Uuid;
 }
@@ -60,6 +84,7 @@ export interface PushRequest {
   target_id: Uuid;
   fields: string[];
   chat_break?: { greeting: string; wipe_cascaded: boolean } | null;
+  journalEntryIds?: string[] | null;
 }
 
 export interface SettingsDto {

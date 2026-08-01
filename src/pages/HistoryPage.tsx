@@ -68,8 +68,12 @@ export function HistoryPage() {
                       const cb = row.did_chat_break ? '1' : '0';
                       const greet = row.greeting ?? '';
                       const wipe = row.wipe_cascaded ? '1' : '0';
+                      const journalIds =
+                        row.journal_entry_ids && row.journal_entry_ids.length > 0
+                          ? `&journalEntryIds=${encodeURIComponent(row.journal_entry_ids.join(','))}`
+                          : '';
                       navigate(
-                        `/push?characterId=${row.character_id}&targetId=${row.target_id}&fields=${fields}&chatBreak=${cb}&greeting=${encodeURIComponent(greet)}&wipe=${wipe}`,
+                        `/push?characterId=${row.character_id}&targetId=${row.target_id}&fields=${fields}&chatBreak=${cb}&greeting=${encodeURIComponent(greet)}&wipe=${wipe}${journalIds}`,
                       );
                     }}
                   >

@@ -8,7 +8,7 @@ import { characterInputSchema, type CharacterFormValues } from '../lib/schemas';
 import { toast } from '../components/Toaster';
 import { ConfirmDialog } from '../components/ConfirmDialog';
 import { FIELD_SOFT_LIMITS, GENDER_OPTIONS } from '../lib/types';
-import type { Uuid } from '../lib/types';
+import type { JournalEntry, JournalEntryInput, Uuid } from '../lib/types';
 
 const MAX_NOTE = 5000;
 
@@ -370,6 +370,8 @@ export function CharacterEditorPage() {
         </Field>
       </form>
 
+      {id && <JournalEditor characterId={id} />}
+
       <ConfirmDialog
         open={confirmDelete}
         title="Delete character?"
@@ -483,6 +485,258 @@ function SoftCounter({ value, soft }: { value: string | undefined; soft: number 
   return (
     <div className={`soft-counter ${warn ? 'warn' : ''}`}>
       {len} / {soft}
+    </div>
+  );
+}
+
+function JournalEditor({ characterId }: { characterId: Uuid }) {
+  const queryClient = useQueryClient();
+  const entries = useQuery({
+    queryKey: ['journal-entries', characterId],
+    queryFn: () => api.listJournalEntries(characterId),
+  });
+  const [editing, setEditing] = useState<JournalEntryInput | null>(null);
+  const [confirmDelete, setConfirmDelete] = useState<string | null>(null);
+
+  const save = useMutation({
+    mutationFn: (input: JournalEntryInput) => api.saveJournalEntry(characterId, input),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ['journal-entries', characterId] });
+      setEditing(null);
+      toast('success', 'Journal entry saved');
+    },
+    onError: (e) => toast('error', errorMessage(e)),
+  });
+
+  const del = useMutation({
+    mutationFn: (entryId: string) => api.deleteJournalEntry(characterId, entryId),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ['journal-entries', characterId] });
+      toast('success', 'Journal entry deleted');
+    },
+    onError: (e) => toast('error', errorMessage(e)),
+  });
+
+  return (
+    <div className="card">
+      <div
+        style={{
+          display: 'flex',
+          alignItems: 'center',
+          justifyContent: 'space-between',
+        }}
+      >
+        <h3 style={{ margin: 0 }}>Journal entries</h3>
+        {editing == null && (
+          <button
+            type="button"
+            className="btn btn-sm"
+            onClick={() => setEditing({ entry: '', keyphrases: [] })}
+          >
+            Add entry
+          </button>
+        )}
+      </div>
+      <p className="muted" style={{ fontSize: 12, marginTop: 6 }}>
+        Local notes you can optionally push to Kindroid via the new <code>/journal-create</code>{' '}
+        endpoint. Up to 500 characters and 8 short keyphrases per entry. Not sent unless you tick
+        the entry on the Push page.
+      </p>
+
+      {editing && (
+        <JournalEntryForm
+          initial={editing}
+          onSubmit={(v) => save.mutate(v)}
+          onCancel={() => setEditing(null)}
+          submitting={save.isPending}
+        />
+      )}
+
+      {entries.isLoading && <p className="muted">Loading…</p>}
+      {(entries.data ?? []).length === 0 && !entries.isLoading && editing == null && (
+        <div className="empty" style={{ marginTop: 12 }}>
+          No journal entries yet.
+        </div>
+      )}
+      <ul style={{ listStyle: 'none', padding: 0, marginTop: 12 }}>
+        {(entries.data ?? []).map((e: JournalEntry) => (
+          <li
+            key={e.id}
+            style={{
+              borderTop: '1px solid var(--border)',
+              padding: '8px 0',
+            }}
+          >
+            <div style={{ display: 'flex', justifyContent: 'space-between', gap: 8 }}>
+              <div style={{ flex: 1 }}>
+                <div style={{ whiteSpace: 'pre-wrap' }}>{e.entry}</div>
+                {e.keyphrases.length > 0 && (
+                  <div
+                    style={{
+                      display: 'flex',
+                      gap: 4,
+                      flexWrap: 'wrap',
+                      marginTop: 6,
+                    }}
+                  >
+                    {e.keyphrases.map((k) => (
+                      <span key={k} className="badge badge-muted">
+                        {k}
+                      </span>
+                    ))}
+                  </div>
+                )}
+                <div className="muted" style={{ fontSize: 11, marginTop: 4 }}>
+                  updated {new Date(e.updatedAt).toLocaleString()}
+                </div>
+              </div>
+              <div style={{ display: 'flex', flexDirection: 'column', gap: 4 }}>
+                <button
+                  type="button"
+                  className="btn btn-sm"
+                  onClick={() =>
+                    setEditing({
+                      id: e.id,
+                      entry: e.entry,
+                      keyphrases: e.keyphrases,
+                    })
+                  }
+                >
+                  Edit
+                </button>
+                <button
+                  type="button"
+                  className="btn btn-sm btn-danger"
+                  onClick={() => setConfirmDelete(e.id)}
+                >
+                  Delete
+                </button>
+              </div>
+            </div>
+          </li>
+        ))}
+      </ul>
+      <ConfirmDialog
+        open={confirmDelete != null}
+        title="Delete journal entry?"
+        body="This cannot be undone. The entry is local; nothing on the Kindroid server is touched."
+        confirmLabel="Delete"
+        onConfirm={() => {
+          if (confirmDelete) del.mutate(confirmDelete);
+          setConfirmDelete(null);
+        }}
+        onCancel={() => setConfirmDelete(null)}
+      />
+    </div>
+  );
+}
+
+function JournalEntryForm({
+  initial,
+  onSubmit,
+  onCancel,
+  submitting,
+}: {
+  initial: JournalEntryInput;
+  onSubmit: (v: JournalEntryInput) => void;
+  onCancel: () => void;
+  submitting: boolean;
+}) {
+  const [entry, setEntry] = useState(initial.entry);
+  const [kpInput, setKpInput] = useState('');
+  const [kps, setKps] = useState<string[]>(initial.keyphrases);
+  const trimmedLen = entry.trim().length;
+  const tooLong = trimmedLen > 500;
+  const tooMany = kps.length > 8;
+
+  const addKp = () => {
+    const t = kpInput.trim();
+    if (!t) return;
+    if (kps.length >= 8) return;
+    if (kps.some((k) => k.toLowerCase() === t.toLowerCase())) {
+      setKpInput('');
+      return;
+    }
+    setKps([...kps, t]);
+    setKpInput('');
+  };
+
+  return (
+    <div
+      style={{
+        border: '1px solid var(--border)',
+        padding: 12,
+        borderRadius: 6,
+        marginTop: 12,
+      }}
+    >
+      <textarea
+        className="textarea"
+        rows={4}
+        value={entry}
+        onChange={(e) => setEntry(e.target.value)}
+        placeholder="Write the journal entry…"
+        style={tooLong ? { borderColor: 'var(--danger)' } : undefined}
+      />
+      <div
+        className={`soft-counter ${tooLong ? 'warn' : ''}`}
+        style={tooLong ? { color: 'var(--danger)' } : undefined}
+      >
+        {trimmedLen} / 500
+      </div>
+
+      <div style={{ display: 'flex', flexWrap: 'wrap', gap: 4, marginTop: 8 }}>
+        {kps.map((k, i) => (
+          <span key={`${k}-${i}`} className="badge badge-muted">
+            {k}
+            <button
+              type="button"
+              className="btn btn-sm"
+              style={{ marginLeft: 4, padding: 0, border: 'none', background: 'none' }}
+              onClick={() => setKps(kps.filter((_, idx) => idx !== i))}
+              aria-label={`Remove ${k}`}
+            >
+              ×
+            </button>
+          </span>
+        ))}
+      </div>
+      <input
+        className="input"
+        style={{ marginTop: 6 }}
+        placeholder="Type a keyphrase and press Enter"
+        value={kpInput}
+        onChange={(e) => setKpInput(e.target.value)}
+        onKeyDown={(e) => {
+          if (e.key === 'Enter' || e.key === ',') {
+            e.preventDefault();
+            addKp();
+          } else if (e.key === 'Backspace' && kpInput === '' && kps.length > 0) {
+            setKps(kps.slice(0, -1));
+          }
+        }}
+        disabled={kps.length >= 8}
+      />
+      <div
+        className={`soft-counter ${tooMany ? 'warn' : ''}`}
+        style={tooMany ? { color: 'var(--danger)' } : undefined}
+      >
+        {kps.length} / 8
+      </div>
+
+      <div style={{ display: 'flex', gap: 8, marginTop: 12 }}>
+        <button
+          type="button"
+          className="btn btn-primary"
+          disabled={submitting || tooLong || tooMany || trimmedLen === 0}
+          onClick={() => onSubmit({ id: initial.id, entry, keyphrases: kps })}
+        >
+          {submitting ? 'Saving…' : initial.id ? 'Update entry' : 'Save entry'}
+        </button>
+        <button type="button" className="btn" onClick={onCancel}>
+          Cancel
+        </button>
+      </div>
     </div>
   );
 }

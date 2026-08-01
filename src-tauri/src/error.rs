@@ -70,8 +70,19 @@ impl From<StorageError> for AppError {
 #[derive(Debug, Serialize, Deserialize)]
 pub struct PushResult {
     pub update_info: StepResult,
+    /// Per-entry journal-create result. Empty when the step was skipped.
+    #[serde(default)]
+    pub journal_entries: Vec<JournalEntryStep>,
     pub chat_break: Option<StepResult>,
     pub log_id: uuid::Uuid,
+}
+
+#[derive(Debug, Serialize, Deserialize)]
+pub struct JournalEntryStep {
+    pub id: String,
+    pub status: u16,
+    pub ok: bool,
+    pub message: String,
 }
 
 #[derive(Debug, Serialize, Deserialize)]

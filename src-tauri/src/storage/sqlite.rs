@@ -9,6 +9,7 @@ use uuid::Uuid;
 
 use crate::domain::character::Character;
 use crate::domain::chat_message::{ChatMessage, ChatSyncState, SyncStatusKind};
+use crate::domain::journal_entry::JournalEntry;
 use crate::domain::push_log::PushLogEntry;
 use crate::domain::target::Target;
 use crate::storage::{Repository, StorageError};
@@ -340,12 +341,18 @@ impl Repository for SqliteRepository {
         let conn = lock(&self.conn).await;
         let fields_json = serde_json::to_string(&entry.fields_sent)
             .map_err(|e| StorageError::Database(e.to_string()))?;
+        let journal_ids_json: Option<String> = match &entry.journal_entry_ids {
+            Some(ids) => serde_json::to_string(ids)
+                .map(Some)
+                .map_err(|e| StorageError::Database(e.to_string()))?,
+            None => None,
+        };
         conn.execute(
             "INSERT INTO push_log
              (id, at, character_id, character_name, target_id, target_ai_id, fields_sent,
               did_chat_break, greeting, wipe_cascaded, update_info_status, update_info_body,
-              chat_break_status, chat_break_body)
-             VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,?12,?13,?14)",
+              chat_break_status, chat_break_body, journal_entry_ids)
+             VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,?12,?13,?14,?15)",
             params![
                 entry.id.to_string(),
                 entry.at.to_rfc3339(),
@@ -361,6 +368,7 @@ impl Repository for SqliteRepository {
                 entry.update_info_body,
                 entry.chat_break_status.map(|s| s as i64),
                 entry.chat_break_body,
+                journal_ids_json,
             ],
         )
         .map_err(|e| StorageError::Database(e.to_string()))?;
@@ -378,7 +386,7 @@ impl Repository for SqliteRepository {
                 "SELECT id, at, character_id, character_name, target_id, target_ai_id,
                         fields_sent, did_chat_break, greeting, wipe_cascaded,
                         update_info_status, update_info_body, chat_break_status,
-                        chat_break_body
+                        chat_break_body, journal_entry_ids
                  FROM push_log ORDER BY at DESC LIMIT ?1 OFFSET ?2",
             )
             .map_err(|e| StorageError::Database(e.to_string()))?;
@@ -394,7 +402,8 @@ impl Repository for SqliteRepository {
         conn.query_row(
             "SELECT id, at, character_id, character_name, target_id, target_ai_id,
                     fields_sent, did_chat_break, greeting, wipe_cascaded,
-                    update_info_status, update_info_body, chat_break_status, chat_break_body
+                    update_info_status, update_info_body, chat_break_status,
+                    chat_break_body, journal_entry_ids
              FROM push_log WHERE id = ?1",
             params![id.to_string()],
             row_to_push_log,
@@ -810,6 +819,70 @@ impl Repository for SqliteRepository {
             .map_err(|e| StorageError::Database(e.to_string()))?;
         Ok(n)
     }
+
+    async fn list_journal_entries(
+        &self,
+        character_id: Uuid,
+    ) -> Result<Vec<JournalEntry>, StorageError> {
+        let conn = lock(&self.conn).await;
+        let mut stmt = conn
+            .prepare(
+                "SELECT id, character_id, entry, keyphrases, created_at, updated_at
+                 FROM character_journal_entries
+                 WHERE character_id = ?1
+                 ORDER BY created_at ASC",
+            )
+            .map_err(|e| StorageError::Database(e.to_string()))?;
+        let rows = stmt
+            .query_map(params![character_id.to_string()], row_to_journal_entry)
+            .map_err(|e| StorageError::Database(e.to_string()))?;
+        rows.map(|r| r.map_err(|e| StorageError::Database(e.to_string())))
+            .collect()
+    }
+
+    async fn upsert_journal_entry(&self, entry: &JournalEntry) -> Result<(), StorageError> {
+        let conn = lock(&self.conn).await;
+        let keyphrases_json =
+            serde_json::to_string(&entry.keyphrases).unwrap_or_else(|_| "[]".to_string());
+        conn.execute(
+            "INSERT INTO character_journal_entries
+               (id, character_id, entry, keyphrases, created_at, updated_at)
+             VALUES (?1,?2,?3,?4,?5,?6)
+             ON CONFLICT(id) DO UPDATE SET
+               entry = excluded.entry,
+               keyphrases = excluded.keyphrases,
+               updated_at = excluded.updated_at",
+            params![
+                entry.id,
+                entry.character_id.to_string(),
+                entry.entry,
+                keyphrases_json,
+                entry.created_at.to_rfc3339(),
+                entry.updated_at.to_rfc3339(),
+            ],
+        )
+        .map_err(|e| StorageError::Database(e.to_string()))?;
+        Ok(())
+    }
+
+    async fn delete_journal_entry(
+        &self,
+        character_id: Uuid,
+        entry_id: &str,
+    ) -> Result<(), StorageError> {
+        let conn = lock(&self.conn).await;
+        let n = conn
+            .execute(
+                "DELETE FROM character_journal_entries
+                 WHERE id = ?1 AND character_id = ?2",
+                params![entry_id, character_id.to_string()],
+            )
+            .map_err(|e| StorageError::Database(e.to_string()))?;
+        if n == 0 {
+            return Err(StorageError::NotFound);
+        }
+        Ok(())
+    }
 }
 
 fn row_to_character(row: &rusqlite::Row<'_>) -> rusqlite::Result<Character> {
@@ -865,6 +938,11 @@ fn row_to_push_log(row: &rusqlite::Row<'_>) -> rusqlite::Result<PushLogEntry> {
     let wipe: Option<i32> = row.get(9)?;
     let ui_status: i64 = row.get(10)?;
     let cb_status: Option<i64> = row.get(12)?;
+    let journal_ids_json: Option<String> = row.get(14)?;
+    let journal_entry_ids = match journal_ids_json {
+        Some(s) if !s.is_empty() => Some(serde_json::from_str(&s).map_err(|e| id_err(14, e))?),
+        _ => None,
+    };
     Ok(PushLogEntry {
         id: Uuid::parse_str(&id_s).map_err(|e| id_err(0, e))?,
         at: DateTime::parse_from_rfc3339(&at_s)
@@ -882,6 +960,7 @@ fn row_to_push_log(row: &rusqlite::Row<'_>) -> rusqlite::Result<PushLogEntry> {
         update_info_body: row.get(11)?,
         chat_break_status: cb_status.map(|s| s as u16),
         chat_break_body: row.get(13)?,
+        journal_entry_ids,
     })
 }
 
@@ -909,6 +988,32 @@ fn row_to_chat_message(row: &rusqlite::Row<'_>) -> rusqlite::Result<ChatMessage>
             .map_err(|e| id_err(14, e))?
             .with_timezone(&Utc),
         favourite: fav != 0,
+    })
+}
+
+fn row_to_journal_entry(row: &rusqlite::Row<'_>) -> rusqlite::Result<JournalEntry> {
+    let id: String = row.get(0)?;
+    let cid_s: String = row.get(1)?;
+    let entry: String = row.get(2)?;
+    let keyphrases_s: String = row.get(3)?;
+    let created_s: String = row.get(4)?;
+    let updated_s: String = row.get(5)?;
+    let keyphrases = if keyphrases_s.is_empty() {
+        Vec::new()
+    } else {
+        serde_json::from_str(&keyphrases_s).map_err(|e| id_err(3, e))?
+    };
+    Ok(JournalEntry {
+        id,
+        character_id: Uuid::parse_str(&cid_s).map_err(|e| id_err(1, e))?,
+        entry,
+        keyphrases,
+        created_at: DateTime::parse_from_rfc3339(&created_s)
+            .map_err(|e| id_err(4, e))?
+            .with_timezone(&Utc),
+        updated_at: DateTime::parse_from_rfc3339(&updated_s)
+            .map_err(|e| id_err(5, e))?
+            .with_timezone(&Utc),
     })
 }
 
@@ -1047,6 +1152,7 @@ mod tests {
             update_info_body: "ok".into(),
             chat_break_status: None,
             chat_break_body: None,
+            journal_entry_ids: None,
         };
         let entry_id = entry.id;
         repo.append_push_log(entry).await.unwrap();
@@ -1714,5 +1820,113 @@ mod tests {
             .unwrap();
         assert_eq!(only_favs.len(), 1);
         assert_eq!(only_favs[0].kindroid_msg_id, "k1");
+    }
+
+    fn make_journal(character_id: Uuid, id: &str, entry: &str, kp: &[&str]) -> JournalEntry {
+        let now = Utc::now();
+        JournalEntry {
+            id: id.to_string(),
+            character_id,
+            entry: entry.to_string(),
+            keyphrases: kp.iter().map(|s| s.to_string()).collect(),
+            created_at: now,
+            updated_at: now,
+        }
+    }
+
+    #[tokio::test]
+    async fn journal_crud_round_trip() {
+        let repo = SqliteRepository::open_in_memory().unwrap();
+        let c = character("C");
+        let cid = c.id;
+        repo.upsert_character(c).await.unwrap();
+
+        let e1 = make_journal(cid, "je-1", "one", &["a"]);
+        let e2 = make_journal(cid, "je-2", "two", &["b", "c"]);
+        let e3 = make_journal(cid, "je-3", "three", &[]);
+        repo.upsert_journal_entry(&e1).await.unwrap();
+        repo.upsert_journal_entry(&e2).await.unwrap();
+        repo.upsert_journal_entry(&e3).await.unwrap();
+
+        let got = repo.list_journal_entries(cid).await.unwrap();
+        assert_eq!(got.len(), 3);
+        assert_eq!(got[0].entry, "one");
+        assert_eq!(got[1].keyphrases, vec!["b", "c"]);
+        assert!(got[2].keyphrases.is_empty());
+    }
+
+    #[tokio::test]
+    async fn journal_update_preserves_created_at() {
+        let repo = SqliteRepository::open_in_memory().unwrap();
+        let c = character("C");
+        let cid = c.id;
+        repo.upsert_character(c).await.unwrap();
+
+        let mut e = make_journal(cid, "je-1", "first", &[]);
+        repo.upsert_journal_entry(&e).await.unwrap();
+        let original_created = e.created_at;
+
+        e.updated_at = e.created_at + chrono::Duration::seconds(5);
+        e.entry = "second".to_string();
+        repo.upsert_journal_entry(&e).await.unwrap();
+
+        let got = repo.list_journal_entries(cid).await.unwrap();
+        assert_eq!(got.len(), 1);
+        assert_eq!(got[0].entry, "second");
+        assert_eq!(got[0].created_at, original_created);
+        assert!(got[0].updated_at > original_created);
+    }
+
+    #[tokio::test]
+    async fn journal_delete_removes_one() {
+        let repo = SqliteRepository::open_in_memory().unwrap();
+        let c = character("C");
+        let cid = c.id;
+        repo.upsert_character(c).await.unwrap();
+
+        let e1 = make_journal(cid, "je-1", "one", &[]);
+        let e2 = make_journal(cid, "je-2", "two", &[]);
+        repo.upsert_journal_entry(&e1).await.unwrap();
+        repo.upsert_journal_entry(&e2).await.unwrap();
+        repo.delete_journal_entry(cid, "je-1").await.unwrap();
+
+        let got = repo.list_journal_entries(cid).await.unwrap();
+        assert_eq!(got.len(), 1);
+        assert_eq!(got[0].id, "je-2");
+    }
+
+    #[tokio::test]
+    async fn journal_delete_wrong_character_errors() {
+        let repo = SqliteRepository::open_in_memory().unwrap();
+        let c = character("C");
+        let cid = c.id;
+        repo.upsert_character(c).await.unwrap();
+
+        let e = make_journal(cid, "je-1", "x", &[]);
+        repo.upsert_journal_entry(&e).await.unwrap();
+
+        let other = Uuid::new_v4();
+        let err = repo.delete_journal_entry(other, "je-1").await.unwrap_err();
+        assert!(matches!(err, StorageError::NotFound));
+    }
+
+    #[tokio::test]
+    async fn journal_entries_cascade_on_character_delete() {
+        let repo = SqliteRepository::open_in_memory().unwrap();
+        let c = character("C");
+        let cid = c.id;
+        repo.upsert_character(c).await.unwrap();
+
+        let e1 = make_journal(cid, "je-1", "x", &[]);
+        let e2 = make_journal(cid, "je-2", "y", &[]);
+        repo.upsert_journal_entry(&e1).await.unwrap();
+        repo.upsert_journal_entry(&e2).await.unwrap();
+        assert_eq!(repo.list_journal_entries(cid).await.unwrap().len(), 2);
+
+        repo.delete_character(cid).await.unwrap();
+        assert!(
+            repo.list_journal_entries(cid).await.unwrap().is_empty(),
+            "FK CASCADE should remove journal entries"
+        );
     }
 }

@@ -3,9 +3,9 @@ use reqwest::header::{HeaderMap, HeaderValue, AUTHORIZATION, CONTENT_TYPE, RETRY
 use reqwest::Client;
 
 use super::{
-    parse_retry_after, ChatBreakRequest, ChatMessagesPage, HttpResponse, KindroidError,
-    ListChatMessagesRequest, ToggleMessagePinRequest, ToggleMessagePinResponse, UpdateInfoRequest,
-    REQUEST_TIMEOUT,
+    parse_retry_after, ChatBreakRequest, ChatMessagesPage, HttpResponse, JournalCreateRequest,
+    KindroidError, ListChatMessagesRequest, ToggleMessagePinRequest, ToggleMessagePinResponse,
+    UpdateInfoRequest, REQUEST_TIMEOUT,
 };
 
 #[async_trait]
@@ -34,6 +34,12 @@ pub trait KindroidClient: Send + Sync {
         base_url: &str,
         req: ToggleMessagePinRequest,
     ) -> Result<ToggleMessagePinResponse, KindroidError>;
+    async fn journal_create(
+        &self,
+        token: &str,
+        base_url: &str,
+        req: JournalCreateRequest<'_>,
+    ) -> Result<HttpResponse, KindroidError>;
 }
 
 #[derive(Clone)]
@@ -232,6 +238,21 @@ impl KindroidClient for HttpKindroidClient {
             status: resp.status,
             body: format!("invalid toggle-message-pin JSON: {e}"),
         })
+    }
+
+    async fn journal_create(
+        &self,
+        token: &str,
+        base_url: &str,
+        req: JournalCreateRequest<'_>,
+    ) -> Result<HttpResponse, KindroidError> {
+        let url = format!("{}/journal-create", base_url.trim_end_matches('/'));
+        let body = serde_json::json!({
+            "ai_id": req.ai_id,
+            "entry": req.entry,
+            "keyphrases": req.keyphrases,
+        });
+        self.post_json(&url, token, body).await
     }
 }
 
@@ -965,6 +986,138 @@ mod tests {
                 ToggleMessagePinRequest {
                     ai_id: "ai_x".into(),
                     message_id: "m1".into(),
+                },
+            )
+            .await
+            .unwrap_err();
+        assert!(matches!(err, KindroidError::Server { status: 500, .. }));
+    }
+
+    #[tokio::test]
+    async fn journal_create_200() {
+        let server = MockServer::start().await;
+        Mock::given(method("POST"))
+            .and(path("/journal-create"))
+            .and(header("Authorization", "Bearer t"))
+            .respond_with(ResponseTemplate::new(200).set_body_string("ok"))
+            .mount(&server)
+            .await;
+        let c = HttpKindroidClient::new();
+        let phrases = vec!["memory".to_string(), "anchor".to_string()];
+        let r = c
+            .journal_create(
+                "t",
+                &server.uri(),
+                JournalCreateRequest {
+                    ai_id: "ai_x",
+                    entry: "Once upon a time",
+                    keyphrases: &phrases,
+                },
+            )
+            .await
+            .unwrap();
+        assert_eq!(r.status, 200);
+        assert!(r.ok);
+    }
+
+    #[tokio::test]
+    async fn journal_create_400_maps_to_bad_request() {
+        let server = MockServer::start().await;
+        Mock::given(method("POST"))
+            .and(path("/journal-create"))
+            .respond_with(ResponseTemplate::new(400).set_body_string("bad"))
+            .mount(&server)
+            .await;
+        let c = HttpKindroidClient::new();
+        let err = c
+            .journal_create(
+                "t",
+                &server.uri(),
+                JournalCreateRequest {
+                    ai_id: "ai_x",
+                    entry: "x",
+                    keyphrases: &[],
+                },
+            )
+            .await
+            .unwrap_err();
+        assert!(matches!(err, KindroidError::BadRequest { status: 400, .. }));
+    }
+
+    #[tokio::test]
+    async fn journal_create_401_maps_to_auth() {
+        let server = MockServer::start().await;
+        Mock::given(method("POST"))
+            .and(path("/journal-create"))
+            .respond_with(ResponseTemplate::new(401).set_body_string("nope"))
+            .mount(&server)
+            .await;
+        let c = HttpKindroidClient::new();
+        let err = c
+            .journal_create(
+                "t",
+                &server.uri(),
+                JournalCreateRequest {
+                    ai_id: "ai_x",
+                    entry: "x",
+                    keyphrases: &[],
+                },
+            )
+            .await
+            .unwrap_err();
+        assert!(matches!(err, KindroidError::Auth { status: 401, .. }));
+    }
+
+    #[tokio::test]
+    async fn journal_create_429_with_retry_after() {
+        let server = MockServer::start().await;
+        Mock::given(method("POST"))
+            .and(path("/journal-create"))
+            .respond_with(
+                ResponseTemplate::new(429)
+                    .insert_header("Retry-After", "5")
+                    .set_body_string("slow"),
+            )
+            .mount(&server)
+            .await;
+        let c = HttpKindroidClient::new();
+        let err = c
+            .journal_create(
+                "t",
+                &server.uri(),
+                JournalCreateRequest {
+                    ai_id: "ai_x",
+                    entry: "x",
+                    keyphrases: &[],
+                },
+            )
+            .await
+            .unwrap_err();
+        match err {
+            KindroidError::RateLimited { retry_after, .. } => {
+                assert_eq!(retry_after, Some(Duration::from_secs(5)))
+            }
+            other => panic!("expected RateLimited, got {other:?}"),
+        }
+    }
+
+    #[tokio::test]
+    async fn journal_create_500_maps_to_server() {
+        let server = MockServer::start().await;
+        Mock::given(method("POST"))
+            .and(path("/journal-create"))
+            .respond_with(ResponseTemplate::new(500).set_body_string("boom"))
+            .mount(&server)
+            .await;
+        let c = HttpKindroidClient::new();
+        let err = c
+            .journal_create(
+                "t",
+                &server.uri(),
+                JournalCreateRequest {
+                    ai_id: "ai_x",
+                    entry: "x",
+                    keyphrases: &[],
                 },
             )
             .await

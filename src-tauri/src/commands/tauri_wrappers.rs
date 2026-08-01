@@ -7,7 +7,9 @@
 
 #[cfg(not(test))]
 mod inner {
-    use crate::commands::{characters, chat_history, history, push, settings, share_code, targets};
+    use crate::commands::{
+        characters, chat_history, history, journal, push, settings, share_code, targets,
+    };
     use tauri::State;
 
     type Repo = std::sync::Arc<dyn crate::storage::Repository>;
@@ -288,6 +290,32 @@ mod inner {
         ai_id: String,
     ) -> Result<usize, crate::error::AppError> {
         chat_history::reset_chat_history(repo.inner().clone(), ai_id).await
+    }
+
+    #[tauri::command]
+    pub async fn list_journal_entries(
+        repo: State<'_, Repo>,
+        character_id: uuid::Uuid,
+    ) -> Result<Vec<crate::domain::journal_entry::JournalEntry>, crate::error::AppError> {
+        journal::list_journal_entries(repo.inner().clone(), character_id).await
+    }
+
+    #[tauri::command]
+    pub async fn save_journal_entry(
+        repo: State<'_, Repo>,
+        character_id: uuid::Uuid,
+        input: crate::domain::journal_entry::JournalEntryInput,
+    ) -> Result<crate::domain::journal_entry::JournalEntry, crate::error::AppError> {
+        journal::save_journal_entry(repo.inner().clone(), character_id, input).await
+    }
+
+    #[tauri::command]
+    pub async fn delete_journal_entry(
+        repo: State<'_, Repo>,
+        character_id: uuid::Uuid,
+        entry_id: String,
+    ) -> Result<(), crate::error::AppError> {
+        journal::delete_journal_entry(repo.inner().clone(), character_id, entry_id).await
     }
 }
 

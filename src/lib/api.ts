@@ -3,6 +3,8 @@ import type {
   Character,
   ChatMessage,
   ChatSyncState,
+  JournalEntry,
+  JournalEntryInput,
   PushLogEntry,
   PushRequest,
   PushResult,
@@ -140,6 +142,14 @@ export const api = {
   resetChatHistory: (aiId: string) => invoke<number>('reset_chat_history', { aiId }),
   setChatMessageFavourite: (aiId: string, kindroidMsgId: string) =>
     invoke<boolean>('toggle_chat_message_favourite', { aiId, kindroidMsgId }),
+
+  // Journal entries (character-scoped)
+  listJournalEntries: (characterId: string) =>
+    invoke<JournalEntry[]>('list_journal_entries', { characterId }),
+  saveJournalEntry: (characterId: string, input: JournalEntryInput) =>
+    invoke<JournalEntry>('save_journal_entry', { characterId, input }),
+  deleteJournalEntry: (characterId: string, entryId: string) =>
+    invoke<void>('delete_journal_entry', { characterId, entryId }),
 };
 
 /**

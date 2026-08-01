@@ -46,10 +46,11 @@ src-tauri/src/
   domain/
     character.rs                 Character struct (incl. cover_image) + PERSONA_FIELDS
     target.rs                    Target struct (ai_id, label)
-    push_log.rs                  PushLogEntry + MAX_LOG_BODY_BYTES
+    push_log.rs                  PushLogEntry + MAX_LOG_BODY_BYTES (+ journal_entry_ids)
     share_code.rs                PartialCharacter + text encode/decode (kept for tests)
     image_share.rs               PNG tEXt share-image encode/decode (ComfyUI-style)
     chat_message.rs              ChatMessage + ChatSyncState + SyncStatusKind
+    journal_entry.rs             JournalEntry + JournalEntryInput (MAX_ENTRY_CHARS, MAX_KEYPHRASES, MAX_KEYPHRASE_CHARS)
   storage/
     mod.rs                       Repository trait (incl. image + chat_history ops)
     sqlite.rs                    SqliteRepository impl + data_dir + image file helpers
@@ -61,12 +62,13 @@ src-tauri/src/
   commands/
     characters.rs                save / get / list / delete / duplicate logic
     targets.rs                   target CRUD logic
-    push.rs                      do_push flow (update-info → chat-break → log) + FakeRepo test template
+    push.rs                      do_push flow (update-info → journal-create → chat-break → log) + FakeRepo test template
     share_code.rs                import_share_image / export_share_image / set_character_image
     settings.rs                  base_url + token_status / set_token / clear_token / test_token
     history.rs                   push-log read API
     chat_history.rs              chat-history read API + start/cancel sync entry points (start_chat_sync is cfg(not(test)))
-    sync_registry.rs             single-slot background-task registry (Arc<Mutex<Option<SyncEntry>>> + watch::Sender<bool>)
+    journal.rs                   list / save / delete journal entries (local CRUD)
+    sync_registry.rs             single-slot background-task registry (Arc<Mutex<Option<SyncEntry>>> + watch::Sender<bool))
     sync_loop.rs                 escape_fts_query helper (always compiled) + tests
     sync_loop_impl.rs            the actual background loop (#[cfg(not(test))] — uses tauri::AppHandle / Emitter)
     tauri_wrappers.rs            #[tauri::command] thin wrappers (cfg(not(test)) only)
@@ -90,9 +92,10 @@ src-tauri/src/
 - Tauri 2 is configured with `dragDropEnabled: false` on the main window so HTML5 drag/drop events reach the webview. Without that flag, Tauri intercepts native file drops and our `window.addEventListener('drop', …)` never fires.
 - DB schema uses portable types only (TEXT UUIDs, ISO-8601 datetimes, JSON arrays). All FKs use `ON DELETE CASCADE` so deleting a target wipes its `chat_messages` + `chat_sync_state` automatically.
 - Errors flow through `AppError` (struct variants, `#[serde(tag = "kind", rename_all = "snake_case")]`). The frontend unwraps them via `errorMessage(e)` in `src/lib/api.ts`, which parses `e.message` (Tauri 2 wraps the serialized JSON in there). **Every new `AppError` variant must be appended to the `serializes_all_variants_as_json` test in `error.rs`** or CI breaks.
-- FTS5 chat search: `chat_messages_fts` is in external-content mode over `chat_messages.message` with `tokenize='porter unicode61'`. The query produced by `escape_fts_query` (Rust) / `escapeFtsQuery` (TS) is whitespace-tokenised and quote-aware: an unquoted token becomes `"token"*` (prefix match), a `"…"` block becomes `"…"` (exact phrase, no wildcard), and all parts are joined with ` AND ` so every term (or phrase) must be present. An unmatched opening `"` falls back to prefix-token mode. **The Rust and TS versions must stay in lock-step.** Porter handles inflectional variants ("running"/"runs" → "run"), but NOT irregular forms ("ran" does NOT match "run" — test data uses "runs" not "ran").
+- FTS5 chat search: `chat_messages_fts` is in external-content mode over `chat_messages.message` with `tokenize='porter unicode61'`. The query produced by `escape_fts_query` (Rust) / `escapeFtsQuery` (TS) is whitespace-tokenised and quote-aware: an unquoted token becomes `"token"*` (prefix match), a `"…"` block becomes `"…"` (exact phrase, no wildcard), and all parts are joined with `AND` so every term (or phrase) must be present. An unmatched opening `"` falls back to prefix-token mode. **The Rust and TS versions must stay in lock-step.** Porter handles inflectional variants ("running"/"runs" → "run"), but NOT irregular forms ("ran" does NOT match "run" — test data uses "runs" not "ran").
 - Background-task pattern: any long-running loop is a free `async fn` in a `#[cfg(not(test))]` module. It is spawned via `tauri::async_runtime::spawn` from a thin `#[cfg(not(test))]` entry in `commands::*`. Cancellation goes through a `tokio::sync::watch::Receiver<bool>` paired with a sender held in `SyncRegistry`. The registry is single-slot per the chat-history plan: a second `start()` returns the currently-syncing `ai_id`, and the UI must surface this via `AppError::SyncConflict`. The loop **must** call `SyncRegistry::release()` on every exit path (success, error, cancel, token-cleared) so a future sync can take the slot. Use the `run_loop_inner` + outer `run_sync_loop` wrapper pattern from `commands/sync_loop_impl.rs` so the release is guaranteed even on early return.
 - Chat message favourite (pin): `chat_messages.favourite` is the local source of truth — the Kindroid `get-chat-messages` endpoint does not return `isPinned`, so server-side pins set in other clients are invisible until the user re-toggles here. The column **survives** `upsert_chat_messages` because `favourite` is included in the INSERT column list (so the inserted value is recorded) but omitted from both the UPDATE SET list and the `IS NOT` WHERE checks (so subsequent re-fetches do not clobber it). The `commands::chat_history::toggle_chat_message_favourite` command calls `POST /toggle-message-pin` and then reconciles the local row to the server's canonical `isPinned` response — the optimistic UI flip is rolled back on failure. The read API (`list_chat_messages` / `search_chat`) accepts a `favourites_only` flag that appends `AND favourite = 1` to the outer WHERE clause (NOT to the FTS5 MATCH, so Porter stemming is unaffected).
+- Journal entries are local-only. `character_journal_entries` is a child table with `ON DELETE CASCADE` from `characters`; deleting a character removes its journal rows automatically. The new `/journal-create` endpoint is called per selected entry from the Push page, sequentially after a successful `/update-info` and before any `/chat-break` call; per-entry failures do not abort the push and each becomes a `JournalEntryStep` in the `PushResult.journal_entries` vector. Validation (length + keyphrase count) runs up-front so an invalid entry never triggers a network call. `PushLogEntry.journal_entry_ids` stores the ids of the entries that were actually sent (used by the Re-push button to pre-select them); the field is `#[serde(default)]` so old log rows deserialize as `None`. Share images never include journal entries (`notes_are_not_in_share_code` is the precedent for this exclusion).
 
 ## Manual end-to-end checklist (matches the README)
 
@@ -120,6 +123,14 @@ src-tauri/src/
 22. Toggle "Favourites only" → only pinned rows render in both browse and search modes.
 23. Pin a message, run Sync → pin state survives.
 24. Delete the target → pinned messages are gone (FK CASCADE applies).
+25. Open a character with 3 journal entries → Push page lists them with checkboxes. Select 2, push → `/journal-create` is called twice in id order; both 200 → result shows two green `journal:` rows.
+26. Re-push a log entry that originally pushed 2 journal entries → Push page pre-selects those 2 ids via the URL param.
+27. Push a character with chat-break enabled and journal entries selected → order on the server is `update-info` → `journal-create ×N` → `chat-break`; all visible in the result block.
+28. Push with `update-info` failing (network off) → no journal calls fire; only `update-info` is shown in the result, error toast appears.
+29. Editor: try to save an entry with 9 keyphrases → error toast "at most 8 keyphrases"; counter shows `8/8` and the 9th is rejected client-side as well.
+30. Editor: save an entry with 501 characters → error toast "entry must be 500 characters or fewer".
+31. Export a character with 5 journal entries as a share image → reset app data → drop the image → character reappears with 0 journal entries (documented local-only behavior).
+32. Delete a character with journal entries → entries are gone (FK CASCADE).
 
 ## Troubleshooting
 

@@ -60,6 +60,15 @@ export function HistoryDetailPage() {
             )}{' '}
           </span>{' '}
         </div>{' '}
+        {e.journal_entry_ids && e.journal_entry_ids.length > 0 && (
+          <div className="detail-row">
+            <span className="detail-label">Journal entries</span>
+            <span className="detail-value">
+              {e.journal_entry_ids.length} (
+              {e.journal_entry_ids.map((id: string) => id.slice(0, 8)).join(', ')})
+            </span>
+          </div>
+        )}{' '}
       </div>{' '}
       <div className="card">
         {' '}

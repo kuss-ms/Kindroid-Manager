@@ -5,6 +5,7 @@
 pub mod characters;
 pub mod chat_history;
 pub mod history;
+pub mod journal;
 pub mod push;
 pub mod settings;
 pub mod share_code;

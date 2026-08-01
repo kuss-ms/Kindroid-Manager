@@ -18,6 +18,8 @@ pub struct PushLogEntry {
     pub update_info_body: String,
     pub chat_break_status: Option<u16>,
     pub chat_break_body: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub journal_entry_ids: Option<Vec<String>>,
 }
 
 pub const MAX_LOG_BODY_BYTES: usize = 4 * 1024;

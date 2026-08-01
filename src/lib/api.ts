@@ -10,8 +10,11 @@ import type {
   PushResult,
   CreateNewKinResult,
   SettingsDto,
+  AiSettingsDto,
+  AiChatCompletionResponse,
   Target,
   TestTokenResult,
+  TestAiResult,
   Uuid,
 } from './types';
 
@@ -109,6 +112,23 @@ export const api = {
   setToken: (token: string) => invoke<void>('set_token', { token }),
   clearToken: () => invoke<void>('clear_token'),
   testToken: () => invoke<TestTokenResult>('test_token'),
+
+  // AI provider
+  getAiSettings: () => invoke<AiSettingsDto>('get_ai_settings'),
+  setAiSettings: (input: { base_url: string; model: string }) =>
+    invoke<void>('set_ai_settings', { input }),
+  setAiToken: (token: string) => invoke<void>('set_ai_token', { token }),
+  clearAiToken: () => invoke<void>('clear_ai_token'),
+  testAiConnection: (input: { base_url: string; model: string; bearer_token: string | null }) =>
+    invoke<TestAiResult>('test_ai_connection', { input }),
+  aiChatCompletion: (input: {
+    base_url: string;
+    model: string;
+    system: string | null;
+    user: string;
+    json_mode: boolean;
+    bearer_token: string | null;
+  }) => invoke<AiChatCompletionResponse>('ai_chat_completion', { input }),
 
   // Chat history
   listChatMessages: (

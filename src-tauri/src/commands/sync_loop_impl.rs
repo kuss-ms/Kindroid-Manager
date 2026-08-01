@@ -12,7 +12,7 @@ use crate::commands::sync_registry::SyncRegistry;
 use crate::domain::chat_message::{ChatMessage, ChatSyncState, SyncStatusKind};
 use crate::error::AppError;
 use crate::kindroid::{ChatMessagesPage, KindroidClient, KindroidError, ListChatMessagesRequest};
-use crate::security::secrets::Secrets;
+use crate::security::secrets::{Secrets, API_TOKEN_KEY};
 use crate::storage::Repository;
 
 pub const SYNC_INTERVAL: Duration = Duration::from_secs(120);
@@ -244,7 +244,7 @@ async fn drain_pages(
         let start_after =
             compute_local_rewind(&**repo, ai_id, state.full_sync_done, prev_cursor).await?;
 
-        let token = match Secrets::get() {
+        let token = match Secrets::get(API_TOKEN_KEY) {
             Ok(t) => t,
             Err(_) => {
                 finalize_error(repo, app, ai_id, "API token cleared", state.total, *stats).await;

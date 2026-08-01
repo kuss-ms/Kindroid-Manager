@@ -15,13 +15,14 @@ use thiserror::Error;
 // surfaced with the diagnostic.
 #[cfg(test)]
 pub const SERVICE: &str = "KindroidManager-test";
-#[cfg(test)]
-pub const USER: &str = "api_token-test";
 
 #[cfg(all(not(test), not(target_os = "android")))]
 pub const SERVICE: &str = "KindroidManager";
-#[cfg(all(not(test), not(target_os = "android")))]
-pub const USER: &str = "api_token";
+
+/// Key id for the Kindroid API token (existing pre-AI token).
+pub const API_TOKEN_KEY: &str = "api_token";
+/// Key id for the OpenAI-compatible AI provider token (new in this slice).
+pub const AI_TOKEN_KEY: &str = "ai_api_token";
 
 // Android has no `keyring` backend, so the token is stored as a plaintext
 // file under the app's data dir. The app sandbox protects against
@@ -50,28 +51,28 @@ pub struct Secrets;
 
 #[cfg(not(target_os = "android"))]
 impl Secrets {
-    fn entry() -> Result<Entry, SecretStoreError> {
-        Entry::new(SERVICE, USER).map_err(map_err)
+    fn entry(key_id: &str) -> Result<Entry, SecretStoreError> {
+        Entry::new(SERVICE, key_id).map_err(map_err)
     }
 
-    pub fn set(token: &str) -> Result<(), SecretStoreError> {
-        Self::entry()?.set_password(token).map_err(map_err)
+    pub fn set(key_id: &str, token: &str) -> Result<(), SecretStoreError> {
+        Self::entry(key_id)?.set_password(token).map_err(map_err)
     }
 
-    pub fn exists() -> bool {
-        Self::entry()
+    pub fn exists(key_id: &str) -> bool {
+        Self::entry(key_id)
             .ok()
             .and_then(|e| e.get_password().ok())
             .is_some()
     }
 
-    pub fn get() -> Result<String, SecretStoreError> {
-        let entry = Self::entry()?;
+    pub fn get(key_id: &str) -> Result<String, SecretStoreError> {
+        let entry = Self::entry(key_id)?;
         entry.get_password().map_err(map_err)
     }
 
-    pub fn clear() -> Result<(), SecretStoreError> {
-        let entry = Self::entry()?;
+    pub fn clear(key_id: &str) -> Result<(), SecretStoreError> {
+        let entry = Self::entry(key_id)?;
         match entry.delete_credential() {
             Ok(()) => Ok(()),
             Err(keyring::Error::NoEntry) => Ok(()),
@@ -88,30 +89,30 @@ impl Secrets {
         let _ = ANDROID_DATA_DIR.set(data_dir);
     }
 
-    fn path() -> Result<PathBuf, SecretStoreError> {
+    fn path(key_id: &str) -> Result<PathBuf, SecretStoreError> {
         let dir = ANDROID_DATA_DIR
             .get()
             .ok_or(SecretStoreError::Unavailable)?;
-        Ok(dir.join("token"))
+        Ok(dir.join(key_id))
     }
 
-    pub fn set(token: &str) -> Result<(), SecretStoreError> {
-        write_token_file(&Self::path()?, token)
+    pub fn set(key_id: &str, token: &str) -> Result<(), SecretStoreError> {
+        write_token_file(&Self::path(key_id)?, token)
     }
 
-    pub fn exists() -> bool {
-        Self::path()
+    pub fn exists(key_id: &str) -> bool {
+        Self::path(key_id)
             .ok()
             .and_then(|p| std::fs::read(&p).ok())
             .is_some()
     }
 
-    pub fn get() -> Result<String, SecretStoreError> {
-        read_token_file(&Self::path()?)?.ok_or(SecretStoreError::NotFound)
+    pub fn get(key_id: &str) -> Result<String, SecretStoreError> {
+        read_token_file(&Self::path(key_id)?)?.ok_or(SecretStoreError::NotFound)
     }
 
-    pub fn clear() -> Result<(), SecretStoreError> {
-        delete_token_file(&Self::path()?)
+    pub fn clear(key_id: &str) -> Result<(), SecretStoreError> {
+        delete_token_file(&Self::path(key_id)?)
     }
 }
 

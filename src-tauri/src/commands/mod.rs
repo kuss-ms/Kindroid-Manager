@@ -2,6 +2,7 @@
 // builds they're "unused" but still part of the public API surface.
 #![allow(dead_code)]
 
+pub mod ai;
 pub mod characters;
 pub mod chat_history;
 pub mod history;

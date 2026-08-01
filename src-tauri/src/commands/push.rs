@@ -13,7 +13,7 @@ use crate::kindroid::{
     ChatBreakRequest, CreateNewAiRequest, HttpResponse, JournalCreateRequest, KindroidClient,
     KindroidError, UpdateInfoRequest,
 };
-use crate::security::secrets::Secrets;
+use crate::security::secrets::{Secrets, API_TOKEN_KEY};
 use crate::storage::Repository;
 
 pub const SETTING_BASE_URL: &str = "base_url";
@@ -119,7 +119,7 @@ pub async fn do_create_new_kin(
         .get_setting(SETTING_BASE_URL)
         .await?
         .unwrap_or_else(|| DEFAULT_BASE_URL.to_string());
-    let token = Secrets::get()?;
+    let token = Secrets::get(API_TOKEN_KEY)?;
     let create_response = client
         .create_new_ai(
             &token,
@@ -281,7 +281,7 @@ pub async fn do_push(
         .get_setting(SETTING_BASE_URL)
         .await?
         .unwrap_or_else(|| DEFAULT_BASE_URL.to_string());
-    let token = Secrets::get()?;
+    let token = Secrets::get(API_TOKEN_KEY)?;
 
     for f in &req.fields {
         if !Character::PERSONA_FIELDS.iter().any(|p| *p == f) {
@@ -881,7 +881,11 @@ mod tests {
     }
 
     fn set_token() {
-        crate::security::secrets::Secrets::set("test-token").unwrap();
+        crate::security::secrets::Secrets::set(
+            crate::security::secrets::API_TOKEN_KEY,
+            "test-token",
+        )
+        .unwrap();
     }
 
     #[tokio::test]

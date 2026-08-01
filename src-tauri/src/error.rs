@@ -1,6 +1,7 @@
 use serde::{Deserialize, Serialize};
 use thiserror::Error;
 
+use crate::kindroid::ai::AiError;
 use crate::kindroid::KindroidError;
 use crate::security::secrets::SecretStoreError;
 use crate::storage::StorageError;
@@ -32,6 +33,8 @@ pub enum AppError {
     Secret(#[from] SecretStoreError),
     #[error(transparent)]
     Kindroid(#[from] KindroidError),
+    #[error(transparent)]
+    Ai(#[from] AiError),
 }
 
 impl AppError {

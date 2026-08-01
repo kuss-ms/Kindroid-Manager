@@ -109,6 +109,23 @@ export interface TestTokenResult {
   status: number;
 }
 
+export interface AiSettingsDto {
+  base_url: string;
+  model: string;
+  token_configured: boolean;
+}
+
+export interface TestAiResult {
+  ok: boolean;
+  status: number;
+  message: string;
+}
+
+export interface AiChatCompletionResponse {
+  content: string;
+  model: string | null;
+}
+
 export interface ChatMessage {
   id: Uuid;
   ai_id: string;

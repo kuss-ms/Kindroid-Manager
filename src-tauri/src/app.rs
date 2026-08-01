@@ -4,6 +4,7 @@ use tauri::Manager;
 
 use crate::commands::sync_registry::SyncRegistry;
 use crate::commands::tauri_wrappers;
+use crate::kindroid::ai::{AiClient, HttpAiClient};
 use crate::kindroid::http::HttpKindroidClient;
 use crate::kindroid::KindroidClient;
 use crate::storage::sqlite::SqliteRepository;
@@ -22,8 +23,10 @@ pub fn run() {
             let repo: Arc<dyn Repository> =
                 Arc::new(SqliteRepository::open(&db_path).expect("open sqlite"));
             let client: Arc<dyn KindroidClient> = Arc::new(HttpKindroidClient::new());
+            let ai_client: Arc<dyn AiClient> = Arc::new(HttpAiClient::new());
             app.manage(repo);
             app.manage(client);
+            app.manage(ai_client);
             app.manage(Arc::new(SyncRegistry::new()));
             Ok(())
         })
@@ -63,6 +66,12 @@ pub fn run() {
             tauri_wrappers::list_journal_entries,
             tauri_wrappers::save_journal_entry,
             tauri_wrappers::delete_journal_entry,
+            tauri_wrappers::get_ai_settings,
+            tauri_wrappers::set_ai_settings,
+            tauri_wrappers::set_ai_token,
+            tauri_wrappers::clear_ai_token,
+            tauri_wrappers::test_ai_connection,
+            tauri_wrappers::ai_chat_completion,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

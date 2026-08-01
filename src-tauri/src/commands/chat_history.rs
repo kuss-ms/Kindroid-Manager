@@ -4,7 +4,7 @@ use crate::commands::push::{DEFAULT_BASE_URL, SETTING_BASE_URL_PUBLIC as SETTING
 use crate::domain::chat_message::{ChatMessage, ChatSyncState};
 use crate::error::AppError;
 use crate::kindroid::{KindroidClient, ToggleMessagePinRequest};
-use crate::security::secrets::{SecretStoreError, Secrets};
+use crate::security::secrets::{SecretStoreError, Secrets, API_TOKEN_KEY};
 use crate::storage::Repository;
 
 use super::sync_loop::escape_fts_query;
@@ -55,7 +55,7 @@ pub async fn toggle_chat_message_favourite(
     if trimmed_msg.is_empty() {
         return Err(AppError::invalid("kindroid_msg_id is required"));
     }
-    let token = Secrets::get().map_err(map_secret_err)?;
+    let token = Secrets::get(API_TOKEN_KEY).map_err(map_secret_err)?;
     let base_url = repo
         .get_setting(SETTING_BASE_URL)
         .await?
@@ -139,7 +139,7 @@ pub async fn start_chat_sync(
         )));
     }
     // Ensure a token is configured.
-    if !crate::security::secrets::Secrets::exists() {
+    if !crate::security::secrets::Secrets::exists(API_TOKEN_KEY) {
         return Err(AppError::TokenMissing);
     }
 

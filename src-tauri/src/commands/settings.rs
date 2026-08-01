@@ -3,7 +3,7 @@ use serde::{Deserialize, Serialize};
 use crate::commands::push::{DEFAULT_BASE_URL, SETTING_BASE_URL_PUBLIC as SETTING_BASE_URL};
 use crate::error::AppError;
 use crate::kindroid::{HttpResponse, KindroidClient, UpdateInfoRequest};
-use crate::security::secrets::{SecretStoreError, Secrets};
+use crate::security::secrets::{SecretStoreError, Secrets, API_TOKEN_KEY};
 use crate::storage::Repository;
 
 #[derive(Debug, Serialize, Deserialize)]
@@ -19,7 +19,7 @@ pub async fn get_settings(repo: std::sync::Arc<dyn Repository>) -> Result<Settin
         .unwrap_or_else(|| DEFAULT_BASE_URL.to_string());
     Ok(SettingsDto {
         base_url,
-        token_configured: Secrets::exists(),
+        token_configured: Secrets::exists(API_TOKEN_KEY),
     })
 }
 
@@ -47,7 +47,7 @@ pub struct TokenStatus {
 
 pub fn token_status() -> TokenStatus {
     TokenStatus {
-        configured: Secrets::exists(),
+        configured: Secrets::exists(API_TOKEN_KEY),
     }
 }
 
@@ -56,12 +56,12 @@ pub fn set_token(token: String) -> Result<(), AppError> {
     if trimmed.is_empty() {
         return Err(AppError::invalid("token is required"));
     }
-    Secrets::set(trimmed).map_err(map_secret_err)?;
+    Secrets::set(API_TOKEN_KEY, trimmed).map_err(map_secret_err)?;
     Ok(())
 }
 
 pub fn clear_token() -> Result<(), AppError> {
-    Secrets::clear().map_err(map_secret_err)?;
+    Secrets::clear(API_TOKEN_KEY).map_err(map_secret_err)?;
     Ok(())
 }
 
@@ -79,7 +79,7 @@ pub async fn test_token(
     repo: std::sync::Arc<dyn Repository>,
     client: std::sync::Arc<dyn KindroidClient>,
 ) -> Result<TestTokenResult, AppError> {
-    let token = Secrets::get().map_err(map_secret_err)?;
+    let token = Secrets::get(API_TOKEN_KEY).map_err(map_secret_err)?;
     let base_url = repo
         .get_setting(SETTING_BASE_URL)
         .await?

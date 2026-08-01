@@ -25,6 +25,17 @@ export const targetInputSchema = z.object({
 });
 export type TargetFormValues = z.infer<typeof targetInputSchema>;
 export const settingsSchema = z.object({ base_url: z.string().trim().url('Must be a valid URL') });
+export const aiSettingsSchema = z.object({
+  base_url: z
+    .string()
+    .trim()
+    .url('Must be a valid URL')
+    .refine((u) => /^https?:\/\//.test(u), {
+      message: 'must start with http:// or https://',
+    }),
+  model: z.string(),
+});
+export type AiSettingsForm = z.infer<typeof aiSettingsSchema>;
 export const shareCodeSchema = z.object({
   code: z.string().trim().min(1, 'Share code is required'),
 });

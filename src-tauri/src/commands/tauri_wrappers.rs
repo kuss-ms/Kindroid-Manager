@@ -8,12 +8,13 @@
 #[cfg(not(test))]
 mod inner {
     use crate::commands::{
-        characters, chat_history, history, journal, push, settings, share_code, targets,
+        ai, characters, chat_history, history, journal, push, settings, share_code, targets,
     };
     use tauri::State;
 
     type Repo = std::sync::Arc<dyn crate::storage::Repository>;
     type Client = std::sync::Arc<dyn crate::kindroid::KindroidClient>;
+    type Ai = std::sync::Arc<dyn crate::kindroid::ai::AiClient>;
 
     #[tauri::command]
     pub async fn list_characters(
@@ -330,6 +331,73 @@ mod inner {
         entry_id: String,
     ) -> Result<(), crate::error::AppError> {
         journal::delete_journal_entry(repo.inner().clone(), character_id, entry_id).await
+    }
+
+    #[tauri::command]
+    pub async fn get_ai_settings(
+        repo: State<'_, Repo>,
+    ) -> Result<ai::AiSettingsDto, crate::error::AppError> {
+        ai::get_ai_settings(repo.inner().clone()).await
+    }
+
+    #[tauri::command]
+    pub async fn set_ai_settings(
+        repo: State<'_, Repo>,
+        input: ai::SetAiSettingsInput,
+    ) -> Result<(), crate::error::AppError> {
+        ai::set_ai_settings(repo.inner().clone(), input).await
+    }
+
+    #[tauri::command]
+    pub fn set_ai_token(token: String) -> Result<(), crate::error::AppError> {
+        ai::set_ai_token(token)
+    }
+
+    #[tauri::command]
+    pub fn clear_ai_token() -> Result<(), crate::error::AppError> {
+        ai::clear_ai_token()
+    }
+
+    #[tauri::command]
+    pub async fn test_ai_connection(
+        client: State<'_, Ai>,
+        base_url: String,
+        model: String,
+        bearer_token: Option<String>,
+    ) -> Result<ai::TestAiResult, crate::error::AppError> {
+        ai::test_ai_connection(
+            client.inner().clone(),
+            ai::TestAiRequest {
+                base_url,
+                model,
+                bearer_token,
+            },
+        )
+        .await
+    }
+
+    #[tauri::command]
+    pub async fn ai_chat_completion(
+        client: State<'_, Ai>,
+        base_url: String,
+        model: String,
+        system: Option<String>,
+        user: String,
+        json_mode: bool,
+        bearer_token: Option<String>,
+    ) -> Result<ai::AiChatCompletionResponse, crate::error::AppError> {
+        ai::ai_chat_completion(
+            client.inner().clone(),
+            ai::AiChatCompletionRequest {
+                base_url,
+                model,
+                system,
+                user,
+                json_mode,
+                bearer_token,
+            },
+        )
+        .await
     }
 }
 

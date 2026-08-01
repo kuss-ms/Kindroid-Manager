@@ -4,6 +4,8 @@ use thiserror::Error;
 
 pub mod http;
 
+pub mod ai;
+
 pub use http::KindroidClient;
 
 #[derive(Debug, Clone)]

@@ -1,7 +1,11 @@
 node_modules
 dist
 src-tauri/target
-src-tauri/gen/schemas
+# Tauri-generated scaffolding. The android/ subfolder is committed so
+# the team does not need to re-run `cargo tauri android init`. See
+# src-tauri/gen/android/.gitignore for per-folder build-artifact rules.
+src-tauri/gen/*
+!src-tauri/gen/android
 *.db
 *.db-wal
 *.db-shm

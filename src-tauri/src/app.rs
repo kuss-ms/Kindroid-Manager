@@ -36,6 +36,7 @@ pub fn run() {
             tauri_wrappers::save_target,
             tauri_wrappers::delete_target,
             tauri_wrappers::push_to_target,
+            tauri_wrappers::push_create_new_kin,
             tauri_wrappers::list_push_history,
             tauri_wrappers::get_push_log,
             tauri_wrappers::import_share_image,

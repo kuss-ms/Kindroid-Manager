@@ -2,7 +2,7 @@ import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { api, errorMessage } from '../lib/api';
-import type { Character } from '../lib/types';
+import type { Character, CreateNewKinResult } from '../lib/types';
 import { ConfirmDialog } from '../components/ConfirmDialog';
 import { toast } from '../components/Toaster';
 export function CharactersPage() {
@@ -10,6 +10,7 @@ export function CharactersPage() {
   const navigate = useNavigate();
   const [search, setSearch] = useState('');
   const [deleteId, setDeleteId] = useState<string | null>(null);
+  const [createId, setCreateId] = useState<string | null>(null);
   const characters = useQuery<Character[]>({
     queryKey: ['characters'],
     queryFn: api.listCharacters,
@@ -27,6 +28,22 @@ export function CharactersPage() {
     onSuccess: (c) => {
       queryClient.invalidateQueries({ queryKey: ['characters'] });
       toast('success', `Duplicated as "${c.name}"`);
+    },
+    onError: (e) => toast('error', errorMessage(e)),
+  });
+
+  const createNew = useMutation<CreateNewKinResult, unknown, string>({
+    mutationFn: (id) => api.pushCreateNewKin(id),
+    onSuccess: (result) => {
+      if (!result.create_new_ai.ok) {
+        toast('error', result.create_new_ai.message);
+        return;
+      }
+      queryClient.invalidateQueries({ queryKey: ['targets'] });
+      queryClient.invalidateQueries({ queryKey: ['push-history'] });
+      queryClient.invalidateQueries({ queryKey: ['characters'] });
+      toast('success', `New Kin created with ai_id ${result.target.ai_id}`);
+      navigate(`/history/${result.log_id}`);
     },
     onError: (e) => toast('error', errorMessage(e)),
   });
@@ -124,6 +141,27 @@ export function CharactersPage() {
                     {' '}
                     Duplicate{' '}
                   </button>{' '}
+                  <button
+                    className="btn btn-sm"
+                    onClick={() => {
+                      if (!c.ai_name?.trim()) {
+                        toast('error', 'ai_name is required to create a new Kin');
+                        return;
+                      }
+                      setCreateId(c.id);
+                    }}
+                    disabled={createNew.isPending && createNew.variables === c.id}
+                    title={
+                      c.ai_name?.trim()
+                        ? 'Create a new Kin from this character'
+                        : 'Set an AI name before creating a new Kin'
+                    }
+                  >
+                    {' '}
+                    {createNew.isPending && createNew.variables === c.id
+                      ? 'Pushing…'
+                      : 'Push as new Kin'}{' '}
+                  </button>{' '}
                   <button className="btn btn-sm btn-danger" onClick={() => setDeleteId(c.id)}>
                     {' '}
                     Delete{' '}
@@ -134,6 +172,17 @@ export function CharactersPage() {
           </div>{' '}
         </div>
       )}{' '}
+      <ConfirmDialog
+        open={!!createId}
+        title="Push as new Kin?"
+        body={`Create a new Kin on Kindroid from "${list.find((c) => c.id === createId)?.name ?? ''}"? This will push all fields and journal entries, then add the new AI as a local target.`}
+        confirmLabel="Create"
+        onConfirm={() => {
+          if (createId) createNew.mutate(createId);
+          setCreateId(null);
+        }}
+        onCancel={() => setCreateId(null)}
+      />{' '}
       <ConfirmDialog
         open={!!deleteId}
         title="Delete character?"

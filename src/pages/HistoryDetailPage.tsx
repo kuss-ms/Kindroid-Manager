@@ -70,6 +70,16 @@ export function HistoryDetailPage() {
           </div>
         )}{' '}
       </div>{' '}
+      {e.create_new_ai_status !== undefined && (
+        <div className="card">
+          {' '}
+          <h3>create-new-ai response</h3>{' '}
+          <p className="muted" style={{ fontSize: 12 }}>
+            Status: {e.create_new_ai_status}
+          </p>{' '}
+          <pre>{e.create_new_ai_body ?? ''}</pre>{' '}
+        </div>
+      )}{' '}
       <div className="card">
         {' '}
         <h3>update-info response</h3>{' '}

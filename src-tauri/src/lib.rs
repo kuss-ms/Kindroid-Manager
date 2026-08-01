@@ -17,8 +17,8 @@ pub use domain::share_code::{
     decode as share_code_decode, encode as share_code_encode, PartialCharacter, ShareCodeError,
 };
 pub use kindroid::{
-    ChatBreakRequest, HttpResponse, JournalCreateRequest, KindroidClient, KindroidError,
-    UpdateInfoRequest,
+    ChatBreakRequest, CreateNewAiRequest, HttpResponse, JournalCreateRequest, KindroidClient,
+    KindroidError, UpdateInfoRequest,
 };
 pub use storage::sqlite::SqliteRepository;
 pub use storage::{Repository, StorageError};

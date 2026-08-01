@@ -7,6 +7,11 @@ pub mod http;
 pub use http::KindroidClient;
 
 #[derive(Debug, Clone)]
+pub struct CreateNewAiRequest {
+    pub body: serde_json::Value,
+}
+
+#[derive(Debug, Clone)]
 pub struct UpdateInfoRequest {
     /// Free-form JSON object containing `ai_id` + selected persona fields.
     pub body: serde_json::Value,

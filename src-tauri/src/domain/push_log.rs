@@ -16,6 +16,10 @@ pub struct PushLogEntry {
     pub wipe_cascaded: Option<bool>,
     pub update_info_status: u16,
     pub update_info_body: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub create_new_ai_status: Option<u16>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub create_new_ai_body: Option<String>,
     pub chat_break_status: Option<u16>,
     pub chat_break_body: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]

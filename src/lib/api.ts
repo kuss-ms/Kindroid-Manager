@@ -8,6 +8,7 @@ import type {
   PushLogEntry,
   PushRequest,
   PushResult,
+  CreateNewKinResult,
   SettingsDto,
   Target,
   TestTokenResult,
@@ -85,6 +86,8 @@ export const api = {
 
   // Push
   pushToTarget: (req: PushRequest) => invoke<PushResult>('push_to_target', { req }),
+  pushCreateNewKin: (characterId: Uuid) =>
+    invoke<CreateNewKinResult>('push_create_new_kin', { characterId }),
 
   // History
   listPushHistory: (limit: number, offset: number) =>

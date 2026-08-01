@@ -68,6 +68,15 @@ impl From<StorageError> for AppError {
 }
 
 #[derive(Debug, Serialize, Deserialize)]
+pub struct CreateNewKinResult {
+    pub create_new_ai: StepResult,
+    pub update_info: Option<StepResult>,
+    pub journal_entries: Vec<JournalEntryStep>,
+    pub log_id: uuid::Uuid,
+    pub target: crate::domain::target::Target,
+}
+
+#[derive(Debug, Serialize, Deserialize)]
 pub struct PushResult {
     pub update_info: StepResult,
     /// Per-entry journal-create result. Empty when the step was skipped.

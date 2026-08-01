@@ -30,7 +30,10 @@ export function HistoryPage() {
             <tr>
               {' '}
               <th>When</th> <th>Character</th> <th>Target</th> <th>Fields</th> <th>Chat break</th>{' '}
-              <th>update-info</th> <th></th>{' '}
+              <th title="create-new-ai for new Kin pushes; update-info for existing Kin pushes">
+                Status
+              </th>{' '}
+              <th></th>{' '}
             </tr>{' '}
           </thead>{' '}
           <tbody>
@@ -51,12 +54,23 @@ export function HistoryPage() {
                 </td>{' '}
                 <td>
                   {' '}
-                  <span
-                    className={`badge ${row.update_info_status < 300 ? 'badge-success' : 'badge-danger'}`}
-                  >
-                    {' '}
-                    {row.update_info_status}{' '}
-                  </span>{' '}
+                  {row.create_new_ai_status !== undefined ? (
+                    <span
+                      className={`badge ${row.create_new_ai_status < 300 ? 'badge-success' : 'badge-danger'}`}
+                      title="create-new-ai response status"
+                    >
+                      {' '}
+                      create-new-ai {row.create_new_ai_status}{' '}
+                    </span>
+                  ) : (
+                    <span
+                      className={`badge ${row.update_info_status < 300 ? 'badge-success' : 'badge-danger'}`}
+                      title="update-info response status"
+                    >
+                      {' '}
+                      update-info {row.update_info_status}{' '}
+                    </span>
+                  )}{' '}
                 </td>{' '}
                 <td>
                   {' '}

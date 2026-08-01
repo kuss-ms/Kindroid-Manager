@@ -95,6 +95,20 @@ mod inner {
     }
 
     #[tauri::command]
+    pub async fn push_create_new_kin(
+        repo: State<'_, Repo>,
+        client: State<'_, Client>,
+        character_id: uuid::Uuid,
+    ) -> Result<crate::error::CreateNewKinResult, crate::error::AppError> {
+        push::push_create_new_kin(
+            repo.inner().clone(),
+            client.inner().clone(),
+            push::CreateNewKinRequest { character_id },
+        )
+        .await
+    }
+
+    #[tauri::command]
     pub async fn list_push_history(
         repo: State<'_, Repo>,
         limit: u32,

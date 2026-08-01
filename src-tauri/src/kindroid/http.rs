@@ -3,13 +3,19 @@ use reqwest::header::{HeaderMap, HeaderValue, AUTHORIZATION, CONTENT_TYPE, RETRY
 use reqwest::Client;
 
 use super::{
-    parse_retry_after, ChatBreakRequest, ChatMessagesPage, HttpResponse, JournalCreateRequest,
-    KindroidError, ListChatMessagesRequest, ToggleMessagePinRequest, ToggleMessagePinResponse,
-    UpdateInfoRequest, REQUEST_TIMEOUT,
+    parse_retry_after, ChatBreakRequest, ChatMessagesPage, CreateNewAiRequest, HttpResponse,
+    JournalCreateRequest, KindroidError, ListChatMessagesRequest, ToggleMessagePinRequest,
+    ToggleMessagePinResponse, UpdateInfoRequest, REQUEST_TIMEOUT,
 };
 
 #[async_trait]
 pub trait KindroidClient: Send + Sync {
+    async fn create_new_ai(
+        &self,
+        token: &str,
+        base_url: &str,
+        req: CreateNewAiRequest,
+    ) -> Result<HttpResponse, KindroidError>;
     async fn update_info(
         &self,
         token: &str,
@@ -157,6 +163,16 @@ fn map_error(status: u16, headers: &HeaderMap, body: String) -> KindroidError {
 
 #[async_trait]
 impl KindroidClient for HttpKindroidClient {
+    async fn create_new_ai(
+        &self,
+        token: &str,
+        base_url: &str,
+        req: CreateNewAiRequest,
+    ) -> Result<HttpResponse, KindroidError> {
+        let url = format!("{}/create-new-ai", base_url.trim_end_matches('/'));
+        self.post_json(&url, token, req.body).await
+    }
+
     async fn update_info(
         &self,
         token: &str,
@@ -294,6 +310,118 @@ mod tests {
     use std::time::Duration;
     use wiremock::matchers::{header, method, path, query_param};
     use wiremock::{Mock, MockServer, ResponseTemplate};
+
+    #[tokio::test]
+    async fn create_new_ai_200_returns_ai_id_in_body() {
+        let server = MockServer::start().await;
+        Mock::given(method("POST"))
+            .and(path("/create-new-ai"))
+            .respond_with(ResponseTemplate::new(200).set_body_string("ai_NEW_OK"))
+            .mount(&server)
+            .await;
+        let c = HttpKindroidClient::new();
+        let r = c
+            .create_new_ai(
+                "t",
+                &server.uri(),
+                CreateNewAiRequest {
+                    body: json!({"ai_name":"Aria"}),
+                },
+            )
+            .await
+            .unwrap();
+        assert_eq!(r.status, 200);
+        assert_eq!(r.body, "ai_NEW_OK");
+    }
+
+    #[tokio::test]
+    async fn create_new_ai_sends_authorization_header() {
+        let server = MockServer::start().await;
+        Mock::given(method("POST"))
+            .and(path("/create-new-ai"))
+            .and(header("Authorization", "Bearer t"))
+            .respond_with(ResponseTemplate::new(200).set_body_string("ai_NEW_OK"))
+            .mount(&server)
+            .await;
+        let c = HttpKindroidClient::new();
+        let r = c
+            .create_new_ai(
+                "t",
+                &server.uri(),
+                CreateNewAiRequest {
+                    body: json!({"ai_name":"Aria"}),
+                },
+            )
+            .await
+            .unwrap();
+        assert!(r.ok);
+    }
+
+    #[tokio::test]
+    async fn create_new_ai_400_maps_to_bad_request() {
+        let server = MockServer::start().await;
+        Mock::given(method("POST"))
+            .and(path("/create-new-ai"))
+            .respond_with(ResponseTemplate::new(400).set_body_string("bad"))
+            .mount(&server)
+            .await;
+        let c = HttpKindroidClient::new();
+        let err = c
+            .create_new_ai(
+                "t",
+                &server.uri(),
+                CreateNewAiRequest {
+                    body: json!({"ai_name":""}),
+                },
+            )
+            .await
+            .unwrap_err();
+        assert!(matches!(err, KindroidError::BadRequest { status: 400, .. }));
+    }
+
+    #[tokio::test]
+    async fn create_new_ai_401_maps_to_auth() {
+        let server = MockServer::start().await;
+        Mock::given(method("POST"))
+            .and(path("/create-new-ai"))
+            .respond_with(ResponseTemplate::new(401).set_body_string("nope"))
+            .mount(&server)
+            .await;
+        let c = HttpKindroidClient::new();
+        let err = c
+            .create_new_ai(
+                "t",
+                &server.uri(),
+                CreateNewAiRequest {
+                    body: json!({"ai_name":"Aria"}),
+                },
+            )
+            .await
+            .unwrap_err();
+        assert!(matches!(err, KindroidError::Auth { status: 401, .. }));
+    }
+
+    #[tokio::test]
+    async fn create_new_ai_500_maps_to_server() {
+        let server = MockServer::start().await;
+        Mock::given(method("POST"))
+            .and(path("/create-new-ai"))
+            .respond_with(ResponseTemplate::new(500).set_body_string("boom"))
+            .mount(&server)
+            .await;
+        let c = HttpKindroidClient::new();
+        let err = c
+            .create_new_ai(
+                "t",
+                &server.uri(),
+                CreateNewAiRequest {
+                    body: json!({"ai_name":"Aria"}),
+                },
+            )
+            .await
+            .unwrap_err();
+        assert!(matches!(err, KindroidError::Server { status: 500, .. }));
+    }
 
     #[tokio::test]
     async fn update_info_200() {

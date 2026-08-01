@@ -46,7 +46,7 @@ src-tauri/src/
   domain/
     character.rs                 Character struct (incl. cover_image) + PERSONA_FIELDS
     target.rs                    Target struct (ai_id, label)
-    push_log.rs                  PushLogEntry + MAX_LOG_BODY_BYTES (+ journal_entry_ids)
+    push_log.rs                  PushLogEntry + MAX_LOG_BODY_BYTES (+ journal_entry_ids, create_new_ai_status/body)
     share_code.rs                PartialCharacter + text encode/decode (kept for tests)
     image_share.rs               PNG tEXt share-image encode/decode (ComfyUI-style)
     chat_message.rs              ChatMessage + ChatSyncState + SyncStatusKind
@@ -62,7 +62,7 @@ src-tauri/src/
   commands/
     characters.rs                save / get / list / delete / duplicate logic
     targets.rs                   target CRUD logic
-    push.rs                      do_push flow (update-info → journal-create → chat-break → log) + FakeRepo test template
+    push.rs                      do_push flow (update-info → journal-create → chat-break → log) + do_create_new_kin (create-new-ai → update-info → journal-create → log + target upsert) + FakeRepo test template
     share_code.rs                import_share_image / export_share_image / set_character_image
     settings.rs                  base_url + token_status / set_token / clear_token / test_token
     history.rs                   push-log read API
@@ -96,6 +96,7 @@ src-tauri/src/
 - Background-task pattern: any long-running loop is a free `async fn` in a `#[cfg(not(test))]` module. It is spawned via `tauri::async_runtime::spawn` from a thin `#[cfg(not(test))]` entry in `commands::*`. Cancellation goes through a `tokio::sync::watch::Receiver<bool>` paired with a sender held in `SyncRegistry`. The registry is single-slot per the chat-history plan: a second `start()` returns the currently-syncing `ai_id`, and the UI must surface this via `AppError::SyncConflict`. The loop **must** call `SyncRegistry::release()` on every exit path (success, error, cancel, token-cleared) so a future sync can take the slot. Use the `run_loop_inner` + outer `run_sync_loop` wrapper pattern from `commands/sync_loop_impl.rs` so the release is guaranteed even on early return.
 - Chat message favourite (pin): `chat_messages.favourite` is the local source of truth — the Kindroid `get-chat-messages` endpoint does not return `isPinned`, so server-side pins set in other clients are invisible until the user re-toggles here. The column **survives** `upsert_chat_messages` because `favourite` is included in the INSERT column list (so the inserted value is recorded) but omitted from both the UPDATE SET list and the `IS NOT` WHERE checks (so subsequent re-fetches do not clobber it). The `commands::chat_history::toggle_chat_message_favourite` command calls `POST /toggle-message-pin` and then reconciles the local row to the server's canonical `isPinned` response — the optimistic UI flip is rolled back on failure. The read API (`list_chat_messages` / `search_chat`) accepts a `favourites_only` flag that appends `AND favourite = 1` to the outer WHERE clause (NOT to the FTS5 MATCH, so Porter stemming is unaffected).
 - Journal entries are local-only. `character_journal_entries` is a child table with `ON DELETE CASCADE` from `characters`; deleting a character removes its journal rows automatically. The new `/journal-create` endpoint is called per selected entry from the Push page, sequentially after a successful `/update-info` and before any `/chat-break` call; per-entry failures do not abort the push and each becomes a `JournalEntryStep` in the `PushResult.journal_entries` vector. Validation (length + keyphrase count) runs up-front so an invalid entry never triggers a network call. `PushLogEntry.journal_entry_ids` stores the ids of the entries that were actually sent (used by the Re-push button to pre-select them); the field is `#[serde(default)]` so old log rows deserialize as `None`. Share images never include journal entries (`notes_are_not_in_share_code` is the precedent for this exclusion).
+- Push as new Kin uses `POST /create-new-ai` with `ai_name`, `ai_gender`, `ai_backstory`, `custom_avatar_description`, `custom_greeting`; then a follow-up `POST /update-info` (always called, with at least `ai_id`) for the remaining persona fields; then `POST /journal-create` for each entry. The new `ai_id` is registered as a local target. `custom_avatar_description` is sent on create-new-ai only. The endpoint's plain-text body is the new `ai_id`; it is trimmed and an empty response is treated as `AppError::Invalid`.
 
 ## Manual end-to-end checklist (matches the README)
 
@@ -131,6 +132,8 @@ src-tauri/src/
 30. Editor: save an entry with 501 characters → error toast "entry must be 500 characters or fewer".
 31. Export a character with 5 journal entries as a share image → reset app data → drop the image → character reappears with 0 journal entries (documented local-only behavior).
 32. Delete a character with journal entries → entries are gone (FK CASCADE).
+33. From Characters overview, click **Push as new Kin** on a character with `ai_name`, no journal entries → confirm; toast shows `New Kin created with ai_id …`; Push History detail lists `create-new-ai response` (status 200) and `update-info response` (status 200); Targets list now contains a row with the new ai_id and the AI name as label.
+34. With no token configured, click **Push as new Kin** → error toast via `AppError::TokenMissing` and the Targets list is unchanged.
 
 ## Troubleshooting
 

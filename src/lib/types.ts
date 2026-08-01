@@ -39,6 +39,8 @@ export interface PushLogEntry {
   wipe_cascaded?: boolean | null;
   update_info_status: number;
   update_info_body: string;
+  create_new_ai_status?: number;
+  create_new_ai_body?: string;
   chat_break_status?: number | null;
   chat_break_body?: string | null;
   journal_entry_ids?: string[] | null;
@@ -77,6 +79,14 @@ export interface PushResult {
   journal_entries: JournalEntryStep[];
   chat_break?: StepResult | null;
   log_id: Uuid;
+}
+
+export interface CreateNewKinResult {
+  create_new_ai: StepResult;
+  update_info?: StepResult | null;
+  journal_entries: JournalEntryStep[];
+  log_id: Uuid;
+  target: Target;
 }
 
 export interface PushRequest {

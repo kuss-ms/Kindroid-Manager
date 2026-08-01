@@ -7,10 +7,11 @@ use crate::domain::character::Character;
 use crate::domain::chat_message::{ChatMessage, ChatSyncState};
 use crate::domain::journal_entry::JournalEntry;
 use crate::domain::push_log::{truncate_body, PushLogEntry};
-use crate::error::{AppError, JournalEntryStep, PushResult, StepResult};
+use crate::domain::target::Target;
+use crate::error::{AppError, CreateNewKinResult, JournalEntryStep, PushResult, StepResult};
 use crate::kindroid::{
-    ChatBreakRequest, HttpResponse, JournalCreateRequest, KindroidClient, KindroidError,
-    UpdateInfoRequest,
+    ChatBreakRequest, CreateNewAiRequest, HttpResponse, JournalCreateRequest, KindroidClient,
+    KindroidError, UpdateInfoRequest,
 };
 use crate::security::secrets::Secrets;
 use crate::storage::Repository;
@@ -18,6 +19,26 @@ use crate::storage::Repository;
 pub const SETTING_BASE_URL: &str = "base_url";
 pub const SETTING_BASE_URL_PUBLIC: &str = SETTING_BASE_URL;
 pub const DEFAULT_BASE_URL: &str = "https://api.kindroid.ai/v1";
+
+pub const CREATE_FIELDS: &[&str] = &[
+    "ai_name",
+    "ai_gender",
+    "ai_backstory",
+    "custom_avatar_description",
+    "custom_greeting",
+];
+pub const UPDATE_FIELDS: &[&str] = &[
+    "ai_memory",
+    "ai_directive",
+    "ai_example_message",
+    "ai_additional_context",
+    "current_scene",
+];
+
+#[derive(Debug, Serialize, Deserialize)]
+pub struct CreateNewKinRequest {
+    pub character_id: Uuid,
+}
 
 #[derive(Debug, Serialize, Deserialize)]
 pub struct PushRequest {
@@ -41,6 +62,212 @@ pub async fn push_to_target(
     req: PushRequest,
 ) -> Result<PushResult, AppError> {
     do_push(&*repo, &*client, req).await
+}
+
+pub async fn push_create_new_kin(
+    repo: std::sync::Arc<dyn Repository>,
+    client: std::sync::Arc<dyn KindroidClient>,
+    req: CreateNewKinRequest,
+) -> Result<CreateNewKinResult, AppError> {
+    do_create_new_kin(&*repo, &*client, req).await
+}
+
+pub async fn do_create_new_kin(
+    repo: &dyn Repository,
+    client: &dyn KindroidClient,
+    req: CreateNewKinRequest,
+) -> Result<CreateNewKinResult, AppError> {
+    let character = repo.get_character(req.character_id).await?;
+    if character
+        .ai_name
+        .as_deref()
+        .map(str::trim)
+        .filter(|name| !name.is_empty())
+        .is_none()
+    {
+        return Err(AppError::invalid("ai_name is required to create a new Kin"));
+    }
+
+    let journal_entries = repo.list_journal_entries(character.id).await?;
+    for entry in &journal_entries {
+        JournalEntry::validate(&entry.entry, &entry.keyphrases).map_err(|message| {
+            AppError::invalid(format!("invalid journal entry {}: {message}", entry.id))
+        })?;
+    }
+
+    let mut create_body = serde_json::Map::new();
+    let mut update_values = serde_json::Map::new();
+    let mut fields_sent = Vec::new();
+    for field in CREATE_FIELDS {
+        if let Some(value) = new_kin_field_value(&character, field) {
+            if !value.trim().is_empty() {
+                create_body.insert((*field).to_string(), serde_json::Value::String(value));
+                fields_sent.push((*field).to_string());
+            }
+        }
+    }
+    for field in UPDATE_FIELDS {
+        if let Some(value) = new_kin_field_value(&character, field) {
+            if !value.trim().is_empty() {
+                update_values.insert((*field).to_string(), serde_json::Value::String(value));
+                fields_sent.push((*field).to_string());
+            }
+        }
+    }
+
+    let base_url = repo
+        .get_setting(SETTING_BASE_URL)
+        .await?
+        .unwrap_or_else(|| DEFAULT_BASE_URL.to_string());
+    let token = Secrets::get()?;
+    let create_response = client
+        .create_new_ai(
+            &token,
+            &base_url,
+            CreateNewAiRequest {
+                body: serde_json::Value::Object(create_body),
+            },
+        )
+        .await;
+
+    let create_new_ai_step = match &create_response {
+        Ok(response) => step_result(response.clone()),
+        Err(error) => error_step_result(error),
+    };
+    let create_new_ai_body = match &create_response {
+        Ok(response) => Some(truncate_body(&response.body)),
+        Err(error) => Some(truncate_body(&error_body(error))),
+    };
+    let successful_create = match create_response {
+        Ok(response) => response,
+        Err(_) => {
+            return Ok(CreateNewKinResult {
+                create_new_ai: create_new_ai_step,
+                update_info: None,
+                journal_entries: Vec::new(),
+                log_id: Uuid::nil(),
+                target: placeholder_target(),
+            });
+        }
+    };
+
+    let new_ai_id = successful_create.body.trim();
+    if new_ai_id.is_empty() {
+        return Err(AppError::invalid("create-new-ai returned an empty ai_id"));
+    }
+
+    let mut update_body = serde_json::json!({"ai_id": new_ai_id});
+    if let serde_json::Value::Object(body) = &mut update_body {
+        body.extend(update_values);
+    }
+    let update_info = match client
+        .update_info(&token, &base_url, UpdateInfoRequest { body: update_body })
+        .await
+    {
+        Ok(response) => step_result(response),
+        Err(error) => error_step_result(&error),
+    };
+
+    let mut journal_steps = Vec::with_capacity(journal_entries.len());
+    for entry in &journal_entries {
+        let keyphrases = entry.keyphrases.clone();
+        let response = client
+            .journal_create(
+                &token,
+                &base_url,
+                JournalCreateRequest {
+                    ai_id: new_ai_id,
+                    entry: &entry.entry,
+                    keyphrases: &keyphrases,
+                },
+            )
+            .await;
+        let step = match response {
+            Ok(response) => step_result(response),
+            Err(error) => error_step_result(&error),
+        };
+        journal_steps.push(JournalEntryStep {
+            id: entry.id.clone(),
+            status: step.status,
+            ok: step.ok,
+            message: step.message,
+        });
+    }
+
+    let target = repo
+        .upsert_target(Target {
+            id: Uuid::new_v4(),
+            ai_id: new_ai_id.to_string(),
+            label: character.ai_name.clone().unwrap(),
+            created_at: Utc::now(),
+        })
+        .await?;
+    let journal_entry_ids = if journal_entries.is_empty() {
+        None
+    } else {
+        Some(
+            journal_entries
+                .iter()
+                .map(|entry| entry.id.clone())
+                .collect(),
+        )
+    };
+    let entry = PushLogEntry {
+        id: Uuid::new_v4(),
+        at: Utc::now(),
+        character_id: character.id,
+        character_name: character.name.clone(),
+        target_id: target.id,
+        target_ai_id: target.ai_id.clone(),
+        fields_sent,
+        did_chat_break: false,
+        greeting: None,
+        wipe_cascaded: None,
+        update_info_status: update_info.status,
+        update_info_body: update_info.message.clone(),
+        create_new_ai_status: Some(create_new_ai_step.status),
+        create_new_ai_body,
+        chat_break_status: None,
+        chat_break_body: None,
+        journal_entry_ids,
+    };
+    let stored = repo.append_push_log(entry).await?;
+
+    Ok(CreateNewKinResult {
+        create_new_ai: create_new_ai_step,
+        update_info: Some(update_info),
+        journal_entries: journal_steps,
+        log_id: stored.id,
+        target,
+    })
+}
+
+fn new_kin_field_value(character: &Character, field: &str) -> Option<String> {
+    match field {
+        "custom_avatar_description" => character.ai_avatar_description.clone(),
+        "custom_greeting" => character.greeting.clone(),
+        _ => character.persona_field(field),
+    }
+}
+
+fn placeholder_target() -> Target {
+    Target {
+        id: Uuid::nil(),
+        ai_id: String::new(),
+        label: String::new(),
+        created_at: Utc::now(),
+    }
+}
+
+fn error_body(error: &KindroidError) -> String {
+    match error {
+        KindroidError::Auth { body, .. }
+        | KindroidError::RateLimited { body, .. }
+        | KindroidError::BadRequest { body, .. }
+        | KindroidError::NotFound { body, .. }
+        | KindroidError::Server { body, .. } => body.clone(),
+        KindroidError::Network(message) => message.clone(),
+    }
 }
 
 pub async fn do_push(
@@ -201,6 +428,8 @@ pub async fn do_push(
         wipe_cascaded: req.chat_break.as_ref().map(|cb| cb.wipe_cascaded),
         update_info_status: update_info_result.status,
         update_info_body: update_info_result.message.clone(),
+        create_new_ai_status: None,
+        create_new_ai_body: None,
         chat_break_status: chat_break_result.as_ref().map(|s| s.status),
         chat_break_body: chat_break_result.as_ref().map(|s| s.message.clone()),
         journal_entry_ids: journal_ids_sent,
@@ -466,10 +695,13 @@ mod tests {
     }
 
     struct FakeClient {
+        create_new_ai: Mutex<Option<Result<HttpResponse, KindroidError>>>,
         update: Mutex<Option<Result<HttpResponse, KindroidError>>>,
         chat_break: Mutex<Option<Result<HttpResponse, KindroidError>>>,
         list_chat: Mutex<Option<Result<crate::kindroid::ChatMessagesPage, KindroidError>>>,
         journal_results: Mutex<Vec<Result<HttpResponse, KindroidError>>>,
+        create_invocations: Mutex<Vec<serde_json::Value>>,
+        update_invocations: Mutex<Vec<serde_json::Value>>,
         journal_calls: Mutex<Vec<JournalCallRecord>>,
     }
 
@@ -483,6 +715,11 @@ mod tests {
     impl FakeClient {
         fn ok_both() -> Self {
             Self {
+                create_new_ai: Mutex::new(Some(Ok(HttpResponse {
+                    status: 200,
+                    ok: true,
+                    body: "ai_NEW_OK".into(),
+                }))),
                 update: Mutex::new(Some(Ok(HttpResponse {
                     status: 200,
                     ok: true,
@@ -495,6 +732,8 @@ mod tests {
                 }))),
                 list_chat: Mutex::new(None),
                 journal_results: Mutex::new(Vec::new()),
+                create_invocations: Mutex::new(Vec::new()),
+                update_invocations: Mutex::new(Vec::new()),
                 journal_calls: Mutex::new(Vec::new()),
             }
         }
@@ -504,15 +743,39 @@ mod tests {
         fn journal_calls(&self) -> Vec<JournalCallRecord> {
             self.journal_calls.lock().unwrap().clone()
         }
+        fn create_invocations(&self) -> Vec<serde_json::Value> {
+            self.create_invocations.lock().unwrap().clone()
+        }
+        fn update_invocations(&self) -> Vec<serde_json::Value> {
+            self.update_invocations.lock().unwrap().clone()
+        }
     }
     #[async_trait]
     impl KindroidClient for FakeClient {
+        async fn create_new_ai(
+            &self,
+            _t: &str,
+            _u: &str,
+            r: CreateNewAiRequest,
+        ) -> Result<HttpResponse, KindroidError> {
+            self.create_invocations.lock().unwrap().push(r.body);
+            self.create_new_ai
+                .lock()
+                .unwrap()
+                .take()
+                .unwrap_or(Ok(HttpResponse {
+                    status: 200,
+                    ok: true,
+                    body: "ai_NEW_OK".into(),
+                }))
+        }
         async fn update_info(
             &self,
             _t: &str,
             _u: &str,
-            _r: UpdateInfoRequest,
+            r: UpdateInfoRequest,
         ) -> Result<HttpResponse, KindroidError> {
+            self.update_invocations.lock().unwrap().push(r.body);
             self.update
                 .lock()
                 .unwrap()
@@ -622,6 +885,268 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn create_new_kin_happy_path() {
+        set_token();
+        let (mut c, t) = fixtures();
+        c.ai_gender = Some("Female".into());
+        c.ai_memory = Some("Remember this".into());
+        c.ai_avatar_description = Some("Long dark hair".into());
+        let repo = FakeRepo::new(c.clone(), t);
+        repo.set_journal(vec![make_entry(c.id, "je-1", "First memory", &["first"])]);
+        let client = FakeClient::ok_both();
+        let result = do_create_new_kin(&repo, &client, CreateNewKinRequest { character_id: c.id })
+            .await
+            .unwrap();
+        assert!(result.create_new_ai.ok);
+        assert!(result.update_info.as_ref().unwrap().ok);
+        assert_eq!(result.target.ai_id, "ai_NEW_OK");
+        assert_eq!(result.target.label, "Aria");
+        assert_eq!(result.journal_entries.len(), 1);
+        assert!(result.journal_entries[0].ok);
+        assert_eq!(client.create_invocations().len(), 1);
+        assert_eq!(
+            client.create_invocations()[0],
+            serde_json::json!({
+                "ai_name": "Aria",
+                "ai_gender": "Female",
+                "ai_backstory": "Backstory",
+                "custom_avatar_description": "Long dark hair",
+                "custom_greeting": "Hello!"
+            })
+        );
+        assert_eq!(
+            client.update_invocations()[0],
+            serde_json::json!({"ai_id": "ai_NEW_OK", "ai_memory": "Remember this"})
+        );
+        let log = repo.log.lock().unwrap();
+        assert_eq!(log.len(), 1);
+        assert_eq!(log[0].create_new_ai_status, Some(200));
+        assert_eq!(log[0].create_new_ai_body.as_deref(), Some("ai_NEW_OK"));
+        assert_eq!(
+            log[0].journal_entry_ids.as_ref().unwrap(),
+            &vec!["je-1".to_string()]
+        );
+    }
+
+    #[tokio::test]
+    async fn create_new_kin_without_optional_update_fields() {
+        set_token();
+        let (c, t) = fixtures();
+        let repo = FakeRepo::new(c.clone(), t);
+        let client = FakeClient::ok_both();
+        let result = do_create_new_kin(&repo, &client, CreateNewKinRequest { character_id: c.id })
+            .await
+            .unwrap();
+        assert!(result.create_new_ai.ok);
+        assert_eq!(
+            client.update_invocations(),
+            vec![serde_json::json!({"ai_id": "ai_NEW_OK"})]
+        );
+    }
+
+    #[tokio::test]
+    async fn create_new_kin_missing_ai_name() {
+        set_token();
+        let (mut c, t) = fixtures();
+        c.ai_name = Some("  ".into());
+        let repo = FakeRepo::new(c.clone(), t);
+        let client = FakeClient::ok_both();
+        let error = do_create_new_kin(&repo, &client, CreateNewKinRequest { character_id: c.id })
+            .await
+            .unwrap_err();
+        assert!(matches!(error, AppError::Invalid { .. }));
+        assert!(client.create_invocations().is_empty());
+        assert!(repo.log.lock().unwrap().is_empty());
+    }
+
+    #[tokio::test]
+    async fn create_new_kin_create_step_failure() {
+        set_token();
+        let (c, t) = fixtures();
+        let repo = FakeRepo::new(c.clone(), t);
+        let client = FakeClient::ok_both();
+        *client.create_new_ai.lock().unwrap() = Some(Err(KindroidError::BadRequest {
+            status: 400,
+            body: "rejected".into(),
+        }));
+        let result = do_create_new_kin(&repo, &client, CreateNewKinRequest { character_id: c.id })
+            .await
+            .unwrap();
+        assert!(!result.create_new_ai.ok);
+        assert_eq!(result.create_new_ai.status, 400);
+        assert!(result.update_info.is_none());
+        assert_eq!(result.log_id, Uuid::nil());
+        assert_eq!(result.target.id, Uuid::nil());
+        assert!(repo.log.lock().unwrap().is_empty());
+    }
+
+    #[tokio::test]
+    async fn create_new_kin_create_step_failure_aborts_subsequent() {
+        set_token();
+        let (c, t) = fixtures();
+        let repo = FakeRepo::new(c.clone(), t);
+        repo.set_journal(vec![make_entry(c.id, "je-1", "First", &[])]);
+        let client = FakeClient::ok_both();
+        *client.create_new_ai.lock().unwrap() = Some(Err(KindroidError::Server {
+            status: 500,
+            body: "boom".into(),
+        }));
+        let result = do_create_new_kin(&repo, &client, CreateNewKinRequest { character_id: c.id })
+            .await
+            .unwrap();
+        assert!(!result.create_new_ai.ok);
+        assert!(client.update_invocations().is_empty());
+        assert!(client.journal_calls().is_empty());
+        assert_eq!(repo.list_targets().await.unwrap().len(), 1);
+    }
+
+    #[tokio::test]
+    async fn create_new_kin_journal_partial_failure() {
+        set_token();
+        let (c, t) = fixtures();
+        let repo = FakeRepo::new(c.clone(), t);
+        repo.set_journal(vec![
+            make_entry(c.id, "je-1", "First", &[]),
+            make_entry(c.id, "je-2", "Second", &[]),
+        ]);
+        let client = FakeClient::ok_both();
+        client.push_journal_result(Ok(HttpResponse {
+            status: 200,
+            ok: true,
+            body: "ok".into(),
+        }));
+        client.push_journal_result(Err(KindroidError::Server {
+            status: 500,
+            body: "boom".into(),
+        }));
+        let result = do_create_new_kin(&repo, &client, CreateNewKinRequest { character_id: c.id })
+            .await
+            .unwrap();
+        assert_eq!(result.journal_entries.len(), 2);
+        assert!(!result.journal_entries[0].ok);
+        assert!(result.journal_entries[1].ok);
+        assert_eq!(client.journal_calls().len(), 2);
+    }
+
+    #[tokio::test]
+    async fn create_new_kin_avatar_description_in_create_only() {
+        set_token();
+        let (mut c, t) = fixtures();
+        c.ai_avatar_description = Some("Blue eyes".into());
+        c.greeting = None;
+        let repo = FakeRepo::new(c.clone(), t);
+        let client = FakeClient::ok_both();
+        let result = do_create_new_kin(&repo, &client, CreateNewKinRequest { character_id: c.id })
+            .await
+            .unwrap();
+        assert!(result.create_new_ai.ok);
+        assert_eq!(
+            client.create_invocations()[0]["custom_avatar_description"],
+            "Blue eyes"
+        );
+        assert!(client.update_invocations()[0]
+            .get("custom_avatar_description")
+            .is_none());
+        assert!(!result.target.ai_id.is_empty());
+    }
+
+    #[tokio::test]
+    async fn create_new_kin_overlap_field_is_not_duplicated() {
+        set_token();
+        let (mut c, t) = fixtures();
+        c.ai_gender = Some("Female".into());
+        c.ai_memory = Some("Memory".into());
+        c.ai_directive = Some("Directive".into());
+        c.ai_example_message = Some("Example".into());
+        c.ai_additional_context = Some("Context".into());
+        c.current_scene = Some("Scene".into());
+        c.ai_avatar_description = Some("Avatar".into());
+        let repo = FakeRepo::new(c.clone(), t);
+        let client = FakeClient::ok_both();
+        do_create_new_kin(&repo, &client, CreateNewKinRequest { character_id: c.id })
+            .await
+            .unwrap();
+        assert_eq!(
+            client.create_invocations()[0]
+                .as_object()
+                .unwrap()
+                .keys()
+                .filter(|field| UPDATE_FIELDS.contains(&field.as_str()))
+                .count(),
+            0
+        );
+        assert_eq!(
+            client.update_invocations()[0]
+                .as_object()
+                .unwrap()
+                .keys()
+                .filter(|field| CREATE_FIELDS.contains(&field.as_str()))
+                .count(),
+            0
+        );
+    }
+
+    #[tokio::test]
+    async fn create_new_kin_empty_ai_id_response() {
+        set_token();
+        let (c, t) = fixtures();
+        let repo = FakeRepo::new(c.clone(), t);
+        let client = FakeClient::ok_both();
+        *client.create_new_ai.lock().unwrap() = Some(Ok(HttpResponse {
+            status: 200,
+            ok: true,
+            body: "  \n".into(),
+        }));
+        let error = do_create_new_kin(&repo, &client, CreateNewKinRequest { character_id: c.id })
+            .await
+            .unwrap_err();
+        assert!(matches!(error, AppError::Invalid { .. }));
+        assert!(client.update_invocations().is_empty());
+        assert!(repo.log.lock().unwrap().is_empty());
+    }
+
+    #[tokio::test]
+    async fn create_new_kin_preserves_log_entry_fields_sent_order() {
+        set_token();
+        let (mut c, t) = fixtures();
+        c.ai_gender = Some("Female".into());
+        c.ai_memory = Some("Memory".into());
+        c.ai_directive = Some("Directive".into());
+        c.ai_example_message = Some("Example".into());
+        c.ai_additional_context = Some("Context".into());
+        c.current_scene = Some("Scene".into());
+        c.ai_avatar_description = Some("Avatar".into());
+        let repo = FakeRepo::new(c.clone(), t);
+        let client = FakeClient::ok_both();
+        do_create_new_kin(&repo, &client, CreateNewKinRequest { character_id: c.id })
+            .await
+            .unwrap();
+        let fields = &repo.log.lock().unwrap()[0].fields_sent;
+        let expected = CREATE_FIELDS
+            .iter()
+            .chain(UPDATE_FIELDS.iter())
+            .map(|field| (*field).to_string())
+            .collect::<Vec<_>>();
+        assert_eq!(fields, &expected);
+    }
+
+    #[tokio::test]
+    async fn create_new_kin_validation_error_short_circuits_journal() {
+        set_token();
+        let (c, t) = fixtures();
+        let repo = FakeRepo::new(c.clone(), t);
+        repo.set_journal(vec![make_entry(c.id, "je-bad", &"a".repeat(501), &[])]);
+        let client = FakeClient::ok_both();
+        let error = do_create_new_kin(&repo, &client, CreateNewKinRequest { character_id: c.id })
+            .await
+            .unwrap_err();
+        assert!(matches!(error, AppError::Invalid { .. }));
+        assert!(client.create_invocations().is_empty());
+        assert!(client.update_invocations().is_empty());
+        assert!(client.journal_calls().is_empty());
+    }
+
+    #[tokio::test]
     async fn happy_path_no_chat_break() {
         set_token();
         let (c, t) = fixtures();
@@ -674,6 +1199,7 @@ mod tests {
         let (c, t) = fixtures();
         let repo = FakeRepo::new(c.clone(), t.clone());
         let client = FakeClient {
+            create_new_ai: Mutex::new(None),
             update: Mutex::new(Some(Err(KindroidError::Auth {
                 status: 401,
                 body: "nope".into(),
@@ -685,6 +1211,8 @@ mod tests {
             }))),
             list_chat: Mutex::new(None),
             journal_results: Mutex::new(Vec::new()),
+            create_invocations: Mutex::new(Vec::new()),
+            update_invocations: Mutex::new(Vec::new()),
             journal_calls: Mutex::new(Vec::new()),
         };
         let req = PushRequest {
@@ -708,6 +1236,7 @@ mod tests {
         let (c, t) = fixtures();
         let repo = FakeRepo::new(c.clone(), t.clone());
         let client = FakeClient {
+            create_new_ai: Mutex::new(None),
             update: Mutex::new(Some(Ok(HttpResponse {
                 status: 200,
                 ok: true,
@@ -719,6 +1248,8 @@ mod tests {
             }))),
             list_chat: Mutex::new(None),
             journal_results: Mutex::new(Vec::new()),
+            create_invocations: Mutex::new(Vec::new()),
+            update_invocations: Mutex::new(Vec::new()),
             journal_calls: Mutex::new(Vec::new()),
         };
         let req = PushRequest {
@@ -874,6 +1405,7 @@ mod tests {
         let (c, t) = fixtures();
         let repo = FakeRepo::new(c.clone(), t.clone());
         let client = FakeClient {
+            create_new_ai: Mutex::new(None),
             update: Mutex::new(Some(Err(KindroidError::Auth {
                 status: 401,
                 body: "nope".into(),
@@ -885,6 +1417,8 @@ mod tests {
             }))),
             list_chat: Mutex::new(None),
             journal_results: Mutex::new(Vec::new()),
+            create_invocations: Mutex::new(Vec::new()),
+            update_invocations: Mutex::new(Vec::new()),
             journal_calls: Mutex::new(Vec::new()),
         };
         repo.set_journal(vec![make_entry(c.id, "je-1", "e1", &[])]);

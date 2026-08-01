@@ -9,7 +9,7 @@ export function OnboardingBanner() {
       <span>
         {' '}
         <strong>Get started:</strong> 1) add your API token in Settings, 2) drop a share image
-        anywhere (or paste) to create a Character, 3) add a Target, 4) push.{' '}
+        anywhere (or paste) to create a Character. On mobile, tap the import area to pick a file. 3) add a Target, 4) push.{' '}
       </span>{' '}
       <button
         onClick={() => {

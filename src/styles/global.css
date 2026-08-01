@@ -243,6 +243,86 @@ select {
   .section-grid {
     grid-template-columns: 1fr;
   }
+} /* Mobile bottom nav + import button + full-screen modals.
+   See .kilo/plans/1785596514600-android-deployment-plan.md step 5.
+   The hidden <input> + "Tap to import" button is the fallback for
+   share-image import on touch devices (the global drag-drop / paste
+   handlers do not work on Android System WebView). */
+.app-file-input {
+  display: none;
+}
+.app-import-btn {
+  display: inline-flex;
+  position: fixed;
+  right: var(--space-4);
+  bottom: var(--space-4);
+  z-index: 50;
+  padding: 10px 14px;
+  border-radius: var(--radius);
+  border: 1px solid var(--border);
+  background: var(--surface);
+  color: var(--text);
+  box-shadow: var(--shadow);
+  font-weight: 500;
+  font-size: 13px;
+}
+.app-bottom-nav {
+  display: none;
+}
+@media (max-width: 720px) {
+  .app-brand-text {
+    display: none;
+  }
+  .app-nav {
+    display: none;
+  }
+  .app-import-btn {
+    bottom: 80px;
+  }
+  .app-bottom-nav {
+    display: flex;
+    position: fixed;
+    bottom: 0;
+    left: 0;
+    right: 0;
+    height: 64px;
+    background: var(--surface);
+    border-top: 1px solid var(--border);
+    box-shadow: 0 -1px 3px rgba(15, 23, 42, 0.06);
+    z-index: 60;
+  }
+  .app-bottom-nav a {
+    flex: 1;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    color: var(--text-muted);
+    font-weight: 500;
+    font-size: 11px;
+    text-decoration: none;
+    border: none;
+    padding: 0 2px;
+  }
+  .app-bottom-nav a.active {
+    color: var(--primary-hover);
+    background: var(--primary-soft);
+  }
+  .app-main {
+    padding-bottom: 80px;
+  }
+  .modal {
+    max-width: 100vw;
+    max-height: 100vh;
+    width: 100%;
+    height: 100%;
+    border-radius: 0;
+    min-width: 0;
+  }
+  .table {
+    display: block;
+    max-width: 100%;
+    overflow-x: auto;
+  }
 } /* Buttons */
 .btn {
   display: inline-flex;

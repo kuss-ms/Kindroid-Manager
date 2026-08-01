@@ -9,6 +9,7 @@ export function AppLayout() {
   const navigate = useNavigate();
   const [dropActive, setDropActive] = useState(false);
   const dragCounter = useRef(0);
+  const fileInputRef = useRef<HTMLInputElement>(null);
   const settings = useQuery({ queryKey: ['settings'], queryFn: api.getSettings });
   const characters = useQuery({ queryKey: ['characters'], queryFn: api.listCharacters });
   const targets = useQuery({ queryKey: ['targets'], queryFn: api.listTargets });
@@ -91,7 +92,8 @@ export function AppLayout() {
         {' '}
         <div className="app-brand">
           {' '}
-          <span className="app-brand-mark">K</span> Kindroid Manager{' '}
+          <span className="app-brand-mark">K</span>{' '}
+          <span className="app-brand-text">Kindroid Manager</span>{' '}
         </div>{' '}
         <nav className="app-nav">
           {' '}
@@ -126,13 +128,69 @@ export function AppLayout() {
         {' '}
         <Outlet />{' '}
       </main>{' '}
+      <input
+        ref={fileInputRef}
+        type="file"
+        accept="image/png,image/*"
+        className="app-file-input"
+        onChange={async (e) => {
+          const file = e.target.files?.[0];
+          e.target.value = '';
+          if (file) {
+            const buf = await file.arrayBuffer();
+            const bytes = Array.from(new Uint8Array(buf));
+            try {
+              const draft = await api.importShareImage(bytes);
+              queryClient.setQueryData(['character', draft.id], draft);
+              queryClient.invalidateQueries({ queryKey: ['characters'] });
+              toast('success', `Imported "${draft.name}"`);
+              navigate(`/characters/${draft.id}`);
+            } catch (err) {
+              toast('error', errorMessage(err));
+            }
+          }
+        }}
+      />
+      <button
+        type="button"
+        className="app-import-btn"
+        onClick={() => fileInputRef.current?.click()}
+      >
+        Tap to import share image
+      </button>{' '}
+      <nav className="app-bottom-nav">
+        {' '}
+        <NavLink to="/characters" className={({ isActive }) => (isActive ? 'active' : '')}>
+          {' '}
+          Characters{' '}
+        </NavLink>{' '}
+        <NavLink to="/targets" className={({ isActive }) => (isActive ? 'active' : '')}>
+          {' '}
+          Targets{' '}
+        </NavLink>{' '}
+        <NavLink to="/push" className={({ isActive }) => (isActive ? 'active' : '')}>
+          {' '}
+          Push{' '}
+        </NavLink>{' '}
+        <NavLink to="/history" className={({ isActive }) => (isActive ? 'active' : '')}>
+          {' '}
+          History{' '}
+        </NavLink>{' '}
+        <NavLink to="/chat-history" className={({ isActive }) => (isActive ? 'active' : '')}>
+          {' '}
+          Chat{' '}
+        </NavLink>{' '}
+        <NavLink to="/settings" className={({ isActive }) => (isActive ? 'active' : '')}>
+          {' '}
+          Settings{' '}
+        </NavLink>{' '}
+      </nav>{' '}
       {dropActive && (
         <div className="drop-overlay">
           {' '}
           <div className="drop-card">
             {' '}
-            <div className="drop-icon">⬇</div>{' '}
-            <div className="drop-title">Drop a Kindroid share image</div>{' '}
+            <div className="drop-icon">⬇</div> <div className="drop-title">Drop a Kindroid share image</div>{' '}
             <div className="drop-sub">PNG with embedded persona metadata</div>{' '}
           </div>{' '}
         </div>

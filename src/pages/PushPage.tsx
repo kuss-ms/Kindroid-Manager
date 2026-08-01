@@ -240,31 +240,40 @@ export function PushPage() {
               Clear
             </button>
           </div>
-          {journalList.map((e) => (
-            <label key={e.id} className="checkbox" style={{ marginTop: 4 }}>
-              <input
-                type="checkbox"
-                checked={selectedJournal.has(e.id)}
-                onChange={(ev) => {
-                  const next = new Set(selectedJournal);
-                  if (ev.target.checked) next.add(e.id);
-                  else next.delete(e.id);
-                  setSelectedJournal(next);
+          <ul style={{ listStyle: 'none', padding: 0, margin: 0 }}>
+            {journalList.map((e) => (
+              <li
+                key={e.id}
+                style={{
+                  display: 'flex',
+                  alignItems: 'flex-start',
+                  gap: 8,
+                  padding: '6px 0',
+                  borderTop: '1px solid var(--border)',
                 }}
-              />
-              <span>
-                <span className="mono" style={{ fontSize: 11 }}>
-                  {e.id.slice(0, 8)}
-                </span>{' '}
-                — {e.entry.slice(0, 80)}
-                {e.keyphrases.length > 0 && (
-                  <span className="muted" style={{ marginLeft: 6 }}>
-                    ({e.keyphrases.join(', ')})
-                  </span>
-                )}
-              </span>
-            </label>
-          ))}
+              >
+                <input
+                  type="checkbox"
+                  style={{ marginTop: 4 }}
+                  checked={selectedJournal.has(e.id)}
+                  onChange={(ev) => {
+                    const next = new Set(selectedJournal);
+                    if (ev.target.checked) next.add(e.id);
+                    else next.delete(e.id);
+                    setSelectedJournal(next);
+                  }}
+                />
+                <div style={{ flex: 1 }}>
+                  <div style={{ whiteSpace: 'pre-wrap' }}>{e.entry}</div>
+                  {e.keyphrases.length > 0 && (
+                    <div className="muted" style={{ fontSize: 11, marginTop: 2 }}>
+                      {e.keyphrases.join(', ')}
+                    </div>
+                  )}
+                </div>
+              </li>
+            ))}
+          </ul>
         </div>
       )}{' '}
       <div className="card">

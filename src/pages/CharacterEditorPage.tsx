@@ -370,7 +370,13 @@ export function CharacterEditorPage() {
         </Field>
       </form>
 
-      {id && <JournalEditor characterId={id} />}
+      {id ? (
+        <JournalEditor characterId={id} />
+      ) : (
+        <div className="card muted" style={{ fontSize: 12 }}>
+          Save the character first to enable journal entries.
+        </div>
+      )}
 
       <ConfirmDialog
         open={confirmDelete}
@@ -538,9 +544,8 @@ function JournalEditor({ characterId }: { characterId: Uuid }) {
         )}
       </div>
       <p className="muted" style={{ fontSize: 12, marginTop: 6 }}>
-        Local notes you can optionally push to Kindroid via the new <code>/journal-create</code>{' '}
-        endpoint. Up to 500 characters and 8 short keyphrases per entry. Not sent unless you tick
-        the entry on the Push page.
+        Up to 500 characters and 8 short keyphrases per entry. Not sent unless you tick the entry on
+        the Push page.
       </p>
 
       {editing && (
@@ -587,7 +592,7 @@ function JournalEditor({ characterId }: { characterId: Uuid }) {
                   </div>
                 )}
                 <div className="muted" style={{ fontSize: 11, marginTop: 4 }}>
-                  updated {new Date(e.updatedAt).toLocaleString()}
+                  updated {new Date(e.updated_at).toLocaleString()}
                 </div>
               </div>
               <div style={{ display: 'flex', flexDirection: 'column', gap: 4 }}>
@@ -670,22 +675,22 @@ function JournalEntryForm({
         marginTop: 12,
       }}
     >
-      <textarea
-        className="textarea"
-        rows={4}
-        value={entry}
-        onChange={(e) => setEntry(e.target.value)}
-        placeholder="Write the journal entry…"
-        style={tooLong ? { borderColor: 'var(--danger)' } : undefined}
+      <input
+        className="input"
+        placeholder="Type a keyphrase and press Enter"
+        value={kpInput}
+        onChange={(e) => setKpInput(e.target.value)}
+        onKeyDown={(e) => {
+          if (e.key === 'Enter' || e.key === ',') {
+            e.preventDefault();
+            addKp();
+          } else if (e.key === 'Backspace' && kpInput === '' && kps.length > 0) {
+            setKps(kps.slice(0, -1));
+          }
+        }}
+        disabled={kps.length >= 8}
       />
-      <div
-        className={`soft-counter ${tooLong ? 'warn' : ''}`}
-        style={tooLong ? { color: 'var(--danger)' } : undefined}
-      >
-        {trimmedLen} / 500
-      </div>
-
-      <div style={{ display: 'flex', flexWrap: 'wrap', gap: 4, marginTop: 8 }}>
+      <div style={{ display: 'flex', flexWrap: 'wrap', gap: 4, marginTop: 6 }}>
         {kps.map((k, i) => (
           <span key={`${k}-${i}`} className="badge badge-muted">
             {k}
@@ -701,27 +706,26 @@ function JournalEntryForm({
           </span>
         ))}
       </div>
-      <input
-        className="input"
-        style={{ marginTop: 6 }}
-        placeholder="Type a keyphrase and press Enter"
-        value={kpInput}
-        onChange={(e) => setKpInput(e.target.value)}
-        onKeyDown={(e) => {
-          if (e.key === 'Enter' || e.key === ',') {
-            e.preventDefault();
-            addKp();
-          } else if (e.key === 'Backspace' && kpInput === '' && kps.length > 0) {
-            setKps(kps.slice(0, -1));
-          }
-        }}
-        disabled={kps.length >= 8}
-      />
       <div
         className={`soft-counter ${tooMany ? 'warn' : ''}`}
         style={tooMany ? { color: 'var(--danger)' } : undefined}
       >
         {kps.length} / 8
+      </div>
+
+      <textarea
+        className="textarea"
+        rows={4}
+        value={entry}
+        onChange={(e) => setEntry(e.target.value)}
+        placeholder="Write the journal entry…"
+        style={tooLong ? { borderColor: 'var(--danger)' } : undefined}
+      />
+      <div
+        className={`soft-counter ${tooLong ? 'warn' : ''}`}
+        style={tooLong ? { color: 'var(--danger)' } : undefined}
+      >
+        {trimmedLen} / 500
       </div>
 
       <div style={{ display: 'flex', gap: 8, marginTop: 12 }}>

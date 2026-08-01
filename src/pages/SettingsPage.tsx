@@ -122,8 +122,8 @@ export function SettingsPage() {
         <h2>Settings</h2>
       </div>
       <div className="card">
-        <h3>API token</h3>
-        <p className="muted" style={{ marginTop: 6, fontSize: 13 }}>
+        <h3>Kindroid</h3>
+        <p className="muted" style={{ fontSize: 12, marginTop: 6 }}>
           The token is stored in your OS keychain (Windows Credential Manager, macOS Keychain, Linux
           Secret Service). It is never written to disk and never leaves the app.
         </p>
@@ -137,63 +137,77 @@ export function SettingsPage() {
           <span
             className={`badge ${settings.data?.token_configured ? 'badge-success' : 'badge-danger'}`}
           >
-            {settings.data?.token_configured ? 'configured' : 'not configured'}
+            {settings.data?.token_configured ? 'configured' : 'No token configured'}
           </span>
         </div>
-        <div className="flex-row" style={{ marginTop: 12 }}>
-          <input
-            type={showToken ? 'text' : 'password'}
-            className="input input-mono"
-            placeholder="kn_…"
-            value={token}
-            onChange={(e) => setToken(e.target.value)}
-            style={{ flex: 1 }}
-          />
-          <button className="btn" onClick={() => setShowToken((v) => !v)}>
-            {showToken ? 'Hide' : 'Show'}
-          </button>
-          <button
-            className="btn btn-primary"
-            disabled={token.trim().length === 0}
-            onClick={() => saveToken.mutate(token.trim())}
-          >
-            Save
-          </button>
-          <button
-            className="btn btn-danger"
-            disabled={!settings.data?.token_configured}
-            onClick={() => setConfirmClear(true)}
-          >
-            Clear
-          </button>
-          <button
-            className="btn"
-            disabled={!settings.data?.token_configured || testToken.isPending}
-            onClick={() => testToken.mutate()}
-          >
-            {testToken.isPending ? 'Testing…' : 'Test'}
-          </button>
-        </div>
-        {testToken.data && (
-          <p className="muted" style={{ fontSize: 12, marginTop: 8 }}>
-            Test result: {testToken.data.message} — checks reachability and auth, not character
-            validity.
-          </p>
-        )}
-      </div>
-      <div className="card">
-        <h3>Base URL</h3>
-        <form
-          onSubmit={handleSubmit((v) => saveSettings.mutate({ base_url: v.base_url.trim() }))}
-          className="flex-row"
-          style={{ marginTop: 8 }}
-        >
-          <input className="input" {...register('base_url')} style={{ flex: 1 }} />
-          <button type="submit" className="btn btn-primary" disabled={!isDirty}>
-            Save
-          </button>
+        <form onSubmit={(e) => e.preventDefault()} className="flex-col" style={{ marginTop: 12 }}>
+          <label className="form-label">Token</label>
+          <div className="flex-row">
+            <input
+              type={showToken ? 'text' : 'password'}
+              className="input input-mono"
+              placeholder="kn_…"
+              value={token}
+              onChange={(e) => setToken(e.target.value)}
+              style={{ flex: 1 }}
+            />
+            <button type="button" className="btn" onClick={() => setShowToken((v) => !v)}>
+              {showToken ? 'Hide' : 'Show'}
+            </button>
+          </div>
+          <div className="flex-row" style={{ marginTop: 8 }}>
+            <button
+              type="button"
+              className="btn btn-primary"
+              disabled={token.trim().length === 0}
+              onClick={() => saveToken.mutate(token.trim())}
+            >
+              Save
+            </button>
+            <button
+              type="button"
+              className="btn btn-danger"
+              disabled={!settings.data?.token_configured}
+              onClick={() => setConfirmClear(true)}
+            >
+              Clear
+            </button>
+            <button
+              type="button"
+              className="btn"
+              disabled={!settings.data?.token_configured || testToken.isPending}
+              onClick={() => testToken.mutate()}
+            >
+              {testToken.isPending ? 'Testing…' : 'Test'}
+            </button>
+          </div>
+          {testToken.data && (
+            <p className="muted" style={{ fontSize: 12, marginTop: 8 }}>
+              Test result: {testToken.data.message} — checks reachability and auth, not character
+              validity.
+            </p>
+          )}
+          <label className="form-label" style={{ marginTop: 16 }}>
+            Base URL
+          </label>
+          <div className="flex-row">
+            <input
+              className="input"
+              placeholder="https://api.kindroid.ai/v1"
+              {...register('base_url')}
+              style={{ flex: 1 }}
+            />
+            <button
+              type="button"
+              className="btn btn-primary"
+              disabled={!isDirty}
+              onClick={handleSubmit((v) => saveSettings.mutate({ base_url: v.base_url.trim() }))}
+            >
+              Save
+            </button>
+          </div>
+          {errors.base_url && <span className="form-error">{errors.base_url.message}</span>}
         </form>
-        {errors.base_url && <span className="form-error">{errors.base_url.message}</span>}
       </div>
       <div className="card">
         <h3>AI provider (OpenAI-compatible)</h3>

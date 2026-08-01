@@ -361,43 +361,17 @@ mod inner {
     #[tauri::command]
     pub async fn test_ai_connection(
         client: State<'_, Ai>,
-        base_url: String,
-        model: String,
-        bearer_token: Option<String>,
+        input: ai::TestAiRequest,
     ) -> Result<ai::TestAiResult, crate::error::AppError> {
-        ai::test_ai_connection(
-            client.inner().clone(),
-            ai::TestAiRequest {
-                base_url,
-                model,
-                bearer_token,
-            },
-        )
-        .await
+        ai::test_ai_connection(client.inner().clone(), input).await
     }
 
     #[tauri::command]
     pub async fn ai_chat_completion(
         client: State<'_, Ai>,
-        base_url: String,
-        model: String,
-        system: Option<String>,
-        user: String,
-        json_mode: bool,
-        bearer_token: Option<String>,
+        input: ai::AiChatCompletionRequest,
     ) -> Result<ai::AiChatCompletionResponse, crate::error::AppError> {
-        ai::ai_chat_completion(
-            client.inner().clone(),
-            ai::AiChatCompletionRequest {
-                base_url,
-                model,
-                system,
-                user,
-                json_mode,
-                bearer_token,
-            },
-        )
-        .await
+        ai::ai_chat_completion(client.inner().clone(), input).await
     }
 }
 

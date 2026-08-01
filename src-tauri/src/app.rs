@@ -16,6 +16,8 @@ pub fn run() {
         .setup(|app| {
             let data_dir = app.path().app_data_dir().expect("app data dir");
             std::fs::create_dir_all(&data_dir).ok();
+            #[cfg(target_os = "android")]
+            crate::security::secrets::Secrets::init(data_dir.clone());
             let db_path = data_dir.join("kindroid-manager.db");
             let repo: Arc<dyn Repository> =
                 Arc::new(SqliteRepository::open(&db_path).expect("open sqlite"));

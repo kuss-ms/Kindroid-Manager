@@ -90,36 +90,45 @@ fn run_migrations(conn: &mut Connection) -> Result<(), StorageError> {
 }
 
 fn discover_migrations() -> Result<Vec<(u32, String)>, String> {
-    let dir = migrations_dir().ok_or("no migrations dir")?;
+    // Migration SQL is embedded at compile time so the binary works on
+    // platforms (notably Android) where the build-time `CARGO_MANIFEST_DIR`
+    // path does not exist. To add a new migration: drop `NNNN_*.sql` into
+    // `src/storage/migrations/`, then append a matching `include_str!` line
+    // below in numeric order.
+    let bodies: &[(&str, &str)] = &[
+        ("0001_init.sql", include_str!("migrations/0001_init.sql")),
+        (
+            "0002_add_cover_image.sql",
+            include_str!("migrations/0002_add_cover_image.sql"),
+        ),
+        (
+            "0003_add_avatar_description.sql",
+            include_str!("migrations/0003_add_avatar_description.sql"),
+        ),
+        (
+            "0004_chat_history.sql",
+            include_str!("migrations/0004_chat_history.sql"),
+        ),
+        (
+            "0005_chat_favourite.sql",
+            include_str!("migrations/0005_chat_favourite.sql"),
+        ),
+        (
+            "0006_character_journal.sql",
+            include_str!("migrations/0006_character_journal.sql"),
+        ),
+    ];
     let mut out = Vec::new();
-    for entry in std::fs::read_dir(&dir).map_err(|e| e.to_string())? {
-        let entry = entry.map_err(|e| e.to_string())?;
-        let path = entry.path();
-        if path.extension().and_then(|s| s.to_str()) != Some("sql") {
-            continue;
-        }
-        let name = path.file_name().unwrap().to_string_lossy().to_string();
+    for (name, body) in bodies {
         let version: u32 = name
             .split('_')
             .next()
             .and_then(|s| s.parse().ok())
             .ok_or_else(|| format!("bad migration name: {name}"))?;
-        let body = std::fs::read_to_string(&path).map_err(|e| e.to_string())?;
-        out.push((version, body));
+        out.push((version, (*body).to_string()));
     }
     out.sort_by_key(|(v, _)| *v);
     Ok(out)
-}
-
-fn migrations_dir() -> Option<PathBuf> {
-    // CARGO_MANIFEST_DIR is set by cargo at build time.
-    let manifest = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
-    let p = manifest.join("src").join("storage").join("migrations");
-    if p.exists() {
-        Some(p)
-    } else {
-        None
-    }
 }
 
 fn parse_dt(s: &str) -> Result<DateTime<Utc>, StorageError> {

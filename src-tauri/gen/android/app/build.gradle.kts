@@ -25,6 +25,23 @@ android {
         versionCode = tauriProperties.getProperty("tauri.android.versionCode", "1").toInt()
         versionName = tauriProperties.getProperty("tauri.android.versionName", "1.0")
     }
+    // Stable local keystore for personal-sideload APKs. See
+    // .kilo/plans/1785596514600-android-deployment-plan.md step 6. The
+    // signing block is a no-op if keystore.properties is missing (e.g.
+    // for first-time developers running an unsigned debug build).
+    signingConfigs {
+        create("release") {
+            val keystorePropertiesFile = rootProject.file("keystore.properties")
+            if (keystorePropertiesFile.exists()) {
+                val keystoreProperties = Properties()
+                keystoreProperties.load(FileInputStream(keystorePropertiesFile))
+                keyAlias = keystoreProperties["keyAlias"] as String?
+                keyPassword = keystoreProperties["password"] as String?
+                storeFile = file(keystoreProperties["storeFile"] as String)
+                storePassword = keystoreProperties["password"] as String?
+            }
+        }
+    }
     buildTypes {
         getByName("debug") {
             manifestPlaceholders["usesCleartextTraffic"] = "true"
@@ -54,23 +71,6 @@ android {
     }
     buildFeatures {
         buildConfig = true
-    }
-    // Stable local keystore for personal-sideload APKs. See
-    // .kilo/plans/1785596514600-android-deployment-plan.md step 6. The
-    // signing block is a no-op if keystore.properties is missing (e.g.
-    // for first-time developers running an unsigned debug build).
-    signingConfigs {
-        create("release") {
-            val keystorePropertiesFile = rootProject.file("keystore.properties")
-            if (keystorePropertiesFile.exists()) {
-                val keystoreProperties = Properties()
-                keystoreProperties.load(FileInputStream(keystorePropertiesFile))
-                keyAlias = keystoreProperties["keyAlias"] as String?
-                keyPassword = keystoreProperties["password"] as String?
-                storeFile = file(keystoreProperties["storeFile"] as String)
-                storePassword = keystoreProperties["password"] as String?
-            }
-        }
     }
 }
 

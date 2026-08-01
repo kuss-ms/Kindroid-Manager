@@ -35,7 +35,9 @@ pnpm build
 log "Building signed Android release APK"
 cd src-tauri && pnpm exec tauri android build --apk
 
-APK="gen/android/app/build/outputs/apk/release/app-release.apk"
+# Tauri 2's universal flavor bundles all ABIs into one APK at this path.
+# Per-ABI APKs (arm64, arm, x86, x86_64) are also produced under apk/<abi>/release/.
+APK="gen/android/app/build/outputs/apk/universal/release/app-universal-release.apk"
 if [ -f "$APK" ]; then
   log "Done. APK at $(realpath "$APK")"
   log "Install with: adb install -r $APK"

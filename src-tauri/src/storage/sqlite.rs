@@ -126,6 +126,10 @@ fn discover_migrations() -> Result<Vec<(u32, String)>, String> {
             "0007_chat_automation.sql",
             include_str!("migrations/0007_chat_automation.sql"),
         ),
+        (
+            "0008_chat_automation_response.sql",
+            include_str!("migrations/0008_chat_automation_response.sql"),
+        ),
     ];
     let mut out = Vec::new();
     for (name, body) in bodies {
@@ -2390,5 +2394,40 @@ mod tests {
 
         repo.delete_character(cid).await.unwrap();
         assert!(repo.list_journal_entries(cid).await.unwrap().is_empty());
+    }
+
+    #[test]
+    fn migration_0008_adds_columns_to_legacy_0007_state_table() {
+        let mut conn = Connection::open_in_memory().expect("open in-memory");
+        conn.execute_batch("PRAGMA foreign_keys=ON;").unwrap();
+        conn.execute_batch("PRAGMA user_version = 0;").unwrap();
+        run_migrations(&mut conn).unwrap();
+        // Wipe the response columns added in 0008 to simulate a DB from
+        // before that change.
+        conn.execute_batch(
+            "ALTER TABLE chat_automation_state DROP COLUMN journal_last_response;
+             ALTER TABLE chat_automation_state DROP COLUMN summary_last_response;",
+        )
+        .unwrap();
+
+        // Re-running the migrator should re-add the columns via 0008
+        // without losing the table.
+        conn.execute_batch("PRAGMA user_version = 7;").unwrap();
+        run_migrations(&mut conn).unwrap();
+        let cols: Vec<String> = conn
+            .prepare("SELECT name FROM pragma_table_info('chat_automation_state')")
+            .unwrap()
+            .query_map([], |r| r.get(0))
+            .unwrap()
+            .filter_map(|r| r.ok())
+            .collect();
+        assert!(
+            cols.iter().any(|c| c == "journal_last_response"),
+            "0008 should re-add journal_last_response, columns: {cols:?}"
+        );
+        assert!(
+            cols.iter().any(|c| c == "summary_last_response"),
+            "0008 should re-add summary_last_response, columns: {cols:?}"
+        );
     }
 }

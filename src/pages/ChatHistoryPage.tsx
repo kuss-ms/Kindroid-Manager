@@ -3,7 +3,13 @@ import { useEffect, useMemo, useState } from 'react';
 import { useSearchParams } from 'react-router-dom';
 import { listen, type UnlistenFn } from '@tauri-apps/api/event';
 import { api, escapeFtsQuery, errorMessage } from '../lib/api';
-import type { ChatMessage, ChatSyncState, SyncStatusKind, Target } from '../lib/types';
+import type {
+  ChatAutomationDto,
+  ChatMessage,
+  ChatSyncState,
+  SyncStatusKind,
+  Target,
+} from '../lib/types';
 import { ConfirmDialog } from '../components/ConfirmDialog';
 import { AutomationPanel } from '../components/AutomationPanel';
 import { toast } from '../components/Toaster';
@@ -141,6 +147,25 @@ export function ChatHistoryPage() {
     refetchInterval: 5000,
   });
 
+  // Lightweight view of automation state so the page can surface a
+  // status badge on the Automation… button without opening the modal.
+  const automationBadge = useQuery<ChatAutomationDto | null>({
+    queryKey: ['chat-automation', selectedAiId],
+    queryFn: () =>
+      selectedAiId ? api.getChatAutomationState(selectedAiId) : Promise.resolve(null),
+    enabled: !!selectedAiId,
+    refetchInterval: 5000,
+  });
+  const automationHasError =
+    !!automationBadge.data &&
+    !!(
+      automationBadge.data.state.journal_last_error || automationBadge.data.state.summary_last_error
+    );
+  const automationIsActive =
+    !!automationBadge.data &&
+    (automationBadge.data.state.auto_journal_enabled ||
+      automationBadge.data.state.auto_summary_enabled);
+
   // Page of messages (browse mode).
   const browsePage = useQuery<ChatMessage[]>({
     queryKey: ['chat-messages', selectedAiId, browseCursor, favouritesOnly],
@@ -275,6 +300,9 @@ export function ChatHistoryPage() {
   // this target since the reset would race with the in-flight loop.
   const [resetOpen, setResetOpen] = useState(false);
   const [resetting, setResetting] = useState(false);
+  // Automation settings open in a modal so the chat-history stream
+  // stays focused on the chat itself.
+  const [automationOpen, setAutomationOpen] = useState(false);
   async function onResetConfirm() {
     if (!selectedAiId) return;
     setResetting(true);
@@ -591,8 +619,42 @@ export function ChatHistoryPage() {
           </button>
         )}
         {/* Reset is available whenever a target is selected, except
-            while a sync is running for this target (the wipe would race
+            while a sync is running on this target (the wipe would race
             with the in-flight loop). */}
+        <button
+          className="btn"
+          onClick={() => setAutomationOpen(true)}
+          disabled={!selectedAiId}
+          title={
+            selectedAiId
+              ? automationHasError
+                ? 'Automation recorded an error — open to clear or reset.'
+                : automationIsActive
+                  ? 'Auto-journal or auto-summary is enabled for this target.'
+                  : 'Configure auto-journal and auto-summary for this target.'
+              : 'Select a target to configure automation.'
+          }
+        >
+          Automation…
+          {selectedAiId && automationHasError && (
+            <span
+              className="badge badge-danger"
+              style={{ marginLeft: 6 }}
+              aria-label="automation error"
+            >
+              error
+            </span>
+          )}
+          {selectedAiId && automationIsActive && !automationHasError && (
+            <span
+              className="badge badge-success"
+              style={{ marginLeft: 6 }}
+              aria-label="automation enabled"
+            >
+              on
+            </span>
+          )}
+        </button>
         <button
           className="btn btn-danger"
           onClick={() => setResetOpen(true)}
@@ -719,10 +781,45 @@ export function ChatHistoryPage() {
         onCancel={() => setResetOpen(false)}
       />
 
-      <AutomationPanel
-        aiId={selectedAiId}
-        automationInProgress={!!selectedAiId && !!state && state.status_kind === 'running'}
-      />
+      {automationOpen && selectedAiId && (
+        <div
+          className="modal-overlay"
+          role="dialog"
+          aria-modal="true"
+          aria-label="Automation settings"
+          onClick={(e) => {
+            if (e.target === e.currentTarget) setAutomationOpen(false);
+          }}
+        >
+          <div className="modal" style={{ maxWidth: 760, maxHeight: '85vh', overflow: 'auto' }}>
+            <div
+              style={{
+                display: 'flex',
+                justifyContent: 'space-between',
+                alignItems: 'baseline',
+                marginBottom: 8,
+              }}
+            >
+              <h3 style={{ margin: 0 }}>Automation</h3>
+              <button
+                className="btn btn-sm"
+                onClick={() => setAutomationOpen(false)}
+                aria-label="Close"
+              >
+                ✕
+              </button>
+            </div>
+            <p className="muted" style={{ fontSize: 12, marginTop: 0 }}>
+              Configure auto-journal and auto-summary for <code>{selectedAiId}</code>. Changes are
+              saved immediately.
+            </p>
+            <AutomationPanel
+              aiId={selectedAiId}
+              automationInProgress={!!selectedAiId && !!state && state.status_kind === 'running'}
+            />
+          </div>
+        </div>
+      )}
     </div>
   );
 }

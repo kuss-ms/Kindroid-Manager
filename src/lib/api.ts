@@ -1,6 +1,8 @@
 import { invoke } from '@tauri-apps/api/core';
 import type {
+  AutomationInstructionsDefaults,
   Character,
+  ChatAutomationDto,
   ChatMessage,
   ChatSyncState,
   JournalEntry,
@@ -9,6 +11,11 @@ import type {
   PushRequest,
   PushResult,
   CreateNewKinResult,
+  ResetChatSummaryInput,
+  RunSummaryNowInput,
+  RunSummaryNowResult,
+  SetAutomationInstructionsInput,
+  SetChatAutomationSettingsInput,
   SettingsDto,
   AiSettingsDto,
   AiChatCompletionResponse,
@@ -204,6 +211,20 @@ export const api = {
     invoke<JournalEntry>('save_journal_entry', { characterId, input }),
   deleteJournalEntry: (characterId: string, entryId: string) =>
     invoke<void>('delete_journal_entry', { characterId, entryId }),
+
+  // Chat automation (auto-journal / auto-summary)
+  getChatAutomationState: (aiId: string) =>
+    invoke<ChatAutomationDto>('get_chat_automation_state', { aiId }),
+  setChatAutomationSettings: (input: SetChatAutomationSettingsInput) =>
+    invoke<ChatAutomationDto>('set_chat_automation_settings', { input }),
+  resetChatSummary: (input: ResetChatSummaryInput) =>
+    invoke<ChatAutomationDto>('reset_chat_summary', { input }),
+  runSummaryNow: (input: RunSummaryNowInput) =>
+    invoke<RunSummaryNowResult>('run_summary_now', { input }),
+  getAutomationInstructionsDefaults: () =>
+    invoke<AutomationInstructionsDefaults>('get_automation_instructions_defaults'),
+  setAutomationInstructions: (input: SetAutomationInstructionsInput) =>
+    invoke<void>('set_automation_instructions', { input }),
 };
 
 /**

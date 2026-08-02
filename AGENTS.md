@@ -143,7 +143,15 @@ src-tauri/src/
 31. Export a character with 5 journal entries as a share image → reset app data → drop the image → character reappears with 5 journal entries (entry text + keyphrases preserved; ids and timestamps are new).
 32. Delete a character with journal entries → entries are gone (FK CASCADE).
 33. From Characters overview, click **Push as new Kin** on a character with `ai_name`, no journal entries → confirm; toast shows `New Kin created with ai_id …`; Push History detail lists `create-new-ai response` (status 200) and `update-info response` (status 200); Targets list now contains a row with the new ai_id and the AI name as label.
-34. With no token configured, click **Push as new Kin** → error toast via `AppError::TokenMissing` and the Targets list is unchanged.
+35. Sync a target with fewer than 10 messages → automation does not process them; add stable messages and confirm the newest 10 remain excluded.
+36. Enable auto-journal after a completed sync → no historical backfill occurs; after the configured interval of stable messages, generated entries are sent to Kindroid.
+37. Force a partial `journal-create` failure → successful entries remain sent, the failed entry is retried on the next completed sync, and no successful entry is regenerated.
+38. Enable auto-summary with **Bootstrap from existing history** → the next completed sync summarizes all stable history; switch to **Incremental only** and confirm no initial AI call occurs.
+39. Add enough new stable messages for an incremental summary → the selected Kindroid field is updated; switch backend with an over-limit summary and confirm the reformat path runs before the remote update.
+40. Click **Reset summary** → local summary, candidate, and cursor clear while auto-journal settings and audit entries remain; **Run summary now** respects incremental-only no-op behavior.
+41. Set global automation instructions, then set a target override → prompts use override first, global second, and hard-coded defaults when both are empty; restore and clear each override.
+42. Configure an authless AI endpoint and an authenticated endpoint → automation sends an explicit empty AI bearer for the former and the stored bearer for the latter; no token appears in logs.
+43. Delete a target with automation enabled → automation state, pending runs, and generated audit entries are removed by cascade.
 
 ## Troubleshooting
 

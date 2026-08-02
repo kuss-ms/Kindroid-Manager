@@ -3,7 +3,7 @@ import { useEffect, useState } from 'react';
 import { useForm } from 'react-hook-form';
 import { zodResolver } from '@hookform/resolvers/zod';
 import { api, errorMessage } from '../lib/api';
-import { aiSettingsSchema, settingsSchema } from '../lib/schemas';
+import { aiSettingsSchema, automationInstructionsSchema, settingsSchema } from '../lib/schemas';
 import { ConfirmDialog } from '../components/ConfirmDialog';
 import { toast } from '../components/Toaster';
 
@@ -118,6 +118,45 @@ export function SettingsPage() {
     onError: (e) => toast('error', errorMessage(e)),
   });
 
+  const instructionsDefaults = useQuery({
+    queryKey: ['automation-instruction-defaults'],
+    queryFn: api.getAutomationInstructionsDefaults,
+    staleTime: Infinity,
+  });
+
+  const {
+    register: registerInstr,
+    handleSubmit: handleSubmitInstr,
+    reset: resetInstr,
+    setValue: setInstrValue,
+    formState: { errors: instrErrors, isDirty: instrIsDirty },
+  } = useForm<{ journal: string; summary: string }>({
+    resolver: zodResolver(automationInstructionsSchema),
+    defaultValues: { journal: '', summary: '' },
+  });
+
+  useEffect(() => {
+    if (instructionsDefaults.data) {
+      resetInstr({
+        journal: instructionsDefaults.data.journal,
+        summary: instructionsDefaults.data.summary,
+      });
+    }
+  }, [instructionsDefaults.data, resetInstr]);
+
+  const saveInstructions = useMutation({
+    mutationFn: (input: { journal: string; summary: string }) =>
+      api.setAutomationInstructions(input),
+    onSuccess: () => {
+      toast('success', 'Automation instructions saved');
+      resetInstr({
+        journal: instructionsDefaults.data?.journal ?? '',
+        summary: instructionsDefaults.data?.summary ?? '',
+      });
+    },
+    onError: (e) => toast('error', errorMessage(e)),
+  });
+
   return (
     <div className="page">
       <div className="page-header">
@@ -203,8 +242,8 @@ export function SettingsPage() {
       <div className="card">
         <h3>AI provider (OpenAI-compatible)</h3>
         <p className="muted" style={{ fontSize: 12, marginTop: 6 }}>
-          Used by future features (chat-history summaries, character generator). Leave the bearer
-          token empty for local servers that don&apos;t require auth.
+          Used by chat-history automation (auto-journal, auto-summary). Leave the bearer token empty
+          for local servers that don&apos;t require auth.
         </p>
         <div className="flex-row" style={{ marginTop: 12 }}>
           <span
@@ -274,6 +313,66 @@ export function SettingsPage() {
               onClick={() => testAiConnection.mutate()}
             >
               {testAiConnection.isPending ? 'Testing…' : 'Test connection'}
+            </button>
+          </div>
+        </form>
+      </div>
+      <div className="card">
+        <h3>Automation instructions (global defaults)</h3>
+        <p className="muted" style={{ fontSize: 12, marginTop: 6 }}>
+          Default instructions sent to the AI provider for auto-journal and auto-summary. Each
+          target on the Chat History page can override these per feature.
+        </p>
+        <form
+          onSubmit={handleSubmitInstr((v) =>
+            saveInstructions.mutate({ journal: v.journal, summary: v.summary }),
+          )}
+          className="flex-col"
+          style={{ marginTop: 12 }}
+        >
+          <label className="form-label">Auto-journal instructions</label>
+          <textarea className="textarea" rows={4} maxLength={4000} {...registerInstr('journal')} />
+          {instrErrors.journal && <span className="form-error">{instrErrors.journal.message}</span>}
+          <div className="flex-row" style={{ marginTop: 4 }}>
+            <button
+              type="button"
+              className="btn btn-sm"
+              disabled={!instructionsDefaults.data}
+              onClick={() =>
+                setInstrValue('journal', instructionsDefaults.data?.journal ?? '', {
+                  shouldDirty: true,
+                })
+              }
+            >
+              Restore default
+            </button>
+          </div>
+          <label className="form-label" style={{ marginTop: 12 }}>
+            Auto-summary instructions
+          </label>
+          <textarea className="textarea" rows={4} maxLength={4000} {...registerInstr('summary')} />
+          {instrErrors.summary && <span className="form-error">{instrErrors.summary.message}</span>}
+          <div className="flex-row" style={{ marginTop: 4 }}>
+            <button
+              type="button"
+              className="btn btn-sm"
+              disabled={!instructionsDefaults.data}
+              onClick={() =>
+                setInstrValue('summary', instructionsDefaults.data?.summary ?? '', {
+                  shouldDirty: true,
+                })
+              }
+            >
+              Restore default
+            </button>
+          </div>
+          <div className="flex-row" style={{ marginTop: 12 }}>
+            <button
+              type="submit"
+              className="btn btn-primary"
+              disabled={!instrIsDirty || saveInstructions.isPending}
+            >
+              {saveInstructions.isPending ? 'Saving…' : 'Save instructions'}
             </button>
           </div>
         </form>

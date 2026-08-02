@@ -5,6 +5,7 @@ import { listen, type UnlistenFn } from '@tauri-apps/api/event';
 import { api, escapeFtsQuery, errorMessage } from '../lib/api';
 import type { ChatMessage, ChatSyncState, SyncStatusKind, Target } from '../lib/types';
 import { ConfirmDialog } from '../components/ConfirmDialog';
+import { AutomationPanel } from '../components/AutomationPanel';
 import { toast } from '../components/Toaster';
 
 const PAGE_SIZE = 50;
@@ -195,6 +196,9 @@ export function ChatHistoryPage() {
         // Refresh the visible messages so newly-fetched rows appear.
         queryClient.invalidateQueries({ queryKey: ['chat-messages'] });
         queryClient.invalidateQueries({ queryKey: ['chat-search'] });
+        // The automation cycle runs after a successful drain; refresh its
+        // state too so the panel picks up the new cursor / last-run time.
+        queryClient.invalidateQueries({ queryKey: ['chat-automation'] });
       }),
     );
     unlistens.push(
@@ -225,6 +229,7 @@ export function ChatHistoryPage() {
         queryClient.invalidateQueries({ queryKey: ['current-sync'] });
         queryClient.invalidateQueries({ queryKey: ['chat-messages'] });
         queryClient.invalidateQueries({ queryKey: ['chat-search'] });
+        queryClient.invalidateQueries({ queryKey: ['chat-automation'] });
       }),
     );
     return () => {
@@ -510,7 +515,10 @@ export function ChatHistoryPage() {
         <div className="muted">{subtitle}</div>
       </div>
 
-      <div className="form-row" style={{ flexDirection: 'row', gap: 8, alignItems: 'center', flexWrap: 'wrap' }}>
+      <div
+        className="form-row"
+        style={{ flexDirection: 'row', gap: 8, alignItems: 'center', flexWrap: 'wrap' }}
+      >
         <label className="form-label" htmlFor="target-select" style={{ flexShrink: 0 }}>
           Target
         </label>
@@ -561,7 +569,10 @@ export function ChatHistoryPage() {
 
       {body && <p className="muted">{body}</p>}
 
-      <div className="form-row" style={{ flexDirection: 'row', gap: 8, alignItems: 'center', flexWrap: 'wrap' }}>
+      <div
+        className="form-row"
+        style={{ flexDirection: 'row', gap: 8, alignItems: 'center', flexWrap: 'wrap' }}
+      >
         <input
           type="search"
           className="input input-search"
@@ -570,10 +581,7 @@ export function ChatHistoryPage() {
           onChange={(e) => setSearchInput(e.target.value)}
           style={{ flex: 1, minWidth: 200 }}
         />
-        <label
-          className="checkbox"
-          title="Show only messages you've favourited (pinned) here"
-        >
+        <label className="checkbox" title="Show only messages you've favourited (pinned) here">
           <input
             type="checkbox"
             checked={favouritesOnly}
@@ -669,6 +677,11 @@ export function ChatHistoryPage() {
         cancelLabel="Cancel"
         onConfirm={onResetConfirm}
         onCancel={() => setResetOpen(false)}
+      />
+
+      <AutomationPanel
+        aiId={selectedAiId}
+        automationInProgress={!!selectedAiId && !!state && state.status_kind === 'running'}
       />
     </div>
   );

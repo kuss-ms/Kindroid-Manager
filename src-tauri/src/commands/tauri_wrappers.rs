@@ -271,9 +271,11 @@ mod inner {
     #[tauri::command]
     pub async fn get_chat_sync_state(
         repo: State<'_, Repo>,
+        registry: State<'_, std::sync::Arc<crate::commands::sync_registry::SyncRegistry>>,
         ai_id: String,
     ) -> Result<Option<crate::domain::chat_message::ChatSyncState>, crate::error::AppError> {
-        chat_history::get_chat_sync_state(repo.inner().clone(), ai_id).await
+        chat_history::get_chat_sync_state(repo.inner().clone(), registry.inner().clone(), ai_id)
+            .await
     }
 
     #[tauri::command]

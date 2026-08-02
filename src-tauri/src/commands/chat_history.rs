@@ -1,7 +1,7 @@
 use std::sync::Arc;
 
 use crate::commands::push::{DEFAULT_BASE_URL, SETTING_BASE_URL_PUBLIC as SETTING_BASE_URL};
-use crate::domain::chat_message::{ChatMessage, ChatSyncState};
+use crate::domain::chat_message::{ChatMessage, ChatSyncState, SyncStatusKind};
 use crate::error::AppError;
 use crate::kindroid::{KindroidClient, ToggleMessagePinRequest};
 use crate::security::secrets::{SecretStoreError, Secrets, API_TOKEN_KEY};
@@ -89,9 +89,28 @@ pub async fn chat_message_count(repo: Arc<dyn Repository>, ai_id: String) -> Res
 
 pub async fn get_chat_sync_state(
     repo: Arc<dyn Repository>,
+    registry: Arc<SyncRegistry>,
     ai_id: String,
 ) -> Result<Option<ChatSyncState>, AppError> {
-    Ok(repo.get_chat_sync_state(&ai_id).await?)
+    let Some(mut state) = repo.get_chat_sync_state(&ai_id).await? else {
+        return Ok(None);
+    };
+
+    let current = registry.current().await;
+    let state_is_active = state.is_syncing
+        || matches!(
+            state.status_kind,
+            SyncStatusKind::Running | SyncStatusKind::Backoff
+        );
+    if current.as_deref() != Some(ai_id.as_str()) && state_is_active {
+        state.is_syncing = false;
+        state.status_kind = SyncStatusKind::Idle;
+        state.backoff_until = None;
+        state.status_message = None;
+        repo.upsert_chat_sync_state(&state).await?;
+    }
+
+    Ok(Some(state))
 }
 
 pub async fn get_current_sync(registry: Arc<SyncRegistry>) -> Result<Option<String>, AppError> {
@@ -170,4 +189,88 @@ pub async fn start_chat_sync(
     });
 
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::domain::chat_message::{ChatSyncState, SyncStatusKind};
+    use crate::domain::target::Target;
+    use crate::storage::sqlite::SqliteRepository;
+    use chrono::Utc;
+    use uuid::Uuid;
+
+    async fn seed_target(repo: &Arc<dyn Repository>, ai_id: &str) -> Uuid {
+        let t = Target {
+            id: Uuid::new_v4(),
+            ai_id: ai_id.into(),
+            label: "test".into(),
+            created_at: Utc::now(),
+        };
+        repo.upsert_target(t.clone()).await.unwrap();
+        t.id
+    }
+
+    #[tokio::test]
+    async fn get_chat_sync_state_resets_stale_running_flag() {
+        let repo: Arc<dyn Repository> = Arc::new(SqliteRepository::open_in_memory().unwrap());
+        let _ = seed_target(&repo, "ai_stale").await;
+        let registry = Arc::new(SyncRegistry::new());
+        repo.upsert_chat_sync_state(&ChatSyncState {
+            ai_id: "ai_stale".into(),
+            last_synced_at: Utc::now(),
+            last_timestamp: 0,
+            full_sync_done: false,
+            is_syncing: true,
+            status_kind: SyncStatusKind::Running,
+            status_message: Some("from a previous run".into()),
+            backoff_until: Some(Utc::now()),
+            total: 0,
+        })
+        .await
+        .unwrap();
+
+        let got = super::get_chat_sync_state(repo.clone(), registry.clone(), "ai_stale".into())
+            .await
+            .unwrap()
+            .unwrap();
+        assert!(!got.is_syncing);
+        assert_eq!(got.status_kind, SyncStatusKind::Idle);
+        assert!(got.status_message.is_none());
+        assert!(got.backoff_until.is_none());
+
+        let persisted = repo.get_chat_sync_state("ai_stale").await.unwrap().unwrap();
+        assert!(!persisted.is_syncing);
+        assert_eq!(persisted.status_kind, SyncStatusKind::Idle);
+    }
+
+    #[tokio::test]
+    async fn get_chat_sync_state_preserves_active_running_flag() {
+        let repo: Arc<dyn Repository> = Arc::new(SqliteRepository::open_in_memory().unwrap());
+        let _ = seed_target(&repo, "ai_active").await;
+        let registry = Arc::new(SyncRegistry::new());
+        repo.upsert_chat_sync_state(&ChatSyncState {
+            ai_id: "ai_active".into(),
+            last_synced_at: Utc::now(),
+            last_timestamp: 0,
+            full_sync_done: false,
+            is_syncing: true,
+            status_kind: SyncStatusKind::Running,
+            status_message: None,
+            backoff_until: None,
+            total: 0,
+        })
+        .await
+        .unwrap();
+
+        let h = registry.start("ai_active").await.unwrap();
+        let got = super::get_chat_sync_state(repo.clone(), registry.clone(), "ai_active".into())
+            .await
+            .unwrap()
+            .unwrap();
+        assert!(got.is_syncing);
+        assert_eq!(got.status_kind, SyncStatusKind::Running);
+        drop(h);
+        registry.release().await;
+    }
 }

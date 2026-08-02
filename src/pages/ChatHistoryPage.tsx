@@ -79,6 +79,9 @@ export function ChatHistoryPage() {
     const fromUrl = params.get('ai_id');
     if (fromUrl && targetsList.some((t) => t.ai_id === fromUrl)) return fromUrl;
     if (targetsList.length === 1) return targetsList[0].ai_id;
+    if (fromUrl && targetsList.length > 1 && !targetsList.some((t) => t.ai_id === fromUrl)) {
+      return targetsList[0].ai_id;
+    }
     return fromUrl;
   }, [params, targetsList]);
 

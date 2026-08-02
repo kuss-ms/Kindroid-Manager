@@ -321,7 +321,9 @@ export function SettingsPage() {
         <h3>Automation instructions (global defaults)</h3>
         <p className="muted" style={{ fontSize: 12, marginTop: 6 }}>
           Default instructions sent to the AI provider for auto-journal and auto-summary. Each
-          target on the Chat History page can override these per feature.
+          target on the Chat History page can override these per feature. Use{' '}
+          <code>{'{ai_name}'}</code> in either field and it will be replaced with the AI&apos;s name
+          (the target&apos;s label) when the prompt is sent.
         </p>
         <form
           onSubmit={handleSubmitInstr((v) =>

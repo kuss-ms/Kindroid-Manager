@@ -409,7 +409,7 @@ export function AutomationPanel({
             onChange={(e) => update('journalOverride', e.target.value)}
             placeholder={
               pending.hasJournalOverride
-                ? 'Custom journal instructions for this target'
+                ? "Custom journal instructions for this target (use {ai_name} for the AI's name)"
                 : 'Toggle "Use override" to enter custom instructions'
             }
             maxLength={MAX_INSTRUCTIONS_CHARS}
@@ -452,7 +452,7 @@ export function AutomationPanel({
             onChange={(e) => update('summaryOverride', e.target.value)}
             placeholder={
               pending.hasSummaryOverride
-                ? 'Custom summary instructions for this target'
+                ? "Custom summary instructions for this target (use {ai_name} for the AI's name)"
                 : 'Toggle "Use override" to enter custom instructions'
             }
             maxLength={MAX_INSTRUCTIONS_CHARS}

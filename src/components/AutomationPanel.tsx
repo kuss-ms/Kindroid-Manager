@@ -536,6 +536,28 @@ export function AutomationPanel({
               ? 'yes'
               : 'no (first sync will seed watermark, no backfill)'}
           </p>
+          {safeDto.state.journal_last_response && (
+            <details style={{ marginTop: 4 }}>
+              <summary className="muted" style={{ fontSize: 12, cursor: 'pointer' }}>
+                Show last AI response (debug)
+              </summary>
+              <pre
+                className="card-tight"
+                style={{
+                  background: 'var(--surface-2)',
+                  padding: 8,
+                  fontSize: 12,
+                  whiteSpace: 'pre-wrap',
+                  wordBreak: 'break-word',
+                  maxHeight: 220,
+                  overflow: 'auto',
+                  marginTop: 4,
+                }}
+              >
+                {safeDto.state.journal_last_response}
+              </pre>
+            </details>
+          )}
         </div>
         <div className="section">
           <h4 style={{ marginBottom: 4 }}>Auto-summary status</h4>
@@ -553,6 +575,28 @@ export function AutomationPanel({
             <p className="muted" style={{ fontSize: 12 }}>
               Pending candidate ({candidateChars} chars) will be retried on the next drain.
             </p>
+          )}
+          {safeDto.state.summary_last_response && (
+            <details style={{ marginTop: 4 }}>
+              <summary className="muted" style={{ fontSize: 12, cursor: 'pointer' }}>
+                Show last AI response (debug)
+              </summary>
+              <pre
+                className="card-tight"
+                style={{
+                  background: 'var(--surface-2)',
+                  padding: 8,
+                  fontSize: 12,
+                  whiteSpace: 'pre-wrap',
+                  wordBreak: 'break-word',
+                  maxHeight: 220,
+                  overflow: 'auto',
+                  marginTop: 4,
+                }}
+              >
+                {safeDto.state.summary_last_response}
+              </pre>
+            </details>
           )}
         </div>
       </div>

@@ -263,6 +263,8 @@ export interface ChatAutomationState {
   summary_last_error: string | null;
   journal_last_run_at: string | null;
   summary_last_run_at: string | null;
+  journal_last_response: string | null;
+  summary_last_response: string | null;
 }
 
 export interface AutoJournalRun {

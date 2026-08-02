@@ -233,7 +233,7 @@ pub async fn run_summary_now(
             message: "No summary update is ready yet".into(),
         }),
         Err(e) => {
-            persist_summary_error(&repo, &ai_id, e.to_string()).await;
+            persist_summary_error(&repo, &ai_id, e.to_string(), None).await;
             Err(e)
         }
     }
@@ -269,10 +269,10 @@ pub async fn run_automation_cycle(
         return;
     }
     if let Err(e) = process_journal(&repo, &kindroid_client, &ai_client, ai_id).await {
-        persist_journal_error(&repo, ai_id, e.to_string()).await;
+        persist_journal_error(&repo, ai_id, e.to_string(), None).await;
     }
     if let Err(e) = process_summary(&repo, &kindroid_client, &ai_client, ai_id, false).await {
-        persist_summary_error(&repo, ai_id, e.to_string()).await;
+        persist_summary_error(&repo, ai_id, e.to_string(), None).await;
     }
     end_progress(ai_id);
 }
@@ -344,14 +344,22 @@ async fn process_journal(
     );
     let prompt = journal_prompt(&instructions, &context, &prior, state.journal_cap);
     let response = ai_completion(repo, ai, &state, journal_system_prompt(), prompt).await?;
-    let parsed: JournalResponse = parse_json_response::<JournalResponse>(&response, "journal")?;
-    if parsed.entries.len() > state.journal_cap as usize {
-        return Err(AppError::invalid("AI returned too many journal entries"));
-    }
-    for (index, generated) in parsed.entries.iter().enumerate() {
-        JournalEntry::validate_indexed(index, &generated.entry, &generated.keyphrases)
-            .map_err(AppError::invalid)?;
-    }
+    tracing::info!(
+        ai_id = %ai_id,
+        bytes = response.len(),
+        "journal AI response:\n{}",
+        response
+    );
+    state.journal_last_response = Some(response.clone());
+    state.journal_last_error = None;
+    repo.upsert_chat_automation_state(&state).await?;
+    let parsed = match parse_journal_payload(&response, state.journal_cap) {
+        Ok(p) => p,
+        Err(e) => {
+            persist_journal_error(repo, ai_id, e.to_string(), Some(response.clone())).await;
+            return Err(e);
+        }
+    };
     let now = Utc::now();
     let end_cursor = new_messages.last().map(cursor_of);
     let run = AutoJournalRun {
@@ -532,10 +540,27 @@ async fn process_summary(
         limit,
     );
     let response = ai_completion(repo, ai, &state, summary_system_prompt(limit), prompt).await?;
-    let parsed: SummaryResponse = parse_json_response::<SummaryResponse>(&response, "summary")?;
+    tracing::info!(
+        ai_id = %ai_id,
+        mode = ?state.summary_backend,
+        bytes = response.len(),
+        "summary AI response:\n{}",
+        response
+    );
+    state.summary_last_response = Some(response.clone());
+    state.summary_last_error = None;
+    repo.upsert_chat_automation_state(&state).await?;
+    let parsed = match parse_json_response::<SummaryResponse>(&response, "summary") {
+        Ok(p) => p,
+        Err(e) => {
+            persist_summary_error(repo, ai_id, e.to_string(), Some(response.clone())).await;
+            return Err(e);
+        }
+    };
     if parsed.summary.chars().count() > limit {
         return Err(AppError::invalid(format!(
-            "summary exceeds {limit} characters"
+            "summary exceeds {limit} characters (got {})",
+            parsed.summary.chars().count()
         )));
     }
     let candidate_cursor = if matches!(mode, SummaryMode::Reformat) {
@@ -846,6 +871,21 @@ fn parse_json_response<T: for<'de> Deserialize<'de>>(
         .map_err(|e| AppError::invalid(format!("AI returned invalid {label} JSON: {e}")))
 }
 
+/// Parse + validate the AI's journal payload. Counts entries against
+/// `cap` and runs `JournalEntry::validate_indexed` so the caller can
+/// present per-entry errors without juggling the raw response.
+fn parse_journal_payload(raw: &str, cap: u32) -> Result<JournalResponse, AppError> {
+    let parsed: JournalResponse = parse_json_response(raw, "journal")?;
+    if parsed.entries.len() > cap as usize {
+        return Err(AppError::invalid("AI returned too many journal entries"));
+    }
+    for (index, generated) in parsed.entries.iter().enumerate() {
+        JournalEntry::validate_indexed(index, &generated.entry, &generated.keyphrases)
+            .map_err(AppError::invalid)?;
+    }
+    Ok(parsed)
+}
+
 async fn load_state(
     repo: &Arc<dyn Repository>,
     ai_id: &str,
@@ -950,16 +990,32 @@ fn resolve_instructions(
         .to_string()
 }
 
-async fn persist_journal_error(repo: &Arc<dyn Repository>, ai_id: &str, error: String) {
+async fn persist_journal_error(
+    repo: &Arc<dyn Repository>,
+    ai_id: &str,
+    error: String,
+    response: Option<String>,
+) {
     if let Ok(mut state) = load_state(repo, ai_id).await {
         state.journal_last_error = Some(error);
+        if let Some(r) = response {
+            state.journal_last_response = Some(r);
+        }
         let _ = repo.upsert_chat_automation_state(&state).await;
     }
 }
 
-async fn persist_summary_error(repo: &Arc<dyn Repository>, ai_id: &str, error: String) {
+async fn persist_summary_error(
+    repo: &Arc<dyn Repository>,
+    ai_id: &str,
+    error: String,
+    response: Option<String>,
+) {
     if let Ok(mut state) = load_state(repo, ai_id).await {
         state.summary_last_error = Some(error);
+        if let Some(r) = response {
+            state.summary_last_response = Some(r);
+        }
         let _ = repo.upsert_chat_automation_state(&state).await;
     }
 }

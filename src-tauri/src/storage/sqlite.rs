@@ -928,7 +928,8 @@ impl Repository for SqliteRepository {
              journal_initialised, summary, summary_backend_stored, pending_summary_candidate,
              pending_summary_backend, pending_summary_created_at, pending_summary_cursor_timestamp,
              pending_summary_cursor_msg_id, pending_reformat, journal_last_error, summary_last_error,
-             journal_last_run_at, summary_last_run_at FROM chat_automation_state WHERE ai_id = ?1",
+             journal_last_run_at, summary_last_run_at, journal_last_response, summary_last_response
+             FROM chat_automation_state WHERE ai_id = ?1",
             params![ai_id], row_to_chat_automation_state,
         ).optional().map_err(|e| StorageError::Database(e.to_string()))?.ok_or(StorageError::NotFound)
     }
@@ -939,7 +940,7 @@ impl Repository for SqliteRepository {
     ) -> Result<(), StorageError> {
         let conn = lock(&self.conn).await;
         conn.execute(
-            "INSERT INTO chat_automation_state VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,?12,?13,?14,?15,?16,?17,?18,?19,?20,?21,?22,?23,?24,?25,?26)
+            "INSERT INTO chat_automation_state VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,?12,?13,?14,?15,?16,?17,?18,?19,?20,?21,?22,?23,?24,?25,?26,?27,?28)
              ON CONFLICT(ai_id) DO UPDATE SET auto_journal_enabled=excluded.auto_journal_enabled,
              auto_summary_enabled=excluded.auto_summary_enabled, interval=excluded.interval, journal_cap=excluded.journal_cap,
              summary_backend=excluded.summary_backend, bootstrap_mode=excluded.bootstrap_mode,
@@ -953,7 +954,9 @@ impl Repository for SqliteRepository {
              pending_summary_cursor_msg_id=excluded.pending_summary_cursor_msg_id,
              pending_reformat=excluded.pending_reformat, journal_last_error=excluded.journal_last_error,
              summary_last_error=excluded.summary_last_error, journal_last_run_at=excluded.journal_last_run_at,
-             summary_last_run_at=excluded.summary_last_run_at",
+             summary_last_run_at=excluded.summary_last_run_at,
+             journal_last_response=excluded.journal_last_response,
+             summary_last_response=excluded.summary_last_response",
             params![s.ai_id, s.auto_journal_enabled as i32, s.auto_summary_enabled as i32, s.interval, s.journal_cap,
                 s.summary_backend.as_str(), s.bootstrap_mode.as_str(), s.journal_instructions_override, s.summary_instructions_override,
                 s.journal_cursor.as_ref().map(|c| c.timestamp), s.journal_cursor.as_ref().map(|c| c.kindroid_msg_id.as_str()),
@@ -962,7 +965,8 @@ impl Repository for SqliteRepository {
                 s.pending_summary_backend.as_ref().map(SummaryBackend::as_str), s.pending_summary_created_at.map(|d| d.to_rfc3339()),
                 s.pending_summary_cursor.as_ref().map(|c| c.timestamp), s.pending_summary_cursor.as_ref().map(|c| c.kindroid_msg_id.as_str()),
                 s.pending_reformat as i32, s.journal_last_error, s.summary_last_error,
-                s.journal_last_run_at.map(|d| d.to_rfc3339()), s.summary_last_run_at.map(|d| d.to_rfc3339())]
+                s.journal_last_run_at.map(|d| d.to_rfc3339()), s.summary_last_run_at.map(|d| d.to_rfc3339()),
+                s.journal_last_response, s.summary_last_response]
         ).map_err(|e| StorageError::Database(e.to_string()))?;
         Ok(())
     }
@@ -1164,6 +1168,8 @@ fn row_to_chat_automation_state(row: &rusqlite::Row<'_>) -> rusqlite::Result<Cha
         summary_last_error: row.get(23)?,
         journal_last_run_at: parse_optional_dt(row.get(24)?, 24)?,
         summary_last_run_at: parse_optional_dt(row.get(25)?, 25)?,
+        journal_last_response: row.get(26)?,
+        summary_last_response: row.get(27)?,
     })
 }
 fn run_status_str(s: AutoJournalRunStatus) -> &'static str {

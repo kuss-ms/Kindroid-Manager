@@ -24,7 +24,9 @@ CREATE TABLE IF NOT EXISTS chat_automation_state (
   journal_last_error TEXT,
   summary_last_error TEXT,
   journal_last_run_at TEXT,
-  summary_last_run_at TEXT
+  summary_last_run_at TEXT,
+  journal_last_response TEXT,
+  summary_last_response TEXT
 );
 
 CREATE TABLE IF NOT EXISTS auto_journal_runs (

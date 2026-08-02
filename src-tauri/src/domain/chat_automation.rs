@@ -87,6 +87,8 @@ pub struct ChatAutomationState {
     pub summary_last_error: Option<String>,
     pub journal_last_run_at: Option<DateTime<Utc>>,
     pub summary_last_run_at: Option<DateTime<Utc>>,
+    pub journal_last_response: Option<String>,
+    pub summary_last_response: Option<String>,
 }
 
 impl Default for ChatAutomationState {
@@ -115,6 +117,8 @@ impl Default for ChatAutomationState {
             summary_last_error: None,
             journal_last_run_at: None,
             summary_last_run_at: None,
+            journal_last_response: None,
+            summary_last_response: None,
         }
     }
 }

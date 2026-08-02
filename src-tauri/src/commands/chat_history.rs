@@ -123,6 +123,7 @@ pub async fn reset_chat_history(
 pub async fn start_chat_sync(
     repo: Arc<dyn Repository>,
     client: Arc<dyn KindroidClient>,
+    ai_client: Arc<dyn crate::kindroid::ai::AiClient>,
     registry: Arc<SyncRegistry>,
     ai_id: String,
     app: tauri::AppHandle,
@@ -152,11 +153,20 @@ pub async fn start_chat_sync(
 
     let repo_c = repo.clone();
     let client_c = client.clone();
+    let ai_client_c = ai_client.clone();
     let reg_c = registry.clone();
     let ai = trimmed.to_string();
     tauri::async_runtime::spawn(async move {
-        super::sync_loop_impl::run_sync_loop(repo_c, client_c, reg_c, ai, handle.cancel_rx, app)
-            .await;
+        super::sync_loop_impl::run_sync_loop(
+            repo_c,
+            client_c,
+            ai_client_c,
+            reg_c,
+            ai,
+            handle.cancel_rx,
+            app,
+        )
+        .await;
     });
 
     Ok(())

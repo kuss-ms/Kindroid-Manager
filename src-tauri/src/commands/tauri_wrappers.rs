@@ -8,7 +8,8 @@
 #[cfg(not(test))]
 mod inner {
     use crate::commands::{
-        ai, characters, chat_history, history, journal, push, settings, share_code, targets,
+        ai, characters, chat_automation, chat_history, history, journal, push, settings,
+        share_code, targets,
     };
     use tauri::State;
 
@@ -286,6 +287,7 @@ mod inner {
     pub async fn start_chat_sync(
         repo: State<'_, Repo>,
         client: State<'_, Client>,
+        ai_client: State<'_, Ai>,
         registry: State<'_, std::sync::Arc<crate::commands::sync_registry::SyncRegistry>>,
         ai_id: String,
         app: tauri::AppHandle,
@@ -293,6 +295,7 @@ mod inner {
         chat_history::start_chat_sync(
             repo.inner().clone(),
             client.inner().clone(),
+            ai_client.inner().clone(),
             registry.inner().clone(),
             ai_id,
             app,
@@ -313,6 +316,60 @@ mod inner {
         ai_id: String,
     ) -> Result<usize, crate::error::AppError> {
         chat_history::reset_chat_history(repo.inner().clone(), ai_id).await
+    }
+
+    #[tauri::command]
+    pub async fn get_chat_automation_state(
+        repo: State<'_, Repo>,
+        ai_id: String,
+    ) -> Result<chat_automation::ChatAutomationDto, crate::error::AppError> {
+        chat_automation::get_chat_automation_state(repo.inner().clone(), ai_id).await
+    }
+
+    #[tauri::command]
+    pub async fn set_chat_automation_settings(
+        repo: State<'_, Repo>,
+        input: chat_automation::SetChatAutomationSettingsInput,
+    ) -> Result<chat_automation::ChatAutomationDto, crate::error::AppError> {
+        chat_automation::set_chat_automation_settings(repo.inner().clone(), input).await
+    }
+
+    #[tauri::command]
+    pub async fn reset_chat_summary(
+        repo: State<'_, Repo>,
+        input: chat_automation::ResetChatSummaryInput,
+    ) -> Result<chat_automation::ChatAutomationDto, crate::error::AppError> {
+        chat_automation::reset_chat_summary(repo.inner().clone(), input).await
+    }
+
+    #[tauri::command]
+    pub async fn run_summary_now(
+        repo: State<'_, Repo>,
+        client: State<'_, Client>,
+        ai_client: State<'_, Ai>,
+        input: chat_automation::RunSummaryNowInput,
+    ) -> Result<chat_automation::RunSummaryNowResult, crate::error::AppError> {
+        chat_automation::run_summary_now(
+            repo.inner().clone(),
+            client.inner().clone(),
+            ai_client.inner().clone(),
+            input,
+        )
+        .await
+    }
+
+    #[tauri::command]
+    pub async fn get_automation_instructions_defaults(
+    ) -> chat_automation::AutomationInstructionsDefaults {
+        chat_automation::get_automation_instructions_defaults().await
+    }
+
+    #[tauri::command]
+    pub async fn set_automation_instructions(
+        repo: State<'_, Repo>,
+        input: chat_automation::SetAutomationInstructionsInput,
+    ) -> Result<(), crate::error::AppError> {
+        chat_automation::set_automation_instructions(repo.inner().clone(), input).await
     }
 
     #[tauri::command]

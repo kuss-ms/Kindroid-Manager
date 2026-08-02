@@ -91,6 +91,7 @@ enum DrainOutcome {
 pub async fn run_sync_loop(
     repo: Arc<dyn Repository>,
     client: Arc<dyn KindroidClient>,
+    ai_client: Arc<dyn crate::kindroid::ai::AiClient>,
     registry: Arc<SyncRegistry>,
     ai_id: String,
     cancel_rx: watch::Receiver<bool>,
@@ -99,6 +100,7 @@ pub async fn run_sync_loop(
     if let Err(e) = run_loop_inner(
         repo.clone(),
         client.clone(),
+        ai_client.clone(),
         ai_id.clone(),
         cancel_rx,
         app.clone(),
@@ -144,6 +146,7 @@ pub async fn run_sync_loop(
 async fn run_loop_inner(
     repo: Arc<dyn Repository>,
     client: Arc<dyn KindroidClient>,
+    ai_client: Arc<dyn crate::kindroid::ai::AiClient>,
     ai_id: String,
     cancel_rx: watch::Receiver<bool>,
     app: AppHandle,
@@ -184,7 +187,17 @@ async fn run_loop_inner(
         )
         .await?
         {
-            DrainOutcome::Drained => {}
+            DrainOutcome::Drained => {
+                if state.full_sync_done {
+                    super::chat_automation::run_automation_cycle(
+                        repo.clone(),
+                        client.clone(),
+                        ai_client.clone(),
+                        &ai_id,
+                    )
+                    .await;
+                }
+            }
             DrainOutcome::Cancelled => {
                 finalize_cancelled(&repo, &app, &ai_id, &state, stats).await;
                 return Ok(());

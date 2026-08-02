@@ -4,6 +4,7 @@
 
 pub mod ai;
 pub mod characters;
+pub mod chat_automation;
 pub mod chat_history;
 pub mod history;
 pub mod journal;

@@ -1001,6 +1001,16 @@ impl Repository for SqliteRepository {
             params![r.id,r.ai_id,r.start_cursor.as_ref().map(|c|c.timestamp),r.start_cursor.as_ref().map(|c|c.kindroid_msg_id.as_str()),r.end_cursor.as_ref().map(|c|c.timestamp),r.end_cursor.as_ref().map(|c|c.kindroid_msg_id.as_str()),run_status_str(r.status),r.attempts,r.completed_at.map(|d|d.to_rfc3339()),r.last_error,r.created_at.to_rfc3339()]).map_err(|e| StorageError::Database(e.to_string()))?;
         Ok(())
     }
+    async fn delete_auto_journal_run(&self, run_id: &str) -> Result<(), StorageError> {
+        // The entries FK CASCADE handles the children.
+        let conn = lock(&self.conn).await;
+        conn.execute(
+            "DELETE FROM auto_journal_runs WHERE id = ?1",
+            params![run_id],
+        )
+        .map_err(|e| StorageError::Database(e.to_string()))?;
+        Ok(())
+    }
     async fn create_auto_journal_entry(&self, e: &AutoJournalEntry) -> Result<(), StorageError> {
         self.update_auto_journal_entry(e).await
     }
@@ -2429,5 +2439,51 @@ mod tests {
             cols.iter().any(|c| c == "summary_last_response"),
             "0008 should re-add summary_last_response, columns: {cols:?}"
         );
+    }
+
+    #[tokio::test]
+    async fn delete_auto_journal_run_removes_run_and_cascades_entries() {
+        let repo = SqliteRepository::open_in_memory().unwrap();
+        let target = target("T", "ai_del");
+        repo.upsert_target(target).await.unwrap();
+        let now = Utc::now();
+        let run = AutoJournalRun {
+            id: "del-run".into(),
+            ai_id: "ai_del".into(),
+            start_cursor: None,
+            end_cursor: None,
+            status: AutoJournalRunStatus::Failed,
+            attempts: 3,
+            completed_at: None,
+            last_error: Some("bad".into()),
+            created_at: now,
+        };
+        repo.create_auto_journal_run(&run).await.unwrap();
+        repo.create_auto_journal_entry(&AutoJournalEntry {
+            id: "del-entry".into(),
+            run_id: run.id.clone(),
+            ai_id: run.ai_id.clone(),
+            entry: "remember this".into(),
+            keyphrases: vec!["test".into()],
+            source_start: None,
+            source_end: None,
+            status: AutoJournalEntryStatus::Error,
+            response_status: Some(400),
+            response_message: Some("bad".into()),
+            created_at: now,
+            updated_at: now,
+        })
+        .await
+        .unwrap();
+        repo.delete_auto_journal_run(&run.id).await.unwrap();
+        assert!(matches!(
+            repo.get_auto_journal_run(&run.id).await,
+            Err(StorageError::NotFound)
+        ));
+        assert!(repo
+            .list_auto_journal_entries(&run.id)
+            .await
+            .unwrap()
+            .is_empty());
     }
 }

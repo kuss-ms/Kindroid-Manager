@@ -220,7 +220,21 @@ export function AutomationPanel({
       queryClient.setQueryData(['chat-automation', aiId], data);
       toast('success', 'Summary reset');
     },
-    onError: (e) => toast('error', errorMessage(e)),
+    onError: (e: unknown) => toast('error', errorMessage(e)),
+  });
+
+  const clearStuckMutation = useMutation({
+    mutationFn: () => api.clearStuckAutoJournalRuns({ ai_id: aiId! }),
+    onSuccess: (data: { removed: number }) => {
+      toast(
+        'success',
+        data.removed > 0 ? `Cleared ${data.removed} stuck run(s)` : 'No stuck runs to clear',
+      );
+      queryClient.invalidateQueries({ queryKey: ['chat-automation', aiId] });
+    },
+    onError: (err: unknown) => {
+      toast('error', errorMessage(err));
+    },
   });
 
   const runNowMutation = useMutation({
@@ -536,6 +550,17 @@ export function AutomationPanel({
               ? 'yes'
               : 'no (first sync will seed watermark, no backfill)'}
           </p>
+          {safeDto.state.journal_last_error && (
+            <button
+              type="button"
+              className="btn btn-sm"
+              disabled={busy || clearStuckMutation.isPending}
+              onClick={() => clearStuckMutation.mutate()}
+              title="Delete any pending/running/failed auto-journal runs so the next sync can start fresh"
+            >
+              {clearStuckMutation.isPending ? 'Clearing…' : 'Clear stuck runs'}
+            </button>
+          )}
           {safeDto.state.journal_last_response && (
             <details style={{ marginTop: 4 }}>
               <summary className="muted" style={{ fontSize: 12, cursor: 'pointer' }}>

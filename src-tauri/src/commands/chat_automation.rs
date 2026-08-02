@@ -58,6 +58,16 @@ pub struct ResetChatSummaryInput {
 }
 
 #[derive(Debug, Clone, Deserialize)]
+pub struct ClearStuckAutoJournalRunsInput {
+    pub ai_id: String,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct ClearStuckAutoJournalRunsResult {
+    pub removed: usize,
+}
+
+#[derive(Debug, Clone, Deserialize)]
 pub struct RunSummaryNowInput {
     pub ai_id: String,
 }
@@ -202,6 +212,28 @@ pub async fn reset_chat_summary(
     }
     repo.reset_chat_summary(&ai_id).await?;
     get_chat_automation_state(repo, ai_id).await
+}
+
+pub async fn clear_stuck_auto_journal_runs(
+    repo: Arc<dyn Repository>,
+    input: ClearStuckAutoJournalRunsInput,
+) -> Result<ClearStuckAutoJournalRunsResult, AppError> {
+    let ai_id = validate_ai_id(&input.ai_id)?;
+    ensure_target(&repo, &ai_id).await?;
+    let pending = repo.list_pending_auto_journal_runs(&ai_id).await?;
+    let mut removed = 0;
+    for run in pending {
+        repo.delete_auto_journal_run(&run.id).await?;
+        removed += 1;
+    }
+    if removed > 0 {
+        // Clear the persisted error so the UI reflects the recovery.
+        if let Ok(mut state) = load_state(&repo, &ai_id).await {
+            state.journal_last_error = None;
+            let _ = repo.upsert_chat_automation_state(&state).await;
+        }
+    }
+    Ok(ClearStuckAutoJournalRunsResult { removed })
 }
 
 pub async fn run_summary_now(
@@ -438,7 +470,12 @@ async fn send_journal_run(
     repo.update_auto_journal_run(run).await?;
     let mut last_error = None;
     for mut entry in repo.list_auto_journal_entries(&run.id).await? {
-        if entry.status == AutoJournalEntryStatus::Sent {
+        // Only Pending entries are retried. Sent = already delivered.
+        // Error = already rejected by Kindroid; retrying with the same
+        // payload would just produce the same failure and wedge the run.
+        // Operators can manually trigger a fresh attempt by clearing the
+        // stuck run from the database.
+        if entry.status != AutoJournalEntryStatus::Pending {
             continue;
         }
         match kindroid

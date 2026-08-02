@@ -182,6 +182,10 @@ pub trait Repository: Send + Sync {
         ai_id: &str,
     ) -> Result<Vec<AutoJournalRun>, StorageError>;
     async fn update_auto_journal_run(&self, run: &AutoJournalRun) -> Result<(), StorageError>;
+    /// Remove a stuck auto-journal run and all of its entries. The
+    /// cursor is **not** advanced — the next automation cycle will
+    /// generate a fresh run for the same message window.
+    async fn delete_auto_journal_run(&self, run_id: &str) -> Result<(), StorageError>;
     async fn create_auto_journal_entry(&self, entry: &AutoJournalEntry)
         -> Result<(), StorageError>;
     async fn list_auto_journal_entries(

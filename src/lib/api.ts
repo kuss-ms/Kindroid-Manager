@@ -12,6 +12,8 @@ import type {
   PushResult,
   CreateNewKinResult,
   ResetChatSummaryInput,
+  ClearStuckAutoJournalRunsInput,
+  ClearStuckAutoJournalRunsResult,
   RunSummaryNowInput,
   RunSummaryNowResult,
   SetAutomationInstructionsInput,
@@ -219,6 +221,8 @@ export const api = {
     invoke<ChatAutomationDto>('set_chat_automation_settings', { input }),
   resetChatSummary: (input: ResetChatSummaryInput) =>
     invoke<ChatAutomationDto>('reset_chat_summary', { input }),
+  clearStuckAutoJournalRuns: (input: ClearStuckAutoJournalRunsInput) =>
+    invoke<ClearStuckAutoJournalRunsResult>('clear_stuck_auto_journal_runs', { input }),
   runSummaryNow: (input: RunSummaryNowInput) =>
     invoke<RunSummaryNowResult>('run_summary_now', { input }),
   getAutomationInstructionsDefaults: () =>

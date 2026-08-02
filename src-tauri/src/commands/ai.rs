@@ -637,6 +637,12 @@ mod tests {
         ) -> Result<(), crate::storage::StorageError> {
             Ok(())
         }
+        async fn delete_auto_journal_run(
+            &self,
+            _: &str,
+        ) -> Result<(), crate::storage::StorageError> {
+            Ok(())
+        }
         async fn create_auto_journal_entry(
             &self,
             _: &crate::domain::chat_automation::AutoJournalEntry,

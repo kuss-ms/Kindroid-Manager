@@ -69,6 +69,7 @@ pub fn run() {
             tauri_wrappers::get_chat_automation_state,
             tauri_wrappers::set_chat_automation_settings,
             tauri_wrappers::reset_chat_summary,
+            tauri_wrappers::clear_stuck_auto_journal_runs,
             tauri_wrappers::run_summary_now,
             tauri_wrappers::get_automation_instructions_defaults,
             tauri_wrappers::set_automation_instructions,

@@ -301,6 +301,9 @@ mod tests {
         ) -> Result<(), StorageError> {
             Ok(())
         }
+        async fn delete_auto_journal_run(&self, _: &str) -> Result<(), StorageError> {
+            Ok(())
+        }
         async fn create_auto_journal_entry(
             &self,
             _: &crate::domain::chat_automation::AutoJournalEntry,

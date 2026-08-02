@@ -345,6 +345,14 @@ mod inner {
     }
 
     #[tauri::command]
+    pub async fn clear_stuck_auto_journal_runs(
+        repo: State<'_, Repo>,
+        input: chat_automation::ClearStuckAutoJournalRunsInput,
+    ) -> Result<chat_automation::ClearStuckAutoJournalRunsResult, crate::error::AppError> {
+        chat_automation::clear_stuck_auto_journal_runs(repo.inner().clone(), input).await
+    }
+
+    #[tauri::command]
     pub async fn run_summary_now(
         repo: State<'_, Repo>,
         client: State<'_, Client>,

@@ -318,6 +318,14 @@ export interface ResetChatSummaryInput {
   ai_id: string;
 }
 
+export interface ClearStuckAutoJournalRunsInput {
+  ai_id: string;
+}
+
+export interface ClearStuckAutoJournalRunsResult {
+  removed: number;
+}
+
 export interface RunSummaryNowInput {
   ai_id: string;
 }

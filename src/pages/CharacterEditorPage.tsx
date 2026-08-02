@@ -3,7 +3,7 @@ import { useNavigate, useParams } from 'react-router-dom';
 import { useEffect, useRef, useState } from 'react';
 import { Controller, useForm, type UseFormRegisterReturn } from 'react-hook-form';
 import { zodResolver } from '@hookform/resolvers/zod';
-import { api, errorMessage } from '../lib/api';
+import { api, errorMessage, isAndroid } from '../lib/api';
 import { characterInputSchema, type CharacterFormValues } from '../lib/schemas';
 import { toast } from '../components/Toaster';
 import { ConfirmDialog } from '../components/ConfirmDialog';
@@ -69,6 +69,10 @@ export function CharacterEditorPage() {
   const exportImage = useMutation<void, unknown, void>({
     mutationFn: async () => {
       if (!id) throw new Error('Save the character first');
+      if (isAndroid()) {
+        await api.copyShareImageToClipboard(id);
+        return;
+      }
       const bytes = await api.exportShareImage(id);
       const blob = new Blob([new Uint8Array(bytes)], { type: 'image/png' });
       const url = URL.createObjectURL(blob);
@@ -82,7 +86,11 @@ export function CharacterEditorPage() {
       a.remove();
       URL.revokeObjectURL(url);
     },
-    onSuccess: () => toast('success', 'Share image downloaded'),
+    onSuccess: () =>
+      toast(
+        'success',
+        isAndroid() ? 'Share image copied to clipboard' : 'Share image downloaded',
+      ),
     onError: (e) => toast('error', errorMessage(e)),
   });
 
@@ -233,7 +241,9 @@ export function CharacterEditorPage() {
                         onClick: () => exportImage.mutate(),
                         disabled: exportImage.isPending || !character.data?.cover_image,
                         title: character.data?.cover_image
-                          ? 'Download a PNG with the persona embedded'
+                          ? isAndroid()
+                            ? 'Copy a PNG with the persona embedded to the clipboard'
+                            : 'Download a PNG with the persona embedded'
                           : 'Upload a cover image first',
                       },
                       {

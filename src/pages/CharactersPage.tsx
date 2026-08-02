@@ -52,17 +52,7 @@ export function CharactersPage() {
 
   const share = useMutation<void, unknown, string>({
     mutationFn: async (id) => {
-      const bytes = await api.exportShareImage(id);
-      const blob = new Blob([new Uint8Array(bytes)], { type: 'image/png' });
-      if (
-        typeof ClipboardItem !== 'undefined' &&
-        typeof navigator !== 'undefined' &&
-        navigator.clipboard?.write
-      ) {
-        await navigator.clipboard.write([new ClipboardItem({ 'image/png': blob })]);
-        return;
-      }
-      throw new Error('Image clipboard write not supported in this environment');
+      await api.copyShareImageToClipboard(id);
     },
     onSuccess: () => toast('success', 'Share image copied to clipboard'),
     onError: (e) => toast('error', errorMessage(e)),

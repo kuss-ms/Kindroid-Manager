@@ -105,6 +105,27 @@ export const api = {
     invoke<Character>('set_character_image', { id, bytes: Array.from(bytes) }),
   getCharacterImage: (id: Uuid) => invoke<number[] | null>('get_character_image', { id }),
 
+  /**
+   * Copy the encoded share image for `id` to the system clipboard as PNG.
+   *
+   * Used in place of the `<a download>` flow on Android, where Tauri 2's
+   * WebView has no `DownloadListener` and silently ignores anchor download
+   * clicks. Throws if the running environment lacks the async Clipboard API
+   * with image support.
+   */
+  copyShareImageToClipboard: async (id: Uuid): Promise<void> => {
+    const bytes = await invoke<number[]>('export_share_image', { id });
+    const blob = new Blob([new Uint8Array(bytes)], { type: 'image/png' });
+    if (
+      typeof ClipboardItem === 'undefined' ||
+      typeof navigator === 'undefined' ||
+      !navigator.clipboard?.write
+    ) {
+      throw new Error('Image clipboard write not supported in this environment');
+    }
+    await navigator.clipboard.write([new ClipboardItem({ 'image/png': blob })]);
+  },
+
   // Settings / token
   getSettings: () => invoke<SettingsDto>('get_settings'),
   setSettings: (input: SettingsInput) => invoke<void>('set_settings', { input }),
@@ -229,4 +250,23 @@ export function escapeFtsQuery(query: string): string {
   }
 
   return parts.length === 0 ? '' : parts.join(' AND ');
+}
+
+/**
+ * `true` when the app is running inside the Tauri 2 Android WebView.
+ *
+ * Detection uses `navigator.userAgent` because the WebView's UA always
+ * contains "Android" (the WebView inherits Chrome's mobile UA string).
+ * Cached after the first call so the work happens at most once per
+ * page load.
+ */
+let cachedIsAndroid: boolean | null = null;
+export function isAndroid(): boolean {
+  if (cachedIsAndroid !== null) return cachedIsAndroid;
+  if (typeof navigator === 'undefined' || !navigator.userAgent) {
+    cachedIsAndroid = false;
+    return false;
+  }
+  cachedIsAndroid = navigator.userAgent.includes('Android');
+  return cachedIsAndroid;
 }

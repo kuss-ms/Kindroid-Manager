@@ -73,17 +73,13 @@ export function ChatHistoryPage() {
     refetchInterval: 5000,
   });
 
-  // Selected ai_id: prefer URL param, else first target's ai_id.
   const targetsList = useMemo(() => targets.data ?? [], [targets.data]);
+  const urlAiId = params.get('ai_id');
   const selectedAiId = useMemo(() => {
-    const fromUrl = params.get('ai_id');
-    if (fromUrl && targetsList.some((t) => t.ai_id === fromUrl)) return fromUrl;
-    if (targetsList.length === 1) return targetsList[0].ai_id;
-    if (fromUrl && targetsList.length > 1 && !targetsList.some((t) => t.ai_id === fromUrl)) {
-      return targetsList[0].ai_id;
-    }
-    return fromUrl;
-  }, [params, targetsList]);
+    if (!targets.isLoading && targetsList.length === 0) return null;
+    if (urlAiId && targetsList.some((t) => t.ai_id === urlAiId)) return urlAiId;
+    return null;
+  }, [urlAiId, targetsList, targets.isLoading]);
 
   function setSelectedAiId(aiId: string) {
     const next = new URLSearchParams(params);
@@ -437,6 +433,46 @@ export function ChatHistoryPage() {
     );
   }
 
+  // Targets loaded but the user hasn't picked one yet (or the URL had a
+  // stale ai_id). Show a helpful empty state instead of rendering the
+  // full chat-history UI with no data.
+  if (!selectedAiId) {
+    return (
+      <div className="page">
+        <div className="page-header">
+          <h2>Chat History</h2>
+        </div>
+        <div
+          className="form-row"
+          style={{
+            flexDirection: 'row',
+            gap: 8,
+            alignItems: 'center',
+            flexWrap: 'wrap',
+          }}
+        >
+          <label className="form-label" htmlFor="target-select" style={{ flexShrink: 0 }}>
+            Target
+          </label>
+          <select
+            id="target-select"
+            className="select"
+            value=""
+            onChange={(e) => setSelectedAiId(e.target.value)}
+          >
+            <option value="">— select a target —</option>
+            {targetsList.map((t) => (
+              <option key={t.id} value={t.ai_id}>
+                {t.label} ({t.ai_id})
+              </option>
+            ))}
+          </select>
+        </div>
+        <div className="empty">Select a target to view its chat history.</div>
+      </div>
+    );
+  }
+
   const currentSyncing = current.data;
   const state = syncState.data ?? null;
   const statusKind: SyncStatusKind = liveProgress?.status_kind ?? state?.status_kind ?? 'idle';
@@ -446,7 +482,7 @@ export function ChatHistoryPage() {
   // request count + last-batch timestamp so the user can see whether the
   // backfill is making progress.
   function progressSubtitle(): string {
-    if (currentSyncing === selectedAiId && liveProgress) {
+    if (selectedAiId && currentSyncing === selectedAiId && liveProgress) {
       const reqPart = liveProgress.requests > 0 ? `Request #${liveProgress.requests}` : 'Starting…';
       const cursorPart = liveProgress.last_timestamp
         ? `Last message: ${tsToLocal(liveProgress.last_timestamp)}`
@@ -475,7 +511,7 @@ export function ChatHistoryPage() {
   let body: string | null = null;
   let syncDisabledReason: string | null = null;
 
-  if (currentSyncing === selectedAiId) {
+  if (selectedAiId && currentSyncing === selectedAiId) {
     showCancel = true;
     const lastDel = liveProgress?.last_deleted_count ?? 0;
     const lastBatch = liveProgress?.last_batch_size ?? 0;
@@ -486,7 +522,7 @@ export function ChatHistoryPage() {
     } else {
       body = `Last updated: ${localTime(state?.last_synced_at) || '—'}`;
     }
-  } else if (currentSyncing && currentSyncing !== selectedAiId) {
+  } else if (selectedAiId && currentSyncing && currentSyncing !== selectedAiId) {
     syncDisabledReason = `Cancel it before syncing this one.`;
     body = `Cancel it from its target page before syncing this one.`;
   } else if (state == null) {
@@ -531,6 +567,7 @@ export function ChatHistoryPage() {
           value={selectedAiId ?? ''}
           onChange={(e) => setSelectedAiId(e.target.value)}
         >
+          <option value="">— select a target —</option>
           {targetsList.map((t) => (
             <option key={t.id} value={t.ai_id}>
               {t.label} ({t.ai_id})
@@ -559,9 +596,9 @@ export function ChatHistoryPage() {
         <button
           className="btn btn-danger"
           onClick={() => setResetOpen(true)}
-          disabled={resetting || currentSyncing === selectedAiId}
+          disabled={resetting || (selectedAiId != null && currentSyncing === selectedAiId)}
           title={
-            currentSyncing === selectedAiId
+            selectedAiId != null && currentSyncing === selectedAiId
               ? 'Cancel the sync before resetting.'
               : 'Delete all locally-cached chat history for this target.'
           }

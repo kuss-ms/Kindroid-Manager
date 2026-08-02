@@ -577,6 +577,114 @@ mod tests {
         ) -> Result<usize, crate::storage::StorageError> {
             Ok(0)
         }
+
+        async fn list_stable_chat_messages(
+            &self,
+            _: &str,
+            _: Option<&crate::domain::chat_automation::StableMessageCursor>,
+            _: u32,
+            _: u32,
+        ) -> Result<Vec<crate::domain::chat_message::ChatMessage>, crate::storage::StorageError>
+        {
+            Ok(Vec::new())
+        }
+        async fn latest_stable_cursor(
+            &self,
+            _: &str,
+            _: u32,
+        ) -> Result<
+            Option<crate::domain::chat_automation::StableMessageCursor>,
+            crate::storage::StorageError,
+        > {
+            Ok(None)
+        }
+        async fn get_chat_automation_state(
+            &self,
+            _: &str,
+        ) -> Result<crate::domain::chat_automation::ChatAutomationState, crate::storage::StorageError>
+        {
+            Err(crate::storage::StorageError::NotFound)
+        }
+        async fn upsert_chat_automation_state(
+            &self,
+            _: &crate::domain::chat_automation::ChatAutomationState,
+        ) -> Result<(), crate::storage::StorageError> {
+            Ok(())
+        }
+        async fn create_auto_journal_run(
+            &self,
+            _: &crate::domain::chat_automation::AutoJournalRun,
+        ) -> Result<(), crate::storage::StorageError> {
+            Ok(())
+        }
+        async fn get_auto_journal_run(
+            &self,
+            _: &str,
+        ) -> Result<crate::domain::chat_automation::AutoJournalRun, crate::storage::StorageError>
+        {
+            Err(crate::storage::StorageError::NotFound)
+        }
+        async fn list_pending_auto_journal_runs(
+            &self,
+            _: &str,
+        ) -> Result<Vec<crate::domain::chat_automation::AutoJournalRun>, crate::storage::StorageError>
+        {
+            Ok(Vec::new())
+        }
+        async fn update_auto_journal_run(
+            &self,
+            _: &crate::domain::chat_automation::AutoJournalRun,
+        ) -> Result<(), crate::storage::StorageError> {
+            Ok(())
+        }
+        async fn create_auto_journal_entry(
+            &self,
+            _: &crate::domain::chat_automation::AutoJournalEntry,
+        ) -> Result<(), crate::storage::StorageError> {
+            Ok(())
+        }
+        async fn list_auto_journal_entries(
+            &self,
+            _: &str,
+        ) -> Result<
+            Vec<crate::domain::chat_automation::AutoJournalEntry>,
+            crate::storage::StorageError,
+        > {
+            Ok(Vec::new())
+        }
+        async fn update_auto_journal_entry(
+            &self,
+            _: &crate::domain::chat_automation::AutoJournalEntry,
+        ) -> Result<(), crate::storage::StorageError> {
+            Ok(())
+        }
+        async fn commit_summary_candidate(
+            &self,
+            _: &str,
+            _: &crate::domain::chat_automation::SummaryCandidate,
+            _: Option<&crate::domain::chat_automation::StableMessageCursor>,
+        ) -> Result<(), crate::storage::StorageError> {
+            Ok(())
+        }
+        async fn clear_summary_candidate(
+            &self,
+            _: &str,
+        ) -> Result<(), crate::storage::StorageError> {
+            Ok(())
+        }
+        async fn reset_chat_summary(&self, _: &str) -> Result<(), crate::storage::StorageError> {
+            Ok(())
+        }
+        async fn list_recent_successful_auto_journal_entries(
+            &self,
+            _: &str,
+            _: u32,
+        ) -> Result<
+            Vec<crate::domain::chat_automation::AutoJournalEntry>,
+            crate::storage::StorageError,
+        > {
+            Ok(Vec::new())
+        }
         async fn list_journal_entries(
             &self,
             _cid: Uuid,

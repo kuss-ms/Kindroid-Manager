@@ -510,12 +510,13 @@ export function ChatHistoryPage() {
         <div className="muted">{subtitle}</div>
       </div>
 
-      <div className="flex-row" style={{ gap: 8, flexWrap: 'wrap', alignItems: 'center' }}>
-        <label className="muted" htmlFor="target-select">
+      <div className="form-row" style={{ flexDirection: 'row', gap: 8, alignItems: 'center', flexWrap: 'wrap' }}>
+        <label className="form-label" htmlFor="target-select" style={{ flexShrink: 0 }}>
           Target
         </label>
         <select
           id="target-select"
+          className="select"
           value={selectedAiId ?? ''}
           onChange={(e) => setSelectedAiId(e.target.value)}
         >
@@ -560,17 +561,17 @@ export function ChatHistoryPage() {
 
       {body && <p className="muted">{body}</p>}
 
-      <div className="flex-row" style={{ marginTop: 12 }}>
+      <div className="form-row" style={{ flexDirection: 'row', gap: 8, alignItems: 'center', flexWrap: 'wrap' }}>
         <input
           type="search"
+          className="input input-search"
           placeholder="Search messages…"
           value={searchInput}
           onChange={(e) => setSearchInput(e.target.value)}
           style={{ flex: 1, minWidth: 200 }}
         />
         <label
-          className="flex-row"
-          style={{ gap: 6, alignItems: 'center', cursor: 'pointer' }}
+          className="checkbox"
           title="Show only messages you've favourited (pinned) here"
         >
           <input

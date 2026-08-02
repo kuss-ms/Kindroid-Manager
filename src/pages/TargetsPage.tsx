@@ -5,7 +5,6 @@ import { zodResolver } from '@hookform/resolvers/zod';
 import { api, errorMessage, type TargetInput } from '../lib/api';
 import { targetInputSchema, type TargetFormValues } from '../lib/schemas';
 import { ConfirmDialog } from '../components/ConfirmDialog';
-import { RowActions, type RowAction } from '../components/RowActions';
 import { toast } from '../components/Toaster';
 export function TargetsPage() {
   const queryClient = useQueryClient();
@@ -73,21 +72,14 @@ export function TargetsPage() {
                 </div>{' '}
                 <div className="list-item-actions">
                   {' '}
-                  <RowActions
-                    actions={
-                      [
-                        {
-                          label: 'Edit',
-                          onClick: () => setEditing({ ...t }),
-                        },
-                        {
-                          label: 'Delete',
-                          danger: true,
-                          onClick: () => setDeleting(t.id),
-                        },
-                      ] satisfies RowAction[]
-                    }
-                  />{' '}
+                  <button className="btn btn-sm" onClick={() => setEditing({ ...t })}>
+                    {' '}
+                    Edit{' '}
+                  </button>{' '}
+                  <button className="btn btn-sm btn-danger" onClick={() => setDeleting(t.id)}>
+                    {' '}
+                    Delete{' '}
+                  </button>{' '}
                 </div>{' '}
               </div>
             ))}{' '}

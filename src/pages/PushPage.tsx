@@ -376,7 +376,7 @@ export function PushPage() {
                     : ''
             }
             onClick={() => setConfirmOpen(true)}
-            className="btn btn-primary"
+            className="btn btn-primary btn-wrap-text"
           >
             {' '}
             {push.isPending

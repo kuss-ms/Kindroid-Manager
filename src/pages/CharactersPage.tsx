@@ -1,5 +1,5 @@
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
-import { useState } from 'react';
+import { useRef, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { api, errorMessage } from '../lib/api';
 import type { Character, CreateNewKinResult } from '../lib/types';
@@ -12,6 +12,7 @@ export function CharactersPage() {
   const [search, setSearch] = useState('');
   const [deleteId, setDeleteId] = useState<string | null>(null);
   const [createId, setCreateId] = useState<string | null>(null);
+  const importInputRef = useRef<HTMLInputElement>(null);
   const characters = useQuery<Character[]>({
     queryKey: ['characters'],
     queryFn: api.listCharacters,
@@ -89,10 +90,37 @@ export function CharactersPage() {
               }
             }}
           />{' '}
+          <button className="btn" onClick={() => importInputRef.current?.click()}>
+            {' '}
+            Import share image{' '}
+          </button>{' '}
           <button className="btn btn-primary" onClick={() => navigate('/characters/new')}>
             {' '}
             New{' '}
           </button>{' '}
+          <input
+            ref={importInputRef}
+            type="file"
+            accept="image/png,image/*"
+            style={{ display: 'none' }}
+            onChange={async (e) => {
+              const file = e.target.files?.[0];
+              e.target.value = '';
+              if (file) {
+                const buf = await file.arrayBuffer();
+                const bytes = Array.from(new Uint8Array(buf));
+                try {
+                  const draft = await api.importShareImage(bytes);
+                  queryClient.setQueryData(['character', draft.id], draft);
+                  queryClient.invalidateQueries({ queryKey: ['characters'] });
+                  toast('success', `Imported "${draft.name}"`);
+                  navigate(`/characters/${draft.id}`);
+                } catch (err) {
+                  toast('error', errorMessage(err));
+                }
+              }
+            }}
+          />
         </div>{' '}
       </div>{' '}
       <p className="muted" style={{ fontSize: 12, marginBottom: 0 }}>

@@ -7,6 +7,7 @@ import { api, errorMessage } from '../lib/api';
 import { characterInputSchema, type CharacterFormValues } from '../lib/schemas';
 import { toast } from '../components/Toaster';
 import { ConfirmDialog } from '../components/ConfirmDialog';
+import { RowActions, type RowAction } from '../components/RowActions';
 import { FIELD_SOFT_LIMITS, GENDER_OPTIONS } from '../lib/types';
 import type { JournalEntry, JournalEntryInput, Uuid } from '../lib/types';
 
@@ -209,51 +210,42 @@ export function CharacterEditorPage() {
       <div className="page-header">
         <h2>{id ? 'Edit character' : 'New character'}</h2>
         <div className="page-header-actions">
-          <button
-            type="button"
-            className="btn btn-primary"
-            disabled={!isDirty && !!id}
-            onClick={onSubmit}
-          >
-            Save
-          </button>
-          <button
-            type="button"
-            className="btn"
-            onClick={() => fileInputRef.current?.click()}
-            disabled={uploadImage.isPending || save.isPending}
-            title={
-              id
-                ? 'Upload a cover image'
-                : 'Save the character first (auto-saves with current form values)'
+          <RowActions
+            actions={
+              [
+                {
+                  label: 'Save',
+                  onClick: onSubmit,
+                  disabled: !isDirty && !!id,
+                },
+                {
+                  label: 'Upload image',
+                  onClick: () => fileInputRef.current?.click(),
+                  disabled: uploadImage.isPending || save.isPending,
+                  title: id
+                    ? 'Upload a cover image'
+                    : 'Save the character first (auto-saves with current form values)',
+                },
+                ...(id
+                  ? [
+                      {
+                        label: 'Export share image',
+                        onClick: () => exportImage.mutate(),
+                        disabled: exportImage.isPending || !character.data?.cover_image,
+                        title: character.data?.cover_image
+                          ? 'Download a PNG with the persona embedded'
+                          : 'Upload a cover image first',
+                      },
+                      {
+                        label: 'Delete',
+                        danger: true,
+                        onClick: () => setConfirmDelete(true),
+                      },
+                    ]
+                  : []),
+              ] satisfies RowAction[]
             }
-          >
-            {uploadImage.isPending || save.isPending ? 'Uploading…' : 'Upload image'}
-          </button>
-          {id && (
-            <>
-              <button
-                type="button"
-                className="btn"
-                onClick={() => exportImage.mutate()}
-                disabled={exportImage.isPending || !character.data?.cover_image}
-                title={
-                  character.data?.cover_image
-                    ? 'Download a PNG with the persona embedded'
-                    : 'Upload a cover image first'
-                }
-              >
-                Export share image
-              </button>
-              <button
-                type="button"
-                className="btn btn-danger"
-                onClick={() => setConfirmDelete(true)}
-              >
-                Delete
-              </button>
-            </>
-          )}
+          />
         </div>
       </div>
 

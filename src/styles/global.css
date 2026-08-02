@@ -243,38 +243,12 @@ select {
   .section-grid {
     grid-template-columns: 1fr;
   }
-} /* Mobile bottom nav + import button + full-screen modals.
+} /* Mobile bottom nav + full-screen modals.
    See .kilo/plans/1785596514600-android-deployment-plan.md step 5.
-   The hidden <input> + "Tap to import" button is the fallback for
-   share-image import on touch devices (the global drag-drop / paste
-   handlers do not work on Android System WebView). */
-.app-file-input {
-  display: none;
-}
-/* Hide the floating "Tap to import" button whenever any modal-overlay is
-   visible. Android System WebView does not always honour backdrop-filter,
-   so without this rule the fixed button at bottom: 80px bleeds through the
-   semi-transparent modal overlay and visually obstructs the modal's
-   confirm/cancel buttons. :has() requires Chrome 105+ — Android 13+
-   System WebView satisfies that. */
-body:has(.modal-overlay) .app-import-btn {
-  display: none;
-}
-.app-import-btn {
-  display: inline-flex;
-  position: fixed;
-  right: var(--space-4);
-  bottom: var(--space-4);
-  z-index: 50;
-  padding: 10px 14px;
-  border-radius: var(--radius);
-  border: 1px solid var(--border);
-  background: var(--surface);
-  color: var(--text);
-  box-shadow: var(--shadow);
-  font-weight: 500;
-  font-size: 13px;
-}
+   The drag-drop / paste handlers in AppLayout work everywhere, but
+   Android System WebView does not fire HTML5 drop events for files, so
+   the Characters page exposes a visible "Import share image" button that
+   opens the OS file picker via a hidden <input>. */
 .app-bottom-nav {
   display: none;
 }
@@ -284,9 +258,6 @@ body:has(.modal-overlay) .app-import-btn {
   }
   .app-nav {
     display: none;
-  }
-  .app-import-btn {
-    bottom: 80px;
   }
   .app-bottom-nav {
     display: flex;
@@ -451,6 +422,14 @@ body:has(.modal-overlay) .app-import-btn {
 .btn-sm {
   padding: 5px 10px;
   font-size: 12px;
+}
+/* Buttons with dynamic text (e.g. "Push 8 fields and 3 journals to MyBot")
+   that need to wrap on narrow viewports. Default .btn has
+   white-space: nowrap. */
+.btn-wrap-text {
+  white-space: normal;
+  text-align: center;
+  line-height: 1.3;
 } /* Form */
 .form {
   display: flex;

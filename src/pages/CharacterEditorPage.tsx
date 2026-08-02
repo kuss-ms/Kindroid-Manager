@@ -88,10 +88,7 @@ export function CharacterEditorPage() {
       URL.revokeObjectURL(url);
     },
     onSuccess: () =>
-      toast(
-        'success',
-        isAndroid() ? 'Share image copied to clipboard' : 'Share image downloaded',
-      ),
+      toast('success', isAndroid() ? 'Share image copied to clipboard' : 'Share image downloaded'),
     onError: (e) => toast('error', errorMessage(e)),
   });
 
@@ -547,8 +544,10 @@ function JournalEditor({ characterId }: { characterId: Uuid }) {
         )}
       </div>
       <p className="muted" style={{ fontSize: 12, marginTop: 6 }}>
-        Up to 500 characters and 8 short keyphrases per entry. Not sent unless you tick the entry on
-        the Push page.
+        Up to 500 characters and up to 8 specific, 1-3 word keyphrases per entry (Kindroid&apos;s
+        recall is verbatim on the user&apos;s input, so generic single common words like
+        &quot;love&quot; or &quot;wings&quot; hurt recall — pick proper nouns, dates, distinctive
+        compounds). Not sent unless you tick the entry on the Push page.
       </p>
 
       {editing && (

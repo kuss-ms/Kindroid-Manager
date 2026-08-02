@@ -12,6 +12,13 @@ pub const MAX_KEYPHRASES: usize = 8;
 /// so the client-side validator must mirror that limit or the server will
 /// reject entries that pass local validation.
 pub const MAX_KEYPHRASE_CHARS: usize = 50;
+/// Hard cap on words inside a single keyphrase. Per the Kindroid
+/// memory guide, keyphrases are matched verbatim against the user's
+/// input, so a keyphrase can be 1..3 short words ("amusement park",
+/// "caramel"). Longer phrases are technically allowed but rarely
+/// match real user typing, so we cap here to keep recall budget
+/// focused.
+pub const MAX_KEYPHRASE_WORDS: usize = 3;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct JournalEntry {
@@ -60,20 +67,20 @@ impl JournalEntry {
                     t.chars().count()
                 ));
             }
-            // Auto-journal emits single-word tokens (kindroid's recall
-            // surface is most precise that way). For backward
-            // compatibility the manual editor allows hyphens to group
-            // a tight concept (\"dragon-wings\"), but commas, colons,
-            // semicolons, and whitespace are all rejected — those
-            // always bury the real signal and make recall noisy.
+            // Kindroid's recall is verbatim on the user's input, so a
+            // keyphrase can be 1..3 words ("amusement park", "caramel")
+            // and may use hyphens or spaces. Anything looser
+            // (commas, colons, semicolons) buries the signal because
+            // the user would never type that phrase verbatim.
             if t.contains(',') || t.contains(';') || t.contains(':') {
                 return Err(format!(
                     "keyphrase #{i} must not contain separators (no commas/colons/semicolons; got {t:?})"
                 ));
             }
-            if t.chars().any(|c| c.is_whitespace()) {
+            if t.split_whitespace().count() > MAX_KEYPHRASE_WORDS {
                 return Err(format!(
-                    "keyphrase #{i} must be a single word (use hyphens, not spaces; got {t:?})"
+                    "keyphrase #{i} must be {MAX_KEYPHRASE_WORDS} words or fewer (got {})",
+                    t.split_whitespace().count()
                 ));
             }
         }
@@ -161,10 +168,16 @@ mod tests {
     }
 
     #[test]
-    fn rejects_keyphrase_with_internal_whitespace() {
+    fn allows_multi_word_keyphrase() {
         let kps = vec!["purple skin".to_string()];
+        JournalEntry::validate("ok", &kps).expect("two-word keyphrase should be allowed");
+    }
+
+    #[test]
+    fn rejects_keyphrase_with_more_than_three_words() {
+        let kps = vec!["one two three four".to_string()];
         let err = JournalEntry::validate("ok", &kps).unwrap_err();
-        assert!(err.contains("must be a single word"), "{err}");
+        assert!(err.contains("must be 3 words or fewer"), "{err}");
     }
 
     #[test]

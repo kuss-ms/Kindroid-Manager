@@ -32,7 +32,6 @@ pub const DEFAULT_SUMMARY_INSTRUCTIONS: &str =
 
 #[derive(Debug, Clone, Serialize)]
 pub struct ChatAutomationDto {
-    #[serde(flatten)]
     pub state: ChatAutomationState,
     pub journal_instructions: String,
     pub summary_instructions: String,

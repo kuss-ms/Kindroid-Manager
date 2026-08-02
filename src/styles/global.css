@@ -339,11 +339,16 @@ select {
   }
   /* List rows: keep only the primary action visible, hide the rest
      behind a "⋯" overflow menu on mobile. The overflow-menu button itself
-     is hidden on desktop and the secondary buttons are hidden on mobile. */
-  .list-item-secondary {
+     is hidden on desktop and the secondary buttons are hidden on mobile.
+     Both selectors are anchored to .list-item-actions to out-specify the
+     base .btn rule below (display: inline-flex on the secondary buttons)
+     and the desktop .list-item-overflow rule further down. Without the
+     extra anchor the later rules win by source order and the mobile UI
+     never shows on touch devices. */
+  .list-item-actions .list-item-secondary {
     display: none;
   }
-  .list-item-overflow {
+  .list-item-actions .list-item-overflow {
     display: inline-block;
   }
   .table {

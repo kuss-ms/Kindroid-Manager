@@ -722,7 +722,9 @@ async fn ai_completion(
 
 fn journal_system_prompt(ai_name: &str) -> String {
     format!(
-        "You are a memory extractor writing entries for the AI named \"{ai_name}\". The other party in the supplied conversation is the user (a human). Always name the AI as \"{ai_name}\" in any entry that distinguishes the two participants, and include \"{ai_name}\" in at least one keyphrase whenever the user references them by name or pronoun — Kindroid surfaces a journal entry only when one of its keyphrases matches the user's words, so omitting the AI's name makes the entry unsearchable.
+        "You are a memory extractor writing entries for the AI named \"{ai_name}\". The other party in the supplied conversation is the user (a human). Use third-person voice. Name the AI only when an entry is specifically about the AI (their preferences, appearance, relationships, goals, current state). For setting/world/character entries about anyone or anything else, do NOT prepend the AI's name — let the entry stand on its own.
+
+Kindroid surfaces a journal entry only when one of its keyphrases matches the user's words. For entries that are about the AI specifically, include \"{ai_name}\" (or a 3rd-person pronoun used for them in the chat) in at least one keyphrase so the entry is retrievable. For entries about other topics (other characters, locations, world state), use subject-specific keyphrases that match what the entry is actually about — including the AI's name there would just pollute recall.
 
 Produce a JSON object that matches exactly {{\"entries\":[{{\"entry\":string,\"keyphrases\":[string]}}]}}. Output ONLY that JSON — no prose, no markdown, no apology.
 
@@ -752,8 +754,9 @@ fn journal_prompt(
     ai_name: &str,
 ) -> String {
     let instructions = expand_placeholders(instructions, ai_name, None);
-    let example_entry = "Kira and Cires are traveling companions. Kira is a purple-skinned demon-kin with dragon wings who wears a black latex bodysuit. They are journeying through a mana-sick, corrupting forest; a 'Corruption Status' tracker is at 4%.";
-    let mut out = format!("{instructions}\n\n## AI identity\nYou are extracting memory entries for the AI named \"{ai_name}\". The other party is the user (a human). Always include \"{ai_name}\" in at least one keyphrase whenever the user references them — Kindroid surfaces a journal entry only when one of its keyphrases matches the user's words.\n\n## Recent messages\n");
+    let ai_specific_entry = format!("{ai_name} is a purple-skinned demon-kin with dragon wings who wears a black latex bodysuit. They are traveling with their intimate partner Cires.");
+    let world_entry = "The pair is journeying through a mana-sick, corrupting forest; a 'Corruption Status' tracker is at 4%.";
+    let mut out = format!("{instructions}\n\n## AI identity\nYou are extracting memory entries for the AI named \"{ai_name}\". The other party is the user (a human). Name the AI only when an entry is specifically about them. For entries about other topics (other characters, locations, world state), keep the AI's name out of both the entry text and the keyphrases so recall stays focused.\n\n## Recent messages\n");
     out.push_str(&format_messages(messages));
     out.push_str("\n## Prior journal entries\n");
     for entry in prior {
@@ -762,7 +765,7 @@ fn journal_prompt(
         out.push_str("\n</prior-entry>\n");
     }
     out.push_str(&format!(
-        "\n## Limits\nmax_entries: {cap}\ntarget_entry_chars: 450 (hard cap; never exceed)\nkeyphrase_max_chars: 64\nkeyphrase_min_count: 3\nkeyphrase_max_count: 8\n\n## Example\nFor a chat snippet about two characters traveling through a forest, output:\n{{\"entries\":[{{\"entry\":\"{example_entry}\",\"keyphrases\":[\"{ai_name}: purple-skinned demon-kin, dragon wings\",\"Cires: traveling companion\",\"forest: mana-sick, corrupting\",\"corruption tracker: 4%\"]}}]"
+        "\n## Limits\nmax_entries: {cap}\ntarget_entry_chars: 450 (hard cap; never exceed)\nkeyphrase_max_chars: 64\nkeyphrase_min_count: 3\nkeyphrase_max_count: 8\n\n## Example\nFor a chat snippet about two characters traveling through a forest, output two entries — one about the AI (names \"{ai_name}\" and includes them in the keyphrases) and one about the world (does NOT name the AI):\n{{\"entries\":[{{\"entry\":\"{ai_specific_entry}\",\"keyphrases\":[\"{ai_name}: purple-skinned demon-kin, dragon wings\",\"{ai_name}: intimate partner of Cires\"]}},{{\"entry\":\"{world_entry}\",\"keyphrases\":[\"forest: mana-sick, corrupting\",\"corruption tracker: 4%\"]}}]"
     ));
     out
 }
@@ -787,7 +790,7 @@ fn summary_prompt(
         SummaryMode::Reformat => "## New messages",
     };
     let mut out = format!(
-        "{instructions}\n\n## AI identity\nYou are writing a rolling summary of the conversation between the user and the AI named \"{ai_name}\". Use third-person voice and name \"{ai_name}\" where appropriate.\n\n## Current summary\n<summary>\n{current}\n</summary>\n\n{section}\n"
+        "{instructions}\n\n## AI identity\nYou are writing a rolling summary of the conversation between the user and the AI named \"{ai_name}\". Use third-person voice and reference \"{ai_name}\" once per new fact, not in every clause.\n\n## Current summary\n<summary>\n{current}\n</summary>\n\n{section}\n"
     );
     if !messages.is_empty() {
         out.push_str(&format_messages(messages));
@@ -1179,25 +1182,22 @@ mod tests {
 
     #[test]
     fn journal_user_prompt_example_respects_cap() {
-        // The example shown to the model must itself obey the cap;
-        // otherwise the model pattern-matches the wrong length.
+        // Both worked examples (AI-specific and world-specific) must be
+        // under 450 chars each, otherwise the model pattern-matches the
+        // wrong length and produces over-long entries.
         let prompt = super::journal_prompt("test instructions", &[], &[], 1, "Kira");
-        // The example's entry spans from "Kira and Cires are traveling" up
-        // to the closing quote of that entry. Pull the substring and
-        // measure.
-        let start = prompt.find("Kira and Cires").expect("example present");
-        // The example ends with the closing "<,keyphrase4>"]}}} sequence
-        // after the last keyphrase. Find the natural close of the entry
-        // field by anchoring on the last keyphrase token.
-        let end = prompt[start..]
-            .find("\"corruption tracker")
-            .expect("example close");
-        let example = &prompt[start..start + end + 1];
-        assert!(
-            example.chars().count() <= 450,
-            "worked example must be <= 450 chars, was {}",
-            example.chars().count()
-        );
+        for anchor in ["Kira is", "The pair"] {
+            let start = prompt.find(anchor).expect("example anchor present");
+            let end = prompt[start..]
+                .find('"')
+                .expect("example close quote");
+            let example = &prompt[start..start + end];
+            assert!(
+                example.chars().count() <= 450,
+                "worked example anchored on {anchor:?} must be <= 450 chars, was {}",
+                example.chars().count()
+            );
+        }
     }
 
     #[test]

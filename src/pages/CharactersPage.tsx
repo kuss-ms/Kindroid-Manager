@@ -4,6 +4,7 @@ import { useNavigate } from 'react-router-dom';
 import { api, errorMessage } from '../lib/api';
 import type { Character, CreateNewKinResult } from '../lib/types';
 import { ConfirmDialog } from '../components/ConfirmDialog';
+import { RowActions, type RowAction } from '../components/RowActions';
 import { toast } from '../components/Toaster';
 export function CharactersPage() {
   const queryClient = useQueryClient();
@@ -120,52 +121,50 @@ export function CharactersPage() {
                 </div>{' '}
                 <div className="list-item-actions">
                   {' '}
-                  <button className="btn btn-sm" onClick={() => navigate(`/characters/${c.id}`)}>
-                    {' '}
-                    Edit{' '}
-                  </button>{' '}
-                  <button
-                    className="btn btn-sm"
-                    onClick={() => share.mutate(c.id)}
-                    disabled={share.isPending || !c.cover_image}
-                    title={
-                      c.cover_image
-                        ? 'Copy share image (with persona) to clipboard'
-                        : 'Upload a cover image first'
+                  <RowActions
+                    actions={
+                      [
+                        {
+                          label: 'Edit',
+                          onClick: () => navigate(`/characters/${c.id}`),
+                        },
+                        {
+                          label: 'Share',
+                          onClick: () => share.mutate(c.id),
+                          disabled: share.isPending || !c.cover_image,
+                          title: c.cover_image
+                            ? 'Copy share image (with persona) to clipboard'
+                            : 'Upload a cover image first',
+                        },
+                        {
+                          label: 'Duplicate',
+                          onClick: () => duplicate.mutate(c.id),
+                        },
+                        {
+                          label:
+                            createNew.isPending && createNew.variables === c.id
+                              ? 'Pushing…'
+                              : 'Push as new Kin',
+                          onClick: () => {
+                            if (!c.ai_name?.trim()) {
+                              toast('error', 'ai_name is required to create a new Kin');
+                              return;
+                            }
+                            setCreateId(c.id);
+                          },
+                          disabled: createNew.isPending && createNew.variables === c.id,
+                          title: c.ai_name?.trim()
+                            ? 'Create a new Kin from this character'
+                            : 'Set an AI name before creating a new Kin',
+                        },
+                        {
+                          label: 'Delete',
+                          danger: true,
+                          onClick: () => setDeleteId(c.id),
+                        },
+                      ] satisfies RowAction[]
                     }
-                  >
-                    {' '}
-                    {share.isPending && share.variables === c.id ? 'Sharing…' : 'Share'}{' '}
-                  </button>{' '}
-                  <button className="btn btn-sm" onClick={() => duplicate.mutate(c.id)}>
-                    {' '}
-                    Duplicate{' '}
-                  </button>{' '}
-                  <button
-                    className="btn btn-sm"
-                    onClick={() => {
-                      if (!c.ai_name?.trim()) {
-                        toast('error', 'ai_name is required to create a new Kin');
-                        return;
-                      }
-                      setCreateId(c.id);
-                    }}
-                    disabled={createNew.isPending && createNew.variables === c.id}
-                    title={
-                      c.ai_name?.trim()
-                        ? 'Create a new Kin from this character'
-                        : 'Set an AI name before creating a new Kin'
-                    }
-                  >
-                    {' '}
-                    {createNew.isPending && createNew.variables === c.id
-                      ? 'Pushing…'
-                      : 'Push as new Kin'}{' '}
-                  </button>{' '}
-                  <button className="btn btn-sm btn-danger" onClick={() => setDeleteId(c.id)}>
-                    {' '}
-                    Delete{' '}
-                  </button>{' '}
+                  />{' '}
                 </div>{' '}
               </div>
             ))}{' '}

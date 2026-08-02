@@ -76,6 +76,14 @@ android {
     buildFeatures {
         buildConfig = true
     }
+    // Skip the lintVital task on release. AGP 8.11 + Kotlin FIR
+    // crashes inside `findFirCompiledSymbol` when lint analyses the
+    // generated Kotlin source from `TauriActivity` et al. Not relevant
+    // for personal-sideload APKs and the next lintRelease still runs.
+    lint {
+        checkReleaseBuilds = false
+        abortOnError = false
+    }
 }
 
 rust {

@@ -127,20 +127,6 @@ export function PushPage() {
     ? ` + ${journalSelected} journal${journalSelected === 1 ? '' : 's'}`
     : '';
   const targetLabel = target.data ? `${target.data.label} — ${target.data.ai_id}` : '';
-  const avatarDescription = character.data?.ai_avatar_description?.trim() ?? '';
-  const copyAvatar = async () => {
-    if (!avatarDescription) return;
-    try {
-      if (typeof navigator !== 'undefined' && navigator.clipboard?.writeText) {
-        await navigator.clipboard.writeText(avatarDescription);
-        toast('success', 'Avatar description copied to clipboard');
-        return;
-      }
-      throw new Error('Clipboard write not supported in this environment');
-    } catch (e) {
-      toast('error', errorMessage(e));
-    }
-  };
   return (
     <div className="page">
       {' '}
@@ -351,19 +337,6 @@ export function PushPage() {
       <div className="page-header" style={{ marginTop: 0 }}>
         {' '}
         <div className="page-header-actions">
-          <button
-            type="button"
-            className="btn"
-            onClick={copyAvatar}
-            disabled={!avatarDescription}
-            title={
-              avatarDescription
-                ? 'Copy the local-only Avatar Description to the clipboard so you can paste it into Kindroid manually'
-                : 'Pick a character that has an Avatar Description'
-            }
-          >
-            Copy Avatar Description
-          </button>
           <button
             disabled={!canPush}
             title={

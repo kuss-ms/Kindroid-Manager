@@ -313,7 +313,7 @@ export function CharacterEditorPage() {
           rows={4}
           name="ai_avatar_description"
           soft={FIELD_SOFT_LIMITS.ai_avatar_description}
-          hint="Local-only. Not sent to Kindroid. Use the copy button on the Push screen to paste it manually into Kindroid's avatar prompt."
+          hint="Sent to Kindroid only when pushing as a new Kin. Ignored on regular pushes to an existing AI."
           control={control}
         />
         <TextAreaWithCounter

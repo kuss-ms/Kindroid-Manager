@@ -140,6 +140,8 @@ src-tauri/src/
 28. Push with `update-info` failing (network off) → no journal calls fire; only `update-info` is shown in the result, error toast appears.
 29. Editor: try to save an entry with 9 keyphrases → error toast "at most 8 keyphrases"; counter shows `8/8` and the 9th is rejected client-side as well.
 30. Editor: save an entry with 501 characters → error toast "entry must be 500 characters or fewer".
+31. Editor: save an entry with a comma-separated keyphrase like `dragon wings, forked tongue` → error toast "keyphrase must not contain separators".
+32. Editor: save an entry with a multi-word keyphrase like `purple skin` → error toast "keyphrase must be a single word (use hyphens, not spaces)".
 31. Export a character with 5 journal entries as a share image → reset app data → drop the image → character reappears with 5 journal entries (entry text + keyphrases preserved; ids and timestamps are new).
 32. Delete a character with journal entries → entries are gone (FK CASCADE).
 33. From Characters overview, click **Push as new Kin** on a character with `ai_name`, no journal entries → confirm; toast shows `New Kin created with ai_id …`; Push History detail lists `create-new-ai response` (status 200) and `update-info response` (status 200); Targets list now contains a row with the new ai_id and the AI name as label.

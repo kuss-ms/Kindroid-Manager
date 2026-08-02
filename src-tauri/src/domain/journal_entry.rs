@@ -60,6 +60,22 @@ impl JournalEntry {
                     t.chars().count()
                 ));
             }
+            // Auto-journal emits single-word tokens (kindroid's recall
+            // surface is most precise that way). For backward
+            // compatibility the manual editor allows hyphens to group
+            // a tight concept (\"dragon-wings\"), but commas, colons,
+            // semicolons, and whitespace are all rejected — those
+            // always bury the real signal and make recall noisy.
+            if t.contains(',') || t.contains(';') || t.contains(':') {
+                return Err(format!(
+                    "keyphrase #{i} must not contain separators (no commas/colons/semicolons; got {t:?})"
+                ));
+            }
+            if t.chars().any(|c| c.is_whitespace()) {
+                return Err(format!(
+                    "keyphrase #{i} must be a single word (use hyphens, not spaces; got {t:?})"
+                ));
+            }
         }
         Ok(())
     }
@@ -135,5 +151,25 @@ mod tests {
         let entry = "a".repeat(MAX_ENTRY_CHARS + 1);
         let err = JournalEntry::validate_indexed(2, &entry, &[]).unwrap_err();
         assert!(err.starts_with("entry #2: "), "{err}");
+    }
+
+    #[test]
+    fn rejects_keyphrase_with_comma() {
+        let kps = vec!["dragon wings, forked tongue".to_string()];
+        let err = JournalEntry::validate("ok", &kps).unwrap_err();
+        assert!(err.contains("must not contain separators"), "{err}");
+    }
+
+    #[test]
+    fn rejects_keyphrase_with_internal_whitespace() {
+        let kps = vec!["purple skin".to_string()];
+        let err = JournalEntry::validate("ok", &kps).unwrap_err();
+        assert!(err.contains("must be a single word"), "{err}");
+    }
+
+    #[test]
+    fn allows_hyphenated_keyphrase() {
+        let kps = vec!["dragon-wings".to_string()];
+        JournalEntry::validate("ok", &kps).expect("hyphenated keyphrase should be allowed");
     }
 }

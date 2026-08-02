@@ -405,7 +405,7 @@ async fn process_journal(
     );
     state.journal_last_response = Some(response.clone());
     state.journal_last_error = None;
-    repo.upsert_chat_automation_state(&state).await?;
+repo.upsert_chat_automation_state(&state).await?;
     let parsed = match parse_journal_payload(&response, state.journal_cap) {
         Ok(p) => p,
         Err(e) => {
@@ -414,6 +414,7 @@ async fn process_journal(
         }
     };
     let now = Utc::now();
+    let timestamp_prefix = format!("Date: {}\n", now.format("%Y-%m-%d %H:%M"));
     let end_cursor = new_messages.last().map(cursor_of);
     let run = AutoJournalRun {
         id: Uuid::new_v4().to_string(),
@@ -428,11 +429,12 @@ async fn process_journal(
     };
     repo.create_auto_journal_run(&run).await?;
     for generated in parsed.entries {
+        let entry_text = prepend_date(generated.entry, &timestamp_prefix);
         repo.create_auto_journal_entry(&AutoJournalEntry {
             id: Uuid::new_v4().to_string(),
             run_id: run.id.clone(),
             ai_id: ai_id.into(),
-            entry: generated.entry,
+            entry: entry_text,
             keyphrases: generated.keyphrases,
             source_start: context.first().map(cursor_of),
             source_end: end_cursor.clone(),
@@ -771,7 +773,7 @@ Produce a JSON object that matches exactly {{\"entries\":[{{\"entry\":string,\"k
 
 HARD RULES (every entry must satisfy ALL):
 • entry is one or two short sentences, third-person, declarative, fact-shaped. No narration, no roleplay dialogue, no quotes from the chat, no first-person voice.
-• entry body is at most 450 Unicode characters. NEVER exceed 450.
+• entry body is at most 420 Unicode characters. NEVER exceed 420. (We prepend a \"Date: YYYY-MM-DD HH:MM\" line and a newline before sending to Kindroid, so the AI body has a 420-char budget that leaves headroom for the prefix and stays under the 500-char server limit.)
 • 3..8 keyphrases per entry. Each keyphrase under 50 characters. A keyphrase is ONE token: no commas, colons, semicolons, internal whitespace. Hyphens are allowed to glue a multi-word concept into one token (e.g. \"mana-sick\", \"dragon-wings\") but ONLY when the user would type it that way verbatim.
 • Keyphrases must be SPECIFIC and NON-GENERIC. Good: a person's name, a place, a unique item, a date, a distinctive phrase (\"eliot\", \"amusement park\", \"caramel\", \"purple-skin demon-kin\"). Bad: single common nouns (\"wings\", \"forest\", \"partner\"), pronouns, articles, generic adjectives (\"intimate\", \"durable\"). Ask yourself: would this keyphrase match dozens of unrelated entries? If yes, it's too generic — pick something narrower.
 • For entries that are specifically about the AI, include \"{ai_name}\" as one of the keyphrases. For entries about other topics (other characters, locations, world state), keep the AI's name OUT of the keyphrases so recall stays focused.
@@ -812,7 +814,7 @@ fn journal_prompt(
         out.push_str("\n</prior-entry>\n");
     }
     out.push_str(&format!(
-        "\n## Limits\nmax_entries: {cap}\ntarget_entry_chars: 450 (hard cap; never exceed)\nkeyphrase_max_chars: 50 (hard cap; Kindroid returns 400 above this)\nkeyphrase_min_count: 3\nkeyphrase_max_count: 8\n\n## Example\nFor a chat snippet about two characters traveling through a forest, output ONE consolidated entry about the AI (Backstory-style, third-person) and ONE about the world. Notice the keyphrases are SPECIFIC and NON-GENERIC — proper nouns, distinctive compound phrases — not single common words:\n{{\"entries\":[{{\"entry\":\"{ai_specific_entry}\",\"keyphrases\":[\"{ai_name}\",\"purple-skin demon-kin\",\"dragon wings\",\"demonic essences\",\"forked tongue\",\"latex bodysuit\",\"Cires\"]}},{{\"entry\":\"{world_entry}\",\"keyphrases\":[\"mana-sick forest\",\"corrupting forest\",\"Corruption Status\",\"mana corruption\"]}}]"
+        "\n## Limits\nmax_entries: {cap}\ntarget_entry_chars: 420 (hard cap; Kindroid's server limit is 500, we reserve ~22 chars for the date prefix)\nkeyphrase_max_chars: 50 (hard cap; Kindroid returns 400 above this)\nkeyphrase_min_count: 3\nkeyphrase_max_count: 8\n\n## Example\nFor a chat snippet about two characters traveling through a forest, output ONE consolidated entry about the AI (Backstory-style, third-person) and ONE about the world. Notice the keyphrases are SPECIFIC and NON-GENERIC — proper nouns, distinctive compound phrases — not single common words:\n{{\"entries\":[{{\"entry\":\"{ai_specific_entry}\",\"keyphrases\":[\"{ai_name}\",\"purple-skin demon-kin\",\"dragon wings\",\"demonic essences\",\"forked tongue\",\"latex bodysuit\",\"Cires\"]}},{{\"entry\":\"{world_entry}\",\"keyphrases\":[\"mana-sick forest\",\"corrupting forest\",\"Corruption Status\",\"mana corruption\"]}}]"
     ));
     out
 }
@@ -1005,6 +1007,19 @@ fn parse_journal_payload(raw: &str, cap: u32) -> Result<JournalResponse, AppErro
             .map_err(AppError::invalid)?;
     }
     Ok(parsed)
+}
+
+/// Prepend a `Date: YYYY-MM-DD HH:MM` line to an AI-generated journal
+/// entry body. Kindroid's memory guide example does this, and the
+/// timestamp gives the recall system useful temporal context. The
+/// `prefix` is built once per cycle by `process_journal` so all
+/// entries in a single run share the same timestamp.
+fn prepend_date(body: String, prefix: &str) -> String {
+    let trimmed_body = body.trim_start();
+    let mut out = String::with_capacity(prefix.len() + trimmed_body.len());
+    out.push_str(prefix);
+    out.push_str(trimmed_body);
+    out
 }
 
 async fn load_state(
@@ -1210,8 +1225,8 @@ mod tests {
     fn journal_system_prompt_includes_length_cap() {
         let sys = super::journal_system_prompt("Kira");
         assert!(
-            sys.contains("450"),
-            "system prompt must declare the 450-char hard cap"
+            sys.contains("420"),
+            "system prompt must declare the 420-char body budget"
         );
         assert!(
             sys.contains("JSON"),
@@ -1230,16 +1245,17 @@ mod tests {
     #[test]
     fn journal_user_prompt_example_respects_cap() {
         // Both worked examples (AI-specific and world-specific) must be
-        // under 450 chars each, otherwise the model pattern-matches the
-        // wrong length and produces over-long entries.
+        // under 420 chars each (the AI's body budget; the date prefix
+        // is added later in Rust). Otherwise the model pattern-matches
+        // the wrong length and produces over-long entries.
         let prompt = super::journal_prompt("test instructions", &[], &[], 1, "Kira");
         for anchor in ["Kira is a purple-skinned", "Cires and their companion"] {
             let start = prompt.find(anchor).expect("example anchor present");
             let end = prompt[start..].find('"').expect("example close quote");
             let example = &prompt[start..start + end];
             assert!(
-                example.chars().count() <= 450,
-                "worked example anchored on {anchor:?} must be <= 450 chars, was {}",
+                example.chars().count() <= 420,
+                "worked example anchored on {anchor:?} must be <= 420 chars, was {}",
                 example.chars().count()
             );
         }
@@ -1293,5 +1309,15 @@ mod tests {
             !block.contains("\"forest\""),
             "worked example must NOT use a single generic common word like \"forest\", got: {block}"
         );
+    }
+
+    #[test]
+    fn prepend_date_puts_the_date_first_and_strips_leading_whitespace() {
+        let out = super::prepend_date("Kira is a demon-kin.".to_string(), "Date: 2026-08-02 12:45\n");
+        assert_eq!(out, "Date: 2026-08-02 12:45\nKira is a demon-kin.");
+        // Leading whitespace in the body is trimmed before prepending so
+        // the timestamp stays at the very top of the entry.
+        let out = super::prepend_date("  \n body".to_string(), "Date: X\n");
+        assert_eq!(out, "Date: X\nbody");
     }
 }

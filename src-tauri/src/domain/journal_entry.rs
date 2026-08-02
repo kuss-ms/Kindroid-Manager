@@ -37,7 +37,8 @@ impl JournalEntry {
         }
         if trimmed.chars().count() > MAX_ENTRY_CHARS {
             return Err(format!(
-                "entry must be {MAX_ENTRY_CHARS} characters or fewer"
+                "entry must be {MAX_ENTRY_CHARS} characters or fewer (got {})",
+                trimmed.chars().count()
             ));
         }
         if keyphrases.len() > MAX_KEYPHRASES {
@@ -50,11 +51,26 @@ impl JournalEntry {
             }
             if t.chars().count() > MAX_KEYPHRASE_CHARS {
                 return Err(format!(
-                    "keyphrase #{i} must be {MAX_KEYPHRASE_CHARS} characters or fewer"
+                    "keyphrase #{i} must be {MAX_KEYPHRASE_CHARS} characters or fewer (got {})",
+                    t.chars().count()
                 ));
             }
         }
         Ok(())
+    }
+
+    /// Same rules as [`validate`], but wraps the messages with an entry
+    /// index hint so per-target automation errors can identify the
+    /// offending entry.
+    pub fn validate_indexed(
+        index: usize,
+        entry: &str,
+        keyphrases: &[String],
+    ) -> Result<(), String> {
+        match Self::validate(entry, keyphrases) {
+            Ok(()) => Ok(()),
+            Err(message) => Err(format!("entry #{index}: {message}")),
+        }
     }
 
     /// Trim each keyphrase, drop empties, dedupe case-insensitively while
@@ -76,5 +92,43 @@ impl JournalEntry {
             }
         }
         out
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn reports_actual_length_when_over_entry_limit() {
+        let entry = "a".repeat(MAX_ENTRY_CHARS + 7);
+        let err = JournalEntry::validate(&entry, &[]).unwrap_err();
+        assert!(
+            err.contains(&format!(
+                "must be {MAX_ENTRY_CHARS} characters or fewer (got {})",
+                entry.chars().count()
+            )),
+            "{err}"
+        );
+    }
+
+    #[test]
+    fn reports_actual_length_when_over_keyphrase_limit() {
+        let kp = "b".repeat(MAX_KEYPHRASE_CHARS + 2);
+        let err = JournalEntry::validate("ok", std::slice::from_ref(&kp)).unwrap_err();
+        assert!(
+            err.contains(&format!(
+                "must be {MAX_KEYPHRASE_CHARS} characters or fewer (got {})",
+                kp.chars().count()
+            )),
+            "{err}"
+        );
+    }
+
+    #[test]
+    fn validate_indexed_wraps_with_position() {
+        let entry = "a".repeat(MAX_ENTRY_CHARS + 1);
+        let err = JournalEntry::validate_indexed(2, &entry, &[]).unwrap_err();
+        assert!(err.starts_with("entry #2: "), "{err}");
     }
 }

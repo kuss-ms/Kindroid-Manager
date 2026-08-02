@@ -348,8 +348,8 @@ async fn process_journal(
     if parsed.entries.len() > state.journal_cap as usize {
         return Err(AppError::invalid("AI returned too many journal entries"));
     }
-    for generated in &parsed.entries {
-        JournalEntry::validate(&generated.entry, &generated.keyphrases)
+    for (index, generated) in parsed.entries.iter().enumerate() {
+        JournalEntry::validate_indexed(index, &generated.entry, &generated.keyphrases)
             .map_err(AppError::invalid)?;
     }
     let now = Utc::now();

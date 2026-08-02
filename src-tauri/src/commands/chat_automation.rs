@@ -765,7 +765,7 @@ fn journal_prompt(
         out.push_str("\n</prior-entry>\n");
     }
     out.push_str(&format!(
-        "\n## Limits\nmax_entries: {cap}\ntarget_entry_chars: 450 (hard cap; never exceed)\nkeyphrase_max_chars: 64\nkeyphrase_min_count: 3\nkeyphrase_max_count: 8\n\n## Example\nFor a chat snippet about two characters traveling through a forest, output two entries — one about the AI (names \"{ai_name}\" and includes them in the keyphrases) and one about the world (does NOT name the AI):\n{{\"entries\":[{{\"entry\":\"{ai_specific_entry}\",\"keyphrases\":[\"{ai_name}: purple-skinned demon-kin, dragon wings\",\"{ai_name}: intimate partner of Cires\"]}},{{\"entry\":\"{world_entry}\",\"keyphrases\":[\"forest: mana-sick, corrupting\",\"corruption tracker: 4%\"]}}]"
+        "\n## Limits\nmax_entries: {cap}\ntarget_entry_chars: 450 (hard cap; never exceed)\nkeyphrase_max_chars: 50 (hard cap; Kindroid returns 400 above this)\nkeyphrase_min_count: 3\nkeyphrase_max_count: 8\n\n## Example\nFor a chat snippet about two characters traveling through a forest, output two entries — one about the AI (names \"{ai_name}\" and includes them in the keyphrases) and one about the world (does NOT name the AI). Keep each keyphrase under 50 characters even when the AI's name is long — use the AI's name in at most one keyphrase per entry:\n{{\"entries\":[{{\"entry\":\"{ai_specific_entry}\",\"keyphrases\":[\"{ai_name}: dragon wings\",\"appearance: latex bodysuit, purple skin\",\"companion: Cires\"]}},{{\"entry\":\"{world_entry}\",\"keyphrases\":[\"forest: mana-sick, corrupting\",\"corruption tracker: 4%\"]}}]"
     ));
     out
 }
@@ -1188,9 +1188,7 @@ mod tests {
         let prompt = super::journal_prompt("test instructions", &[], &[], 1, "Kira");
         for anchor in ["Kira is", "The pair"] {
             let start = prompt.find(anchor).expect("example anchor present");
-            let end = prompt[start..]
-                .find('"')
-                .expect("example close quote");
+            let end = prompt[start..].find('"').expect("example close quote");
             let example = &prompt[start..start + end];
             assert!(
                 example.chars().count() <= 450,

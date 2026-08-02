@@ -6,7 +6,12 @@ use uuid::Uuid;
 
 pub const MAX_ENTRY_CHARS: usize = 500;
 pub const MAX_KEYPHRASES: usize = 8;
-pub const MAX_KEYPHRASE_CHARS: usize = 64;
+/// Hard cap on a single keyphrase. Kindroid's `/journal-create` endpoint
+/// rejects any keyphrase longer than 50 Unicode characters with a 400
+/// ("keyphrases[i] length must be less than or equal to 50 characters"),
+/// so the client-side validator must mirror that limit or the server will
+/// reject entries that pass local validation.
+pub const MAX_KEYPHRASE_CHARS: usize = 50;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct JournalEntry {

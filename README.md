@@ -20,14 +20,23 @@ backend can be added later without touching the UI.
   character between installs. Drop the PNG (or paste from clipboard)
   on the main window to import; the image itself is saved as the
   character's cover image. Two installs interoperate; Kindroid does
-  not consume the metadata.
+  not consume the metadata. The share code embeds the persona fields
+  (name, backstory, memory, directive, example message, additional
+  context, current scene, greeting, avatar description) plus the
+  per-character **journal entries** (entry text + keyphrases; ids and
+  timestamps are local-only and regenerated on import). `notes` is
+  still local-only and is not part of the share code. The wire format
+  is `CURRENT_VERSION = 2` in `domain::share_code`; v=1 codes still
+  decode (without the journal entries they were missing).
 - A push history with the full request/response body and a one-click
   re-push.
 - A **Chat History** viewer that pulls messages from the
   `GET /get-chat-messages` endpoint into a local SQLite + FTS5 cache
   per target. Runs a long-lived background sync, shows a live
   progress indicator (request count + last message timestamp + batch
-  size), supports prefix / Porter-stem search, and a click-to-expand
+  size), supports prefix/Porter-stem search with AND-of-terms
+  semantics (wrap a phrase in `"…"` for an exact match), and a
+  click-to-expand
   detail pop-up. A **Reset** button clears the local cache and sync
   cursor so you can do a clean full resync.
 - A "Test token" probe that does a best-effort reachability + auth
@@ -95,8 +104,8 @@ to.
 6. Edit the backstory, push again with chat-break + greeting →
    confirm both took effect and the History page shows two entries.
 7. Export a share image, reset the app's data folder, drop the share
-   image on the main window → character reappears with all fields and
-   the cover image intact.
+   image on the main window → character reappears with all fields, the
+   cover image, and the journal entries intact.
 8. From the History page, click **Re-push** on the last entry → Push
    page opens with the same character / target / fields / chat-break
    pre-filled. Push again to confirm the round-trip.
@@ -121,7 +130,9 @@ to.
     sync mid-loop → status becomes `Cancelled`; clicking **Sync**
     again resumes from the saved cursor.
 14. Type a word in the search bar → top hits render with a snippet;
-    search "run" finds "running" / "runs" (Porter stem). Click any
+    search "run" finds "running" / "runs" (Porter stem). Two words
+    ("hello world") require both terms; `"hello world"` (quoted) is an
+    exact phrase match. Click any
     row → the detail pop-up shows the full message, image links,
     link, and metadata.
 15. Disconnect the network, click **Sync** → status becomes `Error`

@@ -2,7 +2,11 @@ use async_trait::async_trait;
 use uuid::Uuid;
 
 use crate::domain::character::Character;
+use crate::domain::chat_automation::{
+    AutoJournalEntry, AutoJournalRun, ChatAutomationState, StableMessageCursor, SummaryCandidate,
+};
 use crate::domain::chat_message::{ChatMessage, ChatSyncState};
+use crate::domain::journal_entry::JournalEntry;
 use crate::domain::push_log::PushLogEntry;
 use crate::domain::target::Target;
 
@@ -134,4 +138,73 @@ pub trait Repository: Send + Sync {
         last_timestamp_inclusive: i64,
         keep_ids: &[&str],
     ) -> Result<usize, StorageError>;
+
+    async fn list_journal_entries(
+        &self,
+        character_id: Uuid,
+    ) -> Result<Vec<JournalEntry>, StorageError>;
+
+    /// Insert or replace by id. Caller is responsible for `created_at`
+    /// preservation (the commands layer looks up the existing entry on
+    /// edits and reuses its `created_at`).
+    async fn upsert_journal_entry(&self, entry: &JournalEntry) -> Result<(), StorageError>;
+
+    async fn delete_journal_entry(
+        &self,
+        character_id: Uuid,
+        entry_id: &str,
+    ) -> Result<(), StorageError>;
+
+    async fn list_stable_chat_messages(
+        &self,
+        ai_id: &str,
+        after_cursor: Option<&StableMessageCursor>,
+        limit: u32,
+        exclude_newest_n: u32,
+    ) -> Result<Vec<ChatMessage>, StorageError>;
+    async fn latest_stable_cursor(
+        &self,
+        ai_id: &str,
+        exclude_newest_n: u32,
+    ) -> Result<Option<StableMessageCursor>, StorageError>;
+    async fn get_chat_automation_state(
+        &self,
+        ai_id: &str,
+    ) -> Result<ChatAutomationState, StorageError>;
+    async fn upsert_chat_automation_state(
+        &self,
+        state: &ChatAutomationState,
+    ) -> Result<(), StorageError>;
+    async fn create_auto_journal_run(&self, run: &AutoJournalRun) -> Result<(), StorageError>;
+    async fn get_auto_journal_run(&self, id: &str) -> Result<AutoJournalRun, StorageError>;
+    async fn list_pending_auto_journal_runs(
+        &self,
+        ai_id: &str,
+    ) -> Result<Vec<AutoJournalRun>, StorageError>;
+    async fn update_auto_journal_run(&self, run: &AutoJournalRun) -> Result<(), StorageError>;
+    /// Remove a stuck auto-journal run and all of its entries. The
+    /// cursor is **not** advanced — the next automation cycle will
+    /// generate a fresh run for the same message window.
+    async fn delete_auto_journal_run(&self, run_id: &str) -> Result<(), StorageError>;
+    async fn create_auto_journal_entry(&self, entry: &AutoJournalEntry)
+        -> Result<(), StorageError>;
+    async fn list_auto_journal_entries(
+        &self,
+        run_id: &str,
+    ) -> Result<Vec<AutoJournalEntry>, StorageError>;
+    async fn update_auto_journal_entry(&self, entry: &AutoJournalEntry)
+        -> Result<(), StorageError>;
+    async fn commit_summary_candidate(
+        &self,
+        ai_id: &str,
+        candidate: &SummaryCandidate,
+        cursor: Option<&StableMessageCursor>,
+    ) -> Result<(), StorageError>;
+    async fn clear_summary_candidate(&self, ai_id: &str) -> Result<(), StorageError>;
+    async fn reset_chat_summary(&self, ai_id: &str) -> Result<(), StorageError>;
+    async fn list_recent_successful_auto_journal_entries(
+        &self,
+        ai_id: &str,
+        limit: u32,
+    ) -> Result<Vec<AutoJournalEntry>, StorageError>;
 }

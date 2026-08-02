@@ -7,11 +7,15 @@
 
 #[cfg(not(test))]
 mod inner {
-    use crate::commands::{characters, chat_history, history, push, settings, share_code, targets};
+    use crate::commands::{
+        ai, characters, chat_automation, chat_history, history, journal, push, settings,
+        share_code, targets,
+    };
     use tauri::State;
 
     type Repo = std::sync::Arc<dyn crate::storage::Repository>;
     type Client = std::sync::Arc<dyn crate::kindroid::KindroidClient>;
+    type Ai = std::sync::Arc<dyn crate::kindroid::ai::AiClient>;
 
     #[tauri::command]
     pub async fn list_characters(
@@ -93,6 +97,20 @@ mod inner {
     }
 
     #[tauri::command]
+    pub async fn push_create_new_kin(
+        repo: State<'_, Repo>,
+        client: State<'_, Client>,
+        character_id: uuid::Uuid,
+    ) -> Result<crate::error::CreateNewKinResult, crate::error::AppError> {
+        push::push_create_new_kin(
+            repo.inner().clone(),
+            client.inner().clone(),
+            push::CreateNewKinRequest { character_id },
+        )
+        .await
+    }
+
+    #[tauri::command]
     pub async fn list_push_history(
         repo: State<'_, Repo>,
         limit: u32,
@@ -120,9 +138,17 @@ mod inner {
     #[tauri::command]
     pub async fn export_share_image(
         repo: State<'_, Repo>,
+        stash: State<'_, std::sync::Arc<share_code::ShareImageStash>>,
         id: uuid::Uuid,
     ) -> Result<Vec<u8>, crate::error::AppError> {
-        share_code::export_share_image(repo.inner().clone(), id).await
+        share_code::export_share_image(repo.inner().clone(), stash.inner().clone(), id).await
+    }
+
+    #[tauri::command]
+    pub fn take_stashed_share_image(
+        stash: State<'_, std::sync::Arc<share_code::ShareImageStash>>,
+    ) -> Option<Vec<u8>> {
+        share_code::take_stashed_share_image(stash.inner().clone())
     }
 
     #[tauri::command]
@@ -245,9 +271,11 @@ mod inner {
     #[tauri::command]
     pub async fn get_chat_sync_state(
         repo: State<'_, Repo>,
+        registry: State<'_, std::sync::Arc<crate::commands::sync_registry::SyncRegistry>>,
         ai_id: String,
     ) -> Result<Option<crate::domain::chat_message::ChatSyncState>, crate::error::AppError> {
-        chat_history::get_chat_sync_state(repo.inner().clone(), ai_id).await
+        chat_history::get_chat_sync_state(repo.inner().clone(), registry.inner().clone(), ai_id)
+            .await
     }
 
     #[tauri::command]
@@ -261,6 +289,7 @@ mod inner {
     pub async fn start_chat_sync(
         repo: State<'_, Repo>,
         client: State<'_, Client>,
+        ai_client: State<'_, Ai>,
         registry: State<'_, std::sync::Arc<crate::commands::sync_registry::SyncRegistry>>,
         ai_id: String,
         app: tauri::AppHandle,
@@ -268,6 +297,7 @@ mod inner {
         chat_history::start_chat_sync(
             repo.inner().clone(),
             client.inner().clone(),
+            ai_client.inner().clone(),
             registry.inner().clone(),
             ai_id,
             app,
@@ -288,6 +318,135 @@ mod inner {
         ai_id: String,
     ) -> Result<usize, crate::error::AppError> {
         chat_history::reset_chat_history(repo.inner().clone(), ai_id).await
+    }
+
+    #[tauri::command]
+    pub async fn get_chat_automation_state(
+        repo: State<'_, Repo>,
+        ai_id: String,
+    ) -> Result<chat_automation::ChatAutomationDto, crate::error::AppError> {
+        chat_automation::get_chat_automation_state(repo.inner().clone(), ai_id).await
+    }
+
+    #[tauri::command]
+    pub async fn set_chat_automation_settings(
+        repo: State<'_, Repo>,
+        input: chat_automation::SetChatAutomationSettingsInput,
+    ) -> Result<chat_automation::ChatAutomationDto, crate::error::AppError> {
+        chat_automation::set_chat_automation_settings(repo.inner().clone(), input).await
+    }
+
+    #[tauri::command]
+    pub async fn reset_chat_summary(
+        repo: State<'_, Repo>,
+        input: chat_automation::ResetChatSummaryInput,
+    ) -> Result<chat_automation::ChatAutomationDto, crate::error::AppError> {
+        chat_automation::reset_chat_summary(repo.inner().clone(), input).await
+    }
+
+    #[tauri::command]
+    pub async fn clear_stuck_auto_journal_runs(
+        repo: State<'_, Repo>,
+        input: chat_automation::ClearStuckAutoJournalRunsInput,
+    ) -> Result<chat_automation::ClearStuckAutoJournalRunsResult, crate::error::AppError> {
+        chat_automation::clear_stuck_auto_journal_runs(repo.inner().clone(), input).await
+    }
+
+    #[tauri::command]
+    pub async fn run_summary_now(
+        repo: State<'_, Repo>,
+        client: State<'_, Client>,
+        ai_client: State<'_, Ai>,
+        input: chat_automation::RunSummaryNowInput,
+    ) -> Result<chat_automation::RunSummaryNowResult, crate::error::AppError> {
+        chat_automation::run_summary_now(
+            repo.inner().clone(),
+            client.inner().clone(),
+            ai_client.inner().clone(),
+            input,
+        )
+        .await
+    }
+
+    #[tauri::command]
+    pub async fn get_automation_instructions_defaults(
+    ) -> chat_automation::AutomationInstructionsDefaults {
+        chat_automation::get_automation_instructions_defaults().await
+    }
+
+    #[tauri::command]
+    pub async fn set_automation_instructions(
+        repo: State<'_, Repo>,
+        input: chat_automation::SetAutomationInstructionsInput,
+    ) -> Result<(), crate::error::AppError> {
+        chat_automation::set_automation_instructions(repo.inner().clone(), input).await
+    }
+
+    #[tauri::command]
+    pub async fn list_journal_entries(
+        repo: State<'_, Repo>,
+        character_id: uuid::Uuid,
+    ) -> Result<Vec<crate::domain::journal_entry::JournalEntry>, crate::error::AppError> {
+        journal::list_journal_entries(repo.inner().clone(), character_id).await
+    }
+
+    #[tauri::command]
+    pub async fn save_journal_entry(
+        repo: State<'_, Repo>,
+        character_id: uuid::Uuid,
+        input: crate::domain::journal_entry::JournalEntryInput,
+    ) -> Result<crate::domain::journal_entry::JournalEntry, crate::error::AppError> {
+        journal::save_journal_entry(repo.inner().clone(), character_id, input).await
+    }
+
+    #[tauri::command]
+    pub async fn delete_journal_entry(
+        repo: State<'_, Repo>,
+        character_id: uuid::Uuid,
+        entry_id: String,
+    ) -> Result<(), crate::error::AppError> {
+        journal::delete_journal_entry(repo.inner().clone(), character_id, entry_id).await
+    }
+
+    #[tauri::command]
+    pub async fn get_ai_settings(
+        repo: State<'_, Repo>,
+    ) -> Result<ai::AiSettingsDto, crate::error::AppError> {
+        ai::get_ai_settings(repo.inner().clone()).await
+    }
+
+    #[tauri::command]
+    pub async fn set_ai_settings(
+        repo: State<'_, Repo>,
+        input: ai::SetAiSettingsInput,
+    ) -> Result<(), crate::error::AppError> {
+        ai::set_ai_settings(repo.inner().clone(), input).await
+    }
+
+    #[tauri::command]
+    pub fn set_ai_token(token: String) -> Result<(), crate::error::AppError> {
+        ai::set_ai_token(token)
+    }
+
+    #[tauri::command]
+    pub fn clear_ai_token() -> Result<(), crate::error::AppError> {
+        ai::clear_ai_token()
+    }
+
+    #[tauri::command]
+    pub async fn test_ai_connection(
+        client: State<'_, Ai>,
+        input: ai::TestAiRequest,
+    ) -> Result<ai::TestAiResult, crate::error::AppError> {
+        ai::test_ai_connection(client.inner().clone(), input).await
+    }
+
+    #[tauri::command]
+    pub async fn ai_chat_completion(
+        client: State<'_, Ai>,
+        input: ai::AiChatCompletionRequest,
+    ) -> Result<ai::AiChatCompletionResponse, crate::error::AppError> {
+        ai::ai_chat_completion(client.inner().clone(), input).await
     }
 }
 

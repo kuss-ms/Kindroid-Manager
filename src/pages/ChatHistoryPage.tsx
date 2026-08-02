@@ -3,8 +3,15 @@ import { useEffect, useMemo, useState } from 'react';
 import { useSearchParams } from 'react-router-dom';
 import { listen, type UnlistenFn } from '@tauri-apps/api/event';
 import { api, escapeFtsQuery, errorMessage } from '../lib/api';
-import type { ChatMessage, ChatSyncState, SyncStatusKind, Target } from '../lib/types';
+import type {
+  ChatAutomationDto,
+  ChatMessage,
+  ChatSyncState,
+  SyncStatusKind,
+  Target,
+} from '../lib/types';
 import { ConfirmDialog } from '../components/ConfirmDialog';
+import { AutomationPanel } from '../components/AutomationPanel';
 import { toast } from '../components/Toaster';
 
 const PAGE_SIZE = 50;
@@ -72,14 +79,13 @@ export function ChatHistoryPage() {
     refetchInterval: 5000,
   });
 
-  // Selected ai_id: prefer URL param, else first target's ai_id.
   const targetsList = useMemo(() => targets.data ?? [], [targets.data]);
+  const urlAiId = params.get('ai_id');
   const selectedAiId = useMemo(() => {
-    const fromUrl = params.get('ai_id');
-    if (fromUrl && targetsList.some((t) => t.ai_id === fromUrl)) return fromUrl;
-    if (targetsList.length === 1) return targetsList[0].ai_id;
-    return fromUrl;
-  }, [params, targetsList]);
+    if (!targets.isLoading && targetsList.length === 0) return null;
+    if (urlAiId && targetsList.some((t) => t.ai_id === urlAiId)) return urlAiId;
+    return null;
+  }, [urlAiId, targetsList, targets.isLoading]);
 
   function setSelectedAiId(aiId: string) {
     const next = new URLSearchParams(params);
@@ -141,17 +147,31 @@ export function ChatHistoryPage() {
     refetchInterval: 5000,
   });
 
+  // Lightweight view of automation state so the page can surface a
+  // status badge on the Automation… button without opening the modal.
+  const automationBadge = useQuery<ChatAutomationDto | null>({
+    queryKey: ['chat-automation', selectedAiId],
+    queryFn: () =>
+      selectedAiId ? api.getChatAutomationState(selectedAiId) : Promise.resolve(null),
+    enabled: !!selectedAiId,
+    refetchInterval: 5000,
+  });
+  const automationHasError =
+    !!automationBadge.data &&
+    !!(
+      automationBadge.data.state.journal_last_error || automationBadge.data.state.summary_last_error
+    );
+  const automationIsActive =
+    !!automationBadge.data &&
+    (automationBadge.data.state.auto_journal_enabled ||
+      automationBadge.data.state.auto_summary_enabled);
+
   // Page of messages (browse mode).
   const browsePage = useQuery<ChatMessage[]>({
     queryKey: ['chat-messages', selectedAiId, browseCursor, favouritesOnly],
     queryFn: () => {
       if (!selectedAiId) return Promise.resolve([]);
-      return api.listChatMessages(
-        selectedAiId,
-        browseCursor,
-        PAGE_SIZE,
-        favouritesOnly,
-      );
+      return api.listChatMessages(selectedAiId, browseCursor, PAGE_SIZE, favouritesOnly);
     },
     enabled: !!selectedAiId && !isSearching,
   });
@@ -200,6 +220,9 @@ export function ChatHistoryPage() {
         // Refresh the visible messages so newly-fetched rows appear.
         queryClient.invalidateQueries({ queryKey: ['chat-messages'] });
         queryClient.invalidateQueries({ queryKey: ['chat-search'] });
+        // The automation cycle runs after a successful drain; refresh its
+        // state too so the panel picks up the new cursor / last-run time.
+        queryClient.invalidateQueries({ queryKey: ['chat-automation'] });
       }),
     );
     unlistens.push(
@@ -230,6 +253,7 @@ export function ChatHistoryPage() {
         queryClient.invalidateQueries({ queryKey: ['current-sync'] });
         queryClient.invalidateQueries({ queryKey: ['chat-messages'] });
         queryClient.invalidateQueries({ queryKey: ['chat-search'] });
+        queryClient.invalidateQueries({ queryKey: ['chat-automation'] });
       }),
     );
     return () => {
@@ -276,6 +300,9 @@ export function ChatHistoryPage() {
   // this target since the reset would race with the in-flight loop.
   const [resetOpen, setResetOpen] = useState(false);
   const [resetting, setResetting] = useState(false);
+  // Automation settings open in a modal so the chat-history stream
+  // stays focused on the chat itself.
+  const [automationOpen, setAutomationOpen] = useState(false);
   async function onResetConfirm() {
     if (!selectedAiId) return;
     setResetting(true);
@@ -332,9 +359,7 @@ export function ChatHistoryPage() {
         (old) =>
           old
             ? old.map((m) =>
-                m.kindroid_msg_id === kindroidMsgId
-                  ? { ...m, favourite: !prevFavourite }
-                  : m,
+                m.kindroid_msg_id === kindroidMsgId ? { ...m, favourite: !prevFavourite } : m,
               )
             : old,
       );
@@ -343,9 +368,7 @@ export function ChatHistoryPage() {
         (old) =>
           old
             ? old.map((m) =>
-                m.kindroid_msg_id === kindroidMsgId
-                  ? { ...m, favourite: !prevFavourite }
-                  : m,
+                m.kindroid_msg_id === kindroidMsgId ? { ...m, favourite: !prevFavourite } : m,
               )
             : old,
       );
@@ -377,14 +400,8 @@ export function ChatHistoryPage() {
           m.kindroid_msg_id === kindroidMsgId ? { ...m, favourite: canonical } : m,
         );
       };
-      queryClient.setQueriesData<ChatMessage[]>(
-        { queryKey: ['chat-messages', aiId] },
-        reconcile,
-      );
-      queryClient.setQueriesData<ChatMessage[]>(
-        { queryKey: ['chat-search', aiId] },
-        reconcile,
-      );
+      queryClient.setQueriesData<ChatMessage[]>({ queryKey: ['chat-messages', aiId] }, reconcile);
+      queryClient.setQueriesData<ChatMessage[]>({ queryKey: ['chat-search', aiId] }, reconcile);
       // Reflect in the open detail dialog too, if its message id matches.
       setOpenMessage((cur) =>
         cur && cur.kindroid_msg_id === kindroidMsgId ? { ...cur, favourite: canonical } : cur,
@@ -405,14 +422,8 @@ export function ChatHistoryPage() {
               m.kindroid_msg_id === kindroidMsgId ? { ...m, favourite: prevFavourite } : m,
             )
           : old;
-      queryClient.setQueriesData<ChatMessage[]>(
-        { queryKey: ['chat-messages', aiId] },
-        restore,
-      );
-      queryClient.setQueriesData<ChatMessage[]>(
-        { queryKey: ['chat-search', aiId] },
-        restore,
-      );
+      queryClient.setQueriesData<ChatMessage[]>({ queryKey: ['chat-messages', aiId] }, restore);
+      queryClient.setQueriesData<ChatMessage[]>({ queryKey: ['chat-search', aiId] }, restore);
       setOpenMessage((cur) =>
         cur && cur.kindroid_msg_id === kindroidMsgId ? { ...cur, favourite: prevFavourite } : cur,
       );
@@ -445,24 +456,61 @@ export function ChatHistoryPage() {
         <div className="page-header">
           <h2>Chat History</h2>
         </div>
-        <div className="empty">
-          Add a target on the Targets page to enable chat history.
+        <div className="empty">Add a target on the Targets page to enable chat history.</div>
+      </div>
+    );
+  }
+
+  // Targets loaded but the user hasn't picked one yet (or the URL had a
+  // stale ai_id). Show a helpful empty state instead of rendering the
+  // full chat-history UI with no data.
+  if (!selectedAiId) {
+    return (
+      <div className="page">
+        <div className="page-header">
+          <h2>Chat History</h2>
         </div>
+        <div
+          className="form-row"
+          style={{
+            flexDirection: 'row',
+            gap: 8,
+            alignItems: 'center',
+            flexWrap: 'wrap',
+          }}
+        >
+          <label className="form-label" htmlFor="target-select" style={{ flexShrink: 0 }}>
+            Target
+          </label>
+          <select
+            id="target-select"
+            className="select"
+            value=""
+            onChange={(e) => setSelectedAiId(e.target.value)}
+          >
+            <option value="">— select a target —</option>
+            {targetsList.map((t) => (
+              <option key={t.id} value={t.ai_id}>
+                {t.label} ({t.ai_id})
+              </option>
+            ))}
+          </select>
+        </div>
+        <div className="empty">Select a target to view its chat history.</div>
       </div>
     );
   }
 
   const currentSyncing = current.data;
   const state = syncState.data ?? null;
-  const statusKind: SyncStatusKind =
-    liveProgress?.status_kind ?? state?.status_kind ?? 'idle';
+  const statusKind: SyncStatusKind = liveProgress?.status_kind ?? state?.status_kind ?? 'idle';
   const total = liveProgress?.total ?? state?.total ?? messageCount.data ?? 0;
 
   // Build the progress indicator subtitle. During a sync we combine the
   // request count + last-batch timestamp so the user can see whether the
   // backfill is making progress.
   function progressSubtitle(): string {
-    if (currentSyncing === selectedAiId && liveProgress) {
+    if (selectedAiId && currentSyncing === selectedAiId && liveProgress) {
       const reqPart = liveProgress.requests > 0 ? `Request #${liveProgress.requests}` : 'Starting…';
       const cursorPart = liveProgress.last_timestamp
         ? `Last message: ${tsToLocal(liveProgress.last_timestamp)}`
@@ -491,7 +539,7 @@ export function ChatHistoryPage() {
   let body: string | null = null;
   let syncDisabledReason: string | null = null;
 
-  if (currentSyncing === selectedAiId) {
+  if (selectedAiId && currentSyncing === selectedAiId) {
     showCancel = true;
     const lastDel = liveProgress?.last_deleted_count ?? 0;
     const lastBatch = liveProgress?.last_batch_size ?? 0;
@@ -502,7 +550,7 @@ export function ChatHistoryPage() {
     } else {
       body = `Last updated: ${localTime(state?.last_synced_at) || '—'}`;
     }
-  } else if (currentSyncing && currentSyncing !== selectedAiId) {
+  } else if (selectedAiId && currentSyncing && currentSyncing !== selectedAiId) {
     syncDisabledReason = `Cancel it before syncing this one.`;
     body = `Cancel it from its target page before syncing this one.`;
   } else if (state == null) {
@@ -534,15 +582,20 @@ export function ChatHistoryPage() {
         <div className="muted">{subtitle}</div>
       </div>
 
-      <div className="flex-row" style={{ gap: 8, flexWrap: 'wrap', alignItems: 'center' }}>
-        <label className="muted" htmlFor="target-select">
+      <div
+        className="form-row"
+        style={{ flexDirection: 'row', gap: 8, alignItems: 'center', flexWrap: 'wrap' }}
+      >
+        <label className="form-label" htmlFor="target-select" style={{ flexShrink: 0 }}>
           Target
         </label>
         <select
           id="target-select"
+          className="select"
           value={selectedAiId ?? ''}
           onChange={(e) => setSelectedAiId(e.target.value)}
         >
+          <option value="">— select a target —</option>
           {targetsList.map((t) => (
             <option key={t.id} value={t.ai_id}>
               {t.label} ({t.ai_id})
@@ -566,14 +619,48 @@ export function ChatHistoryPage() {
           </button>
         )}
         {/* Reset is available whenever a target is selected, except
-            while a sync is running for this target (the wipe would race
+            while a sync is running on this target (the wipe would race
             with the in-flight loop). */}
+        <button
+          className="btn"
+          onClick={() => setAutomationOpen(true)}
+          disabled={!selectedAiId}
+          title={
+            selectedAiId
+              ? automationHasError
+                ? 'Automation recorded an error — open to clear or reset.'
+                : automationIsActive
+                  ? 'Auto-journal or auto-summary is enabled for this target.'
+                  : 'Configure auto-journal and auto-summary for this target.'
+              : 'Select a target to configure automation.'
+          }
+        >
+          Automation…
+          {selectedAiId && automationHasError && (
+            <span
+              className="badge badge-danger"
+              style={{ marginLeft: 6 }}
+              aria-label="automation error"
+            >
+              error
+            </span>
+          )}
+          {selectedAiId && automationIsActive && !automationHasError && (
+            <span
+              className="badge badge-success"
+              style={{ marginLeft: 6 }}
+              aria-label="automation enabled"
+            >
+              on
+            </span>
+          )}
+        </button>
         <button
           className="btn btn-danger"
           onClick={() => setResetOpen(true)}
-          disabled={resetting || currentSyncing === selectedAiId}
+          disabled={resetting || (selectedAiId != null && currentSyncing === selectedAiId)}
           title={
-            currentSyncing === selectedAiId
+            selectedAiId != null && currentSyncing === selectedAiId
               ? 'Cancel the sync before resetting.'
               : 'Delete all locally-cached chat history for this target.'
           }
@@ -584,19 +671,19 @@ export function ChatHistoryPage() {
 
       {body && <p className="muted">{body}</p>}
 
-      <div className="flex-row" style={{ marginTop: 12 }}>
+      <div
+        className="form-row"
+        style={{ flexDirection: 'row', gap: 8, alignItems: 'center', flexWrap: 'wrap' }}
+      >
         <input
           type="search"
+          className="input input-search"
           placeholder="Search messages…"
           value={searchInput}
           onChange={(e) => setSearchInput(e.target.value)}
           style={{ flex: 1, minWidth: 200 }}
         />
-        <label
-          className="flex-row"
-          style={{ gap: 6, alignItems: 'center', cursor: 'pointer' }}
-          title="Show only messages you've favourited (pinned) here"
-        >
+        <label className="checkbox" title="Show only messages you've favourited (pinned) here">
           <input
             type="checkbox"
             checked={favouritesOnly}
@@ -610,7 +697,7 @@ export function ChatHistoryPage() {
         <p className="muted" style={{ marginTop: 8 }}>
           {messages.length === 0
             ? `No matches for "${trimmedQuery}".`
-            : `Showing ${messages.length} matches (prefix search, Porter stemmed).`}
+            : `Showing ${messages.length} matches. All terms required (Porter stemmed); wrap a phrase in "quotes" for an exact match.`}
         </p>
       )}
 
@@ -654,8 +741,7 @@ export function ChatHistoryPage() {
         <button
           className="btn"
           disabled={
-            messages.length < PAGE_SIZE ||
-            (isSearching && searchOffset + PAGE_SIZE >= SEARCH_LIMIT)
+            messages.length < PAGE_SIZE || (isSearching && searchOffset + PAGE_SIZE >= SEARCH_LIMIT)
           }
           onClick={() => {
             if (isSearching) {
@@ -674,9 +760,7 @@ export function ChatHistoryPage() {
 
       <MessageDetailDialog
         message={openMessage}
-        pending={
-          openMessage !== null && pendingFavourites.has(openMessage.kindroid_msg_id)
-        }
+        pending={openMessage !== null && pendingFavourites.has(openMessage.kindroid_msg_id)}
         onToggleFavourite={() => {
           if (!openMessage) return;
           setFavourite.mutate({
@@ -696,6 +780,46 @@ export function ChatHistoryPage() {
         onConfirm={onResetConfirm}
         onCancel={() => setResetOpen(false)}
       />
+
+      {automationOpen && selectedAiId && (
+        <div
+          className="modal-overlay"
+          role="dialog"
+          aria-modal="true"
+          aria-label="Automation settings"
+          onClick={(e) => {
+            if (e.target === e.currentTarget) setAutomationOpen(false);
+          }}
+        >
+          <div className="modal" style={{ maxWidth: 760, maxHeight: '85vh', overflow: 'auto' }}>
+            <div
+              style={{
+                display: 'flex',
+                justifyContent: 'space-between',
+                alignItems: 'baseline',
+                marginBottom: 8,
+              }}
+            >
+              <h3 style={{ margin: 0 }}>Automation</h3>
+              <button
+                className="btn btn-sm"
+                onClick={() => setAutomationOpen(false)}
+                aria-label="Close"
+              >
+                ✕
+              </button>
+            </div>
+            <p className="muted" style={{ fontSize: 12, marginTop: 0 }}>
+              Configure auto-journal and auto-summary for <code>{selectedAiId}</code>. Changes are
+              saved immediately.
+            </p>
+            <AutomationPanel
+              aiId={selectedAiId}
+              automationInProgress={!!selectedAiId && !!state && state.status_kind === 'running'}
+            />
+          </div>
+        </div>
+      )}
     </div>
   );
 }
@@ -752,7 +876,8 @@ function MessageRow({
         )}
         {message.link_url && (
           <div style={{ fontSize: 12 }}>
-            🔗 <a href={message.link_url} onClick={(e) => e.stopPropagation()}>
+            🔗{' '}
+            <a href={message.link_url} onClick={(e) => e.stopPropagation()}>
               {message.link_description ?? message.link_url}
             </a>
           </div>
@@ -808,7 +933,15 @@ function HeartButton({
         </svg>
       ) : (
         // Outline heart.
-        <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" aria-hidden>
+        <svg
+          width="16"
+          height="16"
+          viewBox="0 0 24 24"
+          fill="none"
+          stroke="currentColor"
+          strokeWidth="2"
+          aria-hidden
+        >
           <path d="M12 21s-7.5-4.7-9.6-9.2C.6 7.5 3.4 4 7.2 4c2 0 3.6 1 4.8 2.6C13.2 5 14.8 4 16.8 4c3.8 0 6.6 3.5 4.8 7.8C19.5 16.3 12 21 12 21z" />
         </svg>
       )}

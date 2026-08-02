@@ -1,15 +1,18 @@
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
-import { useState } from 'react';
+import { useRef, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { api, errorMessage } from '../lib/api';
-import type { Character } from '../lib/types';
+import type { Character, CreateNewKinResult } from '../lib/types';
 import { ConfirmDialog } from '../components/ConfirmDialog';
+import { RowActions, type RowAction } from '../components/RowActions';
 import { toast } from '../components/Toaster';
 export function CharactersPage() {
   const queryClient = useQueryClient();
   const navigate = useNavigate();
   const [search, setSearch] = useState('');
   const [deleteId, setDeleteId] = useState<string | null>(null);
+  const [createId, setCreateId] = useState<string | null>(null);
+  const importInputRef = useRef<HTMLInputElement>(null);
   const characters = useQuery<Character[]>({
     queryKey: ['characters'],
     queryFn: api.listCharacters,
@@ -31,19 +34,25 @@ export function CharactersPage() {
     onError: (e) => toast('error', errorMessage(e)),
   });
 
-  const share = useMutation<void, unknown, string>({
-    mutationFn: async (id) => {
-      const bytes = await api.exportShareImage(id);
-      const blob = new Blob([new Uint8Array(bytes)], { type: 'image/png' });
-      if (
-        typeof ClipboardItem !== 'undefined' &&
-        typeof navigator !== 'undefined' &&
-        navigator.clipboard?.write
-      ) {
-        await navigator.clipboard.write([new ClipboardItem({ 'image/png': blob })]);
+  const createNew = useMutation<CreateNewKinResult, unknown, string>({
+    mutationFn: (id) => api.pushCreateNewKin(id),
+    onSuccess: (result) => {
+      if (!result.create_new_ai.ok) {
+        toast('error', result.create_new_ai.message);
         return;
       }
-      throw new Error('Image clipboard write not supported in this environment');
+      queryClient.invalidateQueries({ queryKey: ['targets'] });
+      queryClient.invalidateQueries({ queryKey: ['push-history'] });
+      queryClient.invalidateQueries({ queryKey: ['characters'] });
+      toast('success', `New Kin created with ai_id ${result.target.ai_id}`);
+      navigate(`/history/${result.log_id}`);
+    },
+    onError: (e) => toast('error', errorMessage(e)),
+  });
+
+  const share = useMutation<void, unknown, string>({
+    mutationFn: async (id) => {
+      await api.copyShareImageToClipboard(id);
     },
     onSuccess: () => toast('success', 'Share image copied to clipboard'),
     onError: (e) => toast('error', errorMessage(e)),
@@ -71,10 +80,37 @@ export function CharactersPage() {
               }
             }}
           />{' '}
+          <button className="btn" onClick={() => importInputRef.current?.click()}>
+            {' '}
+            Import share image{' '}
+          </button>{' '}
           <button className="btn btn-primary" onClick={() => navigate('/characters/new')}>
             {' '}
             New{' '}
           </button>{' '}
+          <input
+            ref={importInputRef}
+            type="file"
+            accept="image/png,image/*"
+            style={{ display: 'none' }}
+            onChange={async (e) => {
+              const file = e.target.files?.[0];
+              e.target.value = '';
+              if (file) {
+                const buf = await file.arrayBuffer();
+                const bytes = Array.from(new Uint8Array(buf));
+                try {
+                  const draft = await api.importShareImage(bytes);
+                  queryClient.setQueryData(['character', draft.id], draft);
+                  queryClient.invalidateQueries({ queryKey: ['characters'] });
+                  toast('success', `Imported "${draft.name}"`);
+                  navigate(`/characters/${draft.id}`);
+                } catch (err) {
+                  toast('error', errorMessage(err));
+                }
+              }
+            }}
+          />
         </div>{' '}
       </div>{' '}
       <p className="muted" style={{ fontSize: 12, marginBottom: 0 }}>
@@ -103,37 +139,67 @@ export function CharactersPage() {
                 </div>{' '}
                 <div className="list-item-actions">
                   {' '}
-                  <button className="btn btn-sm" onClick={() => navigate(`/characters/${c.id}`)}>
-                    {' '}
-                    Edit{' '}
-                  </button>{' '}
-                  <button
-                    className="btn btn-sm"
-                    onClick={() => share.mutate(c.id)}
-                    disabled={share.isPending || !c.cover_image}
-                    title={
-                      c.cover_image
-                        ? 'Copy share image (with persona) to clipboard'
-                        : 'Upload a cover image first'
+                  <RowActions
+                    actions={
+                      [
+                        {
+                          label: 'Edit',
+                          onClick: () => navigate(`/characters/${c.id}`),
+                        },
+                        {
+                          label: 'Share',
+                          onClick: () => share.mutate(c.id),
+                          disabled: share.isPending || !c.cover_image,
+                          title: c.cover_image
+                            ? 'Copy share image (with persona + journal entries) to clipboard'
+                            : 'Upload a cover image first',
+                        },
+                        {
+                          label: 'Duplicate',
+                          onClick: () => duplicate.mutate(c.id),
+                        },
+                        {
+                          label:
+                            createNew.isPending && createNew.variables === c.id
+                              ? 'Pushing…'
+                              : 'Push as new Kin',
+                          onClick: () => {
+                            if (!c.ai_name?.trim()) {
+                              toast('error', 'ai_name is required to create a new Kin');
+                              return;
+                            }
+                            setCreateId(c.id);
+                          },
+                          disabled: createNew.isPending && createNew.variables === c.id,
+                          title: c.ai_name?.trim()
+                            ? 'Create a new Kin from this character'
+                            : 'Set an AI name before creating a new Kin',
+                        },
+                        {
+                          label: 'Delete',
+                          danger: true,
+                          onClick: () => setDeleteId(c.id),
+                        },
+                      ] satisfies RowAction[]
                     }
-                  >
-                    {' '}
-                    {share.isPending && share.variables === c.id ? 'Sharing…' : 'Share'}{' '}
-                  </button>{' '}
-                  <button className="btn btn-sm" onClick={() => duplicate.mutate(c.id)}>
-                    {' '}
-                    Duplicate{' '}
-                  </button>{' '}
-                  <button className="btn btn-sm btn-danger" onClick={() => setDeleteId(c.id)}>
-                    {' '}
-                    Delete{' '}
-                  </button>{' '}
+                  />{' '}
                 </div>{' '}
               </div>
             ))}{' '}
           </div>{' '}
         </div>
       )}{' '}
+      <ConfirmDialog
+        open={!!createId}
+        title="Push as new Kin?"
+        body={`Create a new Kin on Kindroid from "${list.find((c) => c.id === createId)?.name ?? ''}"? This will push all fields and journal entries, then add the new AI as a local target.`}
+        confirmLabel="Create"
+        onConfirm={() => {
+          if (createId) createNew.mutate(createId);
+          setCreateId(null);
+        }}
+        onCancel={() => setCreateId(null)}
+      />{' '}
       <ConfirmDialog
         open={!!deleteId}
         title="Delete character?"

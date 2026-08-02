@@ -8,7 +8,13 @@ use tokio::sync::Mutex;
 use uuid::Uuid;
 
 use crate::domain::character::Character;
+use crate::domain::chat_automation::{
+    AutoJournalEntry, AutoJournalEntryStatus, AutoJournalRun, AutoJournalRunStatus,
+    ChatAutomationState, StableMessageCursor, SummaryBackend, SummaryBootstrapMode,
+    SummaryCandidate,
+};
 use crate::domain::chat_message::{ChatMessage, ChatSyncState, SyncStatusKind};
+use crate::domain::journal_entry::JournalEntry;
 use crate::domain::push_log::PushLogEntry;
 use crate::domain::target::Target;
 use crate::storage::{Repository, StorageError};
@@ -89,36 +95,53 @@ fn run_migrations(conn: &mut Connection) -> Result<(), StorageError> {
 }
 
 fn discover_migrations() -> Result<Vec<(u32, String)>, String> {
-    let dir = migrations_dir().ok_or("no migrations dir")?;
+    // Migration SQL is embedded at compile time so the binary works on
+    // platforms (notably Android) where the build-time `CARGO_MANIFEST_DIR`
+    // path does not exist. To add a new migration: drop `NNNN_*.sql` into
+    // `src/storage/migrations/`, then append a matching `include_str!` line
+    // below in numeric order.
+    let bodies: &[(&str, &str)] = &[
+        ("0001_init.sql", include_str!("migrations/0001_init.sql")),
+        (
+            "0002_add_cover_image.sql",
+            include_str!("migrations/0002_add_cover_image.sql"),
+        ),
+        (
+            "0003_add_avatar_description.sql",
+            include_str!("migrations/0003_add_avatar_description.sql"),
+        ),
+        (
+            "0004_chat_history.sql",
+            include_str!("migrations/0004_chat_history.sql"),
+        ),
+        (
+            "0005_chat_favourite.sql",
+            include_str!("migrations/0005_chat_favourite.sql"),
+        ),
+        (
+            "0006_character_journal.sql",
+            include_str!("migrations/0006_character_journal.sql"),
+        ),
+        (
+            "0007_chat_automation.sql",
+            include_str!("migrations/0007_chat_automation.sql"),
+        ),
+        (
+            "0008_chat_automation_response.sql",
+            include_str!("migrations/0008_chat_automation_response.sql"),
+        ),
+    ];
     let mut out = Vec::new();
-    for entry in std::fs::read_dir(&dir).map_err(|e| e.to_string())? {
-        let entry = entry.map_err(|e| e.to_string())?;
-        let path = entry.path();
-        if path.extension().and_then(|s| s.to_str()) != Some("sql") {
-            continue;
-        }
-        let name = path.file_name().unwrap().to_string_lossy().to_string();
+    for (name, body) in bodies {
         let version: u32 = name
             .split('_')
             .next()
             .and_then(|s| s.parse().ok())
             .ok_or_else(|| format!("bad migration name: {name}"))?;
-        let body = std::fs::read_to_string(&path).map_err(|e| e.to_string())?;
-        out.push((version, body));
+        out.push((version, (*body).to_string()));
     }
     out.sort_by_key(|(v, _)| *v);
     Ok(out)
-}
-
-fn migrations_dir() -> Option<PathBuf> {
-    // CARGO_MANIFEST_DIR is set by cargo at build time.
-    let manifest = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
-    let p = manifest.join("src").join("storage").join("migrations");
-    if p.exists() {
-        Some(p)
-    } else {
-        None
-    }
 }
 
 fn parse_dt(s: &str) -> Result<DateTime<Utc>, StorageError> {
@@ -340,12 +363,18 @@ impl Repository for SqliteRepository {
         let conn = lock(&self.conn).await;
         let fields_json = serde_json::to_string(&entry.fields_sent)
             .map_err(|e| StorageError::Database(e.to_string()))?;
+        let journal_ids_json: Option<String> = match &entry.journal_entry_ids {
+            Some(ids) => serde_json::to_string(ids)
+                .map(Some)
+                .map_err(|e| StorageError::Database(e.to_string()))?,
+            None => None,
+        };
         conn.execute(
             "INSERT INTO push_log
              (id, at, character_id, character_name, target_id, target_ai_id, fields_sent,
               did_chat_break, greeting, wipe_cascaded, update_info_status, update_info_body,
-              chat_break_status, chat_break_body)
-             VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,?12,?13,?14)",
+              chat_break_status, chat_break_body, journal_entry_ids)
+             VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,?12,?13,?14,?15)",
             params![
                 entry.id.to_string(),
                 entry.at.to_rfc3339(),
@@ -361,6 +390,7 @@ impl Repository for SqliteRepository {
                 entry.update_info_body,
                 entry.chat_break_status.map(|s| s as i64),
                 entry.chat_break_body,
+                journal_ids_json,
             ],
         )
         .map_err(|e| StorageError::Database(e.to_string()))?;
@@ -378,7 +408,7 @@ impl Repository for SqliteRepository {
                 "SELECT id, at, character_id, character_name, target_id, target_ai_id,
                         fields_sent, did_chat_break, greeting, wipe_cascaded,
                         update_info_status, update_info_body, chat_break_status,
-                        chat_break_body
+                        chat_break_body, journal_entry_ids
                  FROM push_log ORDER BY at DESC LIMIT ?1 OFFSET ?2",
             )
             .map_err(|e| StorageError::Database(e.to_string()))?;
@@ -394,7 +424,8 @@ impl Repository for SqliteRepository {
         conn.query_row(
             "SELECT id, at, character_id, character_name, target_id, target_ai_id,
                     fields_sent, did_chat_break, greeting, wipe_cascaded,
-                    update_info_status, update_info_body, chat_break_status, chat_break_body
+                    update_info_status, update_info_body, chat_break_status,
+                    chat_break_body, journal_entry_ids
              FROM push_log WHERE id = ?1",
             params![id.to_string()],
             row_to_push_log,
@@ -810,6 +841,420 @@ impl Repository for SqliteRepository {
             .map_err(|e| StorageError::Database(e.to_string()))?;
         Ok(n)
     }
+
+    async fn list_stable_chat_messages(
+        &self,
+        ai_id: &str,
+        after_cursor: Option<&StableMessageCursor>,
+        limit: u32,
+        exclude_newest_n: u32,
+    ) -> Result<Vec<ChatMessage>, StorageError> {
+        let conn = lock(&self.conn).await;
+        let (ts, mut id) = after_cursor
+            .map(|c| (c.timestamp, c.kindroid_msg_id.as_str()))
+            .unwrap_or((i64::MIN, ""));
+        if let Some(cursor) = after_cursor {
+            let exists: Option<i64> = conn
+                .query_row(
+                    "SELECT 1 FROM chat_messages WHERE ai_id = ?1 AND timestamp = ?2 AND kindroid_msg_id = ?3",
+                    params![ai_id, cursor.timestamp, cursor.kindroid_msg_id],
+                    |row| row.get(0),
+                )
+                .optional()
+                .map_err(|e| StorageError::Database(e.to_string()))?;
+            if exists.is_none() {
+                id = "";
+            }
+        }
+        let mut stmt = conn
+            .prepare(
+             "WITH boundary AS (
+                SELECT timestamp, kindroid_msg_id FROM chat_messages
+                WHERE ai_id = ?1
+                ORDER BY timestamp DESC, kindroid_msg_id DESC
+                LIMIT 1 OFFSET ?4
+              )
+              SELECT m.id, m.ai_id, m.kindroid_msg_id, m.sender, m.sender_type, m.display_name, m.timestamp,
+                     m.message, m.image_urls, m.image_description, m.video_description, m.internet_response,
+                     m.link_url, m.link_description, m.fetched_at, m.favourite
+              FROM chat_messages m CROSS JOIN boundary b
+              WHERE m.ai_id = ?1 AND (m.timestamp > ?2 OR (m.timestamp = ?2 AND m.kindroid_msg_id > ?3))
+                AND (m.timestamp < b.timestamp OR (m.timestamp = b.timestamp AND m.kindroid_msg_id <= b.kindroid_msg_id))
+              ORDER BY m.timestamp ASC, m.kindroid_msg_id ASC LIMIT ?5",
+            )
+            .map_err(|e| StorageError::Database(e.to_string()))?;
+        let rows = stmt
+            .query_map(
+                params![
+                    ai_id,
+                    ts,
+                    id,
+                    exclude_newest_n as i64,
+                    limit.clamp(1, 10000) as i64
+                ],
+                row_to_chat_message,
+            )
+            .map_err(|e| StorageError::Database(e.to_string()))?;
+        rows.map(|r| r.map_err(|e| StorageError::Database(e.to_string())))
+            .collect()
+    }
+
+    async fn latest_stable_cursor(
+        &self,
+        ai_id: &str,
+        exclude_newest_n: u32,
+    ) -> Result<Option<StableMessageCursor>, StorageError> {
+        let conn = lock(&self.conn).await;
+        conn.query_row(
+            "SELECT timestamp, kindroid_msg_id FROM chat_messages WHERE ai_id = ?1
+             ORDER BY timestamp DESC, kindroid_msg_id DESC LIMIT 1 OFFSET ?2",
+            params![ai_id, exclude_newest_n as i64],
+            |r| {
+                Ok(StableMessageCursor {
+                    timestamp: r.get(0)?,
+                    kindroid_msg_id: r.get(1)?,
+                })
+            },
+        )
+        .optional()
+        .map_err(|e| StorageError::Database(e.to_string()))
+    }
+
+    async fn get_chat_automation_state(
+        &self,
+        ai_id: &str,
+    ) -> Result<ChatAutomationState, StorageError> {
+        let conn = lock(&self.conn).await;
+        conn.query_row(
+            "SELECT ai_id, auto_journal_enabled, auto_summary_enabled, interval, journal_cap,
+             summary_backend, bootstrap_mode, journal_instructions_override, summary_instructions_override,
+             journal_cursor_timestamp, journal_cursor_msg_id, summary_cursor_timestamp, summary_cursor_msg_id,
+             journal_initialised, summary, summary_backend_stored, pending_summary_candidate,
+             pending_summary_backend, pending_summary_created_at, pending_summary_cursor_timestamp,
+             pending_summary_cursor_msg_id, pending_reformat, journal_last_error, summary_last_error,
+             journal_last_run_at, summary_last_run_at, journal_last_response, summary_last_response
+             FROM chat_automation_state WHERE ai_id = ?1",
+            params![ai_id], row_to_chat_automation_state,
+        ).optional().map_err(|e| StorageError::Database(e.to_string()))?.ok_or(StorageError::NotFound)
+    }
+
+    async fn upsert_chat_automation_state(
+        &self,
+        s: &ChatAutomationState,
+    ) -> Result<(), StorageError> {
+        let conn = lock(&self.conn).await;
+        conn.execute(
+            "INSERT INTO chat_automation_state VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,?12,?13,?14,?15,?16,?17,?18,?19,?20,?21,?22,?23,?24,?25,?26,?27,?28)
+             ON CONFLICT(ai_id) DO UPDATE SET auto_journal_enabled=excluded.auto_journal_enabled,
+             auto_summary_enabled=excluded.auto_summary_enabled, interval=excluded.interval, journal_cap=excluded.journal_cap,
+             summary_backend=excluded.summary_backend, bootstrap_mode=excluded.bootstrap_mode,
+             journal_instructions_override=excluded.journal_instructions_override, summary_instructions_override=excluded.summary_instructions_override,
+             journal_cursor_timestamp=excluded.journal_cursor_timestamp, journal_cursor_msg_id=excluded.journal_cursor_msg_id,
+             summary_cursor_timestamp=excluded.summary_cursor_timestamp, summary_cursor_msg_id=excluded.summary_cursor_msg_id,
+             journal_initialised=excluded.journal_initialised, summary=excluded.summary, summary_backend_stored=excluded.summary_backend_stored,
+             pending_summary_candidate=excluded.pending_summary_candidate, pending_summary_backend=excluded.pending_summary_backend,
+             pending_summary_created_at=excluded.pending_summary_created_at,
+             pending_summary_cursor_timestamp=excluded.pending_summary_cursor_timestamp,
+             pending_summary_cursor_msg_id=excluded.pending_summary_cursor_msg_id,
+             pending_reformat=excluded.pending_reformat, journal_last_error=excluded.journal_last_error,
+             summary_last_error=excluded.summary_last_error, journal_last_run_at=excluded.journal_last_run_at,
+             summary_last_run_at=excluded.summary_last_run_at,
+             journal_last_response=excluded.journal_last_response,
+             summary_last_response=excluded.summary_last_response",
+            params![s.ai_id, s.auto_journal_enabled as i32, s.auto_summary_enabled as i32, s.interval, s.journal_cap,
+                s.summary_backend.as_str(), s.bootstrap_mode.as_str(), s.journal_instructions_override, s.summary_instructions_override,
+                s.journal_cursor.as_ref().map(|c| c.timestamp), s.journal_cursor.as_ref().map(|c| c.kindroid_msg_id.as_str()),
+                s.summary_cursor.as_ref().map(|c| c.timestamp), s.summary_cursor.as_ref().map(|c| c.kindroid_msg_id.as_str()),
+                s.journal_initialised as i32, s.summary, s.summary_backend_stored.as_str(), s.pending_summary_candidate,
+                s.pending_summary_backend.as_ref().map(SummaryBackend::as_str), s.pending_summary_created_at.map(|d| d.to_rfc3339()),
+                s.pending_summary_cursor.as_ref().map(|c| c.timestamp), s.pending_summary_cursor.as_ref().map(|c| c.kindroid_msg_id.as_str()),
+                s.pending_reformat as i32, s.journal_last_error, s.summary_last_error,
+                s.journal_last_run_at.map(|d| d.to_rfc3339()), s.summary_last_run_at.map(|d| d.to_rfc3339()),
+                s.journal_last_response, s.summary_last_response]
+        ).map_err(|e| StorageError::Database(e.to_string()))?;
+        Ok(())
+    }
+
+    async fn create_auto_journal_run(&self, run: &AutoJournalRun) -> Result<(), StorageError> {
+        self.update_auto_journal_run(run).await
+    }
+    async fn get_auto_journal_run(&self, id: &str) -> Result<AutoJournalRun, StorageError> {
+        let conn = lock(&self.conn).await;
+        conn.query_row("SELECT id, ai_id, start_cursor_timestamp, start_cursor_msg_id, end_cursor_timestamp, end_cursor_msg_id, status, attempts, completed_at, last_error, created_at FROM auto_journal_runs WHERE id=?1", params![id], row_to_auto_journal_run)
+            .optional().map_err(|e| StorageError::Database(e.to_string()))?.ok_or(StorageError::NotFound)
+    }
+    async fn list_pending_auto_journal_runs(
+        &self,
+        ai_id: &str,
+    ) -> Result<Vec<AutoJournalRun>, StorageError> {
+        let conn = lock(&self.conn).await;
+        let mut stmt = conn.prepare("SELECT id, ai_id, start_cursor_timestamp, start_cursor_msg_id, end_cursor_timestamp, end_cursor_msg_id, status, attempts, completed_at, last_error, created_at FROM auto_journal_runs WHERE ai_id=?1 AND status IN ('pending','running','failed') ORDER BY created_at ASC").map_err(|e| StorageError::Database(e.to_string()))?;
+        let rows = stmt
+            .query_map(params![ai_id], row_to_auto_journal_run)
+            .map_err(|e| StorageError::Database(e.to_string()))?;
+        rows.map(|r| r.map_err(|e| StorageError::Database(e.to_string())))
+            .collect()
+    }
+    async fn update_auto_journal_run(&self, r: &AutoJournalRun) -> Result<(), StorageError> {
+        let conn = lock(&self.conn).await;
+        conn.execute("INSERT INTO auto_journal_runs VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11) ON CONFLICT(id) DO UPDATE SET status=excluded.status, attempts=excluded.attempts, completed_at=excluded.completed_at, last_error=excluded.last_error",
+            params![r.id,r.ai_id,r.start_cursor.as_ref().map(|c|c.timestamp),r.start_cursor.as_ref().map(|c|c.kindroid_msg_id.as_str()),r.end_cursor.as_ref().map(|c|c.timestamp),r.end_cursor.as_ref().map(|c|c.kindroid_msg_id.as_str()),run_status_str(r.status),r.attempts,r.completed_at.map(|d|d.to_rfc3339()),r.last_error,r.created_at.to_rfc3339()]).map_err(|e| StorageError::Database(e.to_string()))?;
+        Ok(())
+    }
+    async fn delete_auto_journal_run(&self, run_id: &str) -> Result<(), StorageError> {
+        // The entries FK CASCADE handles the children.
+        let conn = lock(&self.conn).await;
+        conn.execute(
+            "DELETE FROM auto_journal_runs WHERE id = ?1",
+            params![run_id],
+        )
+        .map_err(|e| StorageError::Database(e.to_string()))?;
+        Ok(())
+    }
+    async fn create_auto_journal_entry(&self, e: &AutoJournalEntry) -> Result<(), StorageError> {
+        self.update_auto_journal_entry(e).await
+    }
+    async fn list_auto_journal_entries(
+        &self,
+        run_id: &str,
+    ) -> Result<Vec<AutoJournalEntry>, StorageError> {
+        let conn = lock(&self.conn).await;
+        let mut stmt=conn.prepare("SELECT id,run_id,ai_id,entry,keyphrases,source_start_timestamp,source_start_msg_id,source_end_timestamp,source_end_msg_id,status,response_status,response_message,created_at,updated_at FROM auto_journal_entries WHERE run_id=?1 ORDER BY created_at ASC").map_err(|e|StorageError::Database(e.to_string()))?;
+        let rows = stmt
+            .query_map(params![run_id], row_to_auto_journal_entry)
+            .map_err(|e| StorageError::Database(e.to_string()))?;
+        rows.map(|r| r.map_err(|e| StorageError::Database(e.to_string())))
+            .collect()
+    }
+    async fn update_auto_journal_entry(&self, e: &AutoJournalEntry) -> Result<(), StorageError> {
+        let conn = lock(&self.conn).await;
+        let kp = serde_json::to_string(&e.keyphrases)
+            .map_err(|x| StorageError::Database(x.to_string()))?;
+        conn.execute("INSERT INTO auto_journal_entries VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,?12,?13,?14) ON CONFLICT(id) DO UPDATE SET status=excluded.status,response_status=excluded.response_status,response_message=excluded.response_message,updated_at=excluded.updated_at",params![e.id,e.run_id,e.ai_id,e.entry,kp,e.source_start.as_ref().map(|c|c.timestamp),e.source_start.as_ref().map(|c|c.kindroid_msg_id.as_str()),e.source_end.as_ref().map(|c|c.timestamp),e.source_end.as_ref().map(|c|c.kindroid_msg_id.as_str()),entry_status_str(e.status),e.response_status,e.response_message,e.created_at.to_rfc3339(),e.updated_at.to_rfc3339()]).map_err(|x|StorageError::Database(x.to_string()))?;
+        Ok(())
+    }
+    async fn commit_summary_candidate(
+        &self,
+        ai_id: &str,
+        c: &SummaryCandidate,
+        cursor: Option<&StableMessageCursor>,
+    ) -> Result<(), StorageError> {
+        let conn = lock(&self.conn).await;
+        conn.execute("UPDATE chat_automation_state SET summary=?2,summary_backend_stored=?3,summary_cursor_timestamp=?4,summary_cursor_msg_id=?5,pending_summary_candidate=NULL,pending_summary_backend=NULL,pending_summary_created_at=NULL,pending_reformat=0 WHERE ai_id=?1",params![ai_id,c.text,c.backend.as_str(),cursor.map(|x|x.timestamp),cursor.map(|x|x.kindroid_msg_id.as_str())]).map_err(|e|StorageError::Database(e.to_string()))?;
+        Ok(())
+    }
+    async fn clear_summary_candidate(&self, ai_id: &str) -> Result<(), StorageError> {
+        let conn = lock(&self.conn).await;
+        conn.execute("UPDATE chat_automation_state SET pending_summary_candidate=NULL,pending_summary_backend=NULL,pending_summary_created_at=NULL WHERE ai_id=?1",params![ai_id]).map_err(|e|StorageError::Database(e.to_string()))?;
+        Ok(())
+    }
+    async fn reset_chat_summary(&self, ai_id: &str) -> Result<(), StorageError> {
+        let conn = lock(&self.conn).await;
+        conn.execute("UPDATE chat_automation_state SET summary=NULL,summary_cursor_timestamp=NULL,summary_cursor_msg_id=NULL,pending_summary_candidate=NULL,pending_summary_backend=NULL,pending_summary_created_at=NULL,pending_reformat=0,summary_last_error=NULL,summary_last_run_at=NULL WHERE ai_id=?1",params![ai_id]).map_err(|e|StorageError::Database(e.to_string()))?;
+        Ok(())
+    }
+    async fn list_recent_successful_auto_journal_entries(
+        &self,
+        ai_id: &str,
+        limit: u32,
+    ) -> Result<Vec<AutoJournalEntry>, StorageError> {
+        let conn = lock(&self.conn).await;
+        let mut stmt=conn.prepare("SELECT id,run_id,ai_id,entry,keyphrases,source_start_timestamp,source_start_msg_id,source_end_timestamp,source_end_msg_id,status,response_status,response_message,created_at,updated_at FROM auto_journal_entries WHERE ai_id=?1 AND status='sent' ORDER BY updated_at DESC LIMIT ?2").map_err(|e|StorageError::Database(e.to_string()))?;
+        let rows = stmt
+            .query_map(
+                params![ai_id, limit.clamp(1, 1000)],
+                row_to_auto_journal_entry,
+            )
+            .map_err(|e| StorageError::Database(e.to_string()))?;
+        rows.map(|r| r.map_err(|e| StorageError::Database(e.to_string())))
+            .collect()
+    }
+
+    async fn list_journal_entries(
+        &self,
+        character_id: Uuid,
+    ) -> Result<Vec<JournalEntry>, StorageError> {
+        let conn = lock(&self.conn).await;
+        let mut stmt = conn
+            .prepare(
+                "SELECT id, character_id, entry, keyphrases, created_at, updated_at
+                 FROM character_journal_entries
+                 WHERE character_id = ?1
+                 ORDER BY created_at ASC",
+            )
+            .map_err(|e| StorageError::Database(e.to_string()))?;
+        let rows = stmt
+            .query_map(params![character_id.to_string()], row_to_journal_entry)
+            .map_err(|e| StorageError::Database(e.to_string()))?;
+        rows.map(|r| r.map_err(|e| StorageError::Database(e.to_string())))
+            .collect()
+    }
+
+    async fn upsert_journal_entry(&self, entry: &JournalEntry) -> Result<(), StorageError> {
+        let conn = lock(&self.conn).await;
+        let keyphrases_json =
+            serde_json::to_string(&entry.keyphrases).unwrap_or_else(|_| "[]".to_string());
+        conn.execute(
+            "INSERT INTO character_journal_entries
+               (id, character_id, entry, keyphrases, created_at, updated_at)
+             VALUES (?1,?2,?3,?4,?5,?6)
+             ON CONFLICT(id) DO UPDATE SET
+               entry = excluded.entry,
+               keyphrases = excluded.keyphrases,
+               updated_at = excluded.updated_at",
+            params![
+                entry.id,
+                entry.character_id.to_string(),
+                entry.entry,
+                keyphrases_json,
+                entry.created_at.to_rfc3339(),
+                entry.updated_at.to_rfc3339(),
+            ],
+        )
+        .map_err(|e| StorageError::Database(e.to_string()))?;
+        Ok(())
+    }
+
+    async fn delete_journal_entry(
+        &self,
+        character_id: Uuid,
+        entry_id: &str,
+    ) -> Result<(), StorageError> {
+        let conn = lock(&self.conn).await;
+        let n = conn
+            .execute(
+                "DELETE FROM character_journal_entries
+                 WHERE id = ?1 AND character_id = ?2",
+                params![entry_id, character_id.to_string()],
+            )
+            .map_err(|e| StorageError::Database(e.to_string()))?;
+        if n == 0 {
+            return Err(StorageError::NotFound);
+        }
+        Ok(())
+    }
+}
+
+fn parse_optional_dt(
+    value: Option<String>,
+    index: usize,
+) -> rusqlite::Result<Option<DateTime<Utc>>> {
+    value
+        .map(|s| {
+            DateTime::parse_from_rfc3339(&s)
+                .map(|d| d.with_timezone(&Utc))
+                .map_err(|e| id_err(index, e))
+        })
+        .transpose()
+}
+
+fn cursor(timestamp: Option<i64>, id: Option<String>) -> Option<StableMessageCursor> {
+    timestamp.map(|timestamp| StableMessageCursor {
+        timestamp,
+        kindroid_msg_id: id.unwrap_or_default(),
+    })
+}
+
+fn row_to_chat_automation_state(row: &rusqlite::Row<'_>) -> rusqlite::Result<ChatAutomationState> {
+    Ok(ChatAutomationState {
+        ai_id: row.get(0)?,
+        auto_journal_enabled: row.get::<_, i32>(1)? != 0,
+        auto_summary_enabled: row.get::<_, i32>(2)? != 0,
+        interval: row.get(3)?,
+        journal_cap: row.get(4)?,
+        summary_backend: SummaryBackend::parse(&row.get::<_, String>(5)?),
+        bootstrap_mode: SummaryBootstrapMode::parse(&row.get::<_, String>(6)?),
+        journal_instructions_override: row.get(7)?,
+        summary_instructions_override: row.get(8)?,
+        journal_cursor: cursor(row.get(9)?, row.get(10)?),
+        summary_cursor: cursor(row.get(11)?, row.get(12)?),
+        journal_initialised: row.get::<_, i32>(13)? != 0,
+        summary: row.get(14)?,
+        summary_backend_stored: SummaryBackend::parse(&row.get::<_, String>(15)?),
+        pending_summary_candidate: row.get(16)?,
+        pending_summary_backend: row
+            .get::<_, Option<String>>(17)?
+            .map(|s| SummaryBackend::parse(&s)),
+        pending_summary_created_at: parse_optional_dt(row.get(18)?, 18)?,
+        pending_summary_cursor: cursor(row.get(19)?, row.get(20)?),
+        pending_reformat: row.get::<_, i32>(21)? != 0,
+        journal_last_error: row.get(22)?,
+        summary_last_error: row.get(23)?,
+        journal_last_run_at: parse_optional_dt(row.get(24)?, 24)?,
+        summary_last_run_at: parse_optional_dt(row.get(25)?, 25)?,
+        journal_last_response: row.get(26)?,
+        summary_last_response: row.get(27)?,
+    })
+}
+fn run_status_str(s: AutoJournalRunStatus) -> &'static str {
+    match s {
+        AutoJournalRunStatus::Pending => "pending",
+        AutoJournalRunStatus::Running => "running",
+        AutoJournalRunStatus::Completed => "completed",
+        AutoJournalRunStatus::Failed => "failed",
+    }
+}
+fn parse_run_status(s: &str) -> AutoJournalRunStatus {
+    match s {
+        "running" => AutoJournalRunStatus::Running,
+        "completed" => AutoJournalRunStatus::Completed,
+        "failed" => AutoJournalRunStatus::Failed,
+        _ => AutoJournalRunStatus::Pending,
+    }
+}
+fn entry_status_str(s: AutoJournalEntryStatus) -> &'static str {
+    match s {
+        AutoJournalEntryStatus::Pending => "pending",
+        AutoJournalEntryStatus::Sent => "sent",
+        AutoJournalEntryStatus::Error => "error",
+    }
+}
+fn parse_entry_status(s: &str) -> AutoJournalEntryStatus {
+    match s {
+        "sent" => AutoJournalEntryStatus::Sent,
+        "error" => AutoJournalEntryStatus::Error,
+        _ => AutoJournalEntryStatus::Pending,
+    }
+}
+fn row_to_auto_journal_run(r: &rusqlite::Row<'_>) -> rusqlite::Result<AutoJournalRun> {
+    let completed: Option<String> = r.get(8)?;
+    let created: String = r.get(10)?;
+    Ok(AutoJournalRun {
+        id: r.get(0)?,
+        ai_id: r.get(1)?,
+        start_cursor: cursor(r.get(2)?, r.get(3)?),
+        end_cursor: cursor(r.get(4)?, r.get(5)?),
+        status: parse_run_status(&r.get::<_, String>(6)?),
+        attempts: r.get(7)?,
+        completed_at: parse_optional_dt(completed, 8)?,
+        last_error: r.get(9)?,
+        created_at: DateTime::parse_from_rfc3339(&created)
+            .map_err(|e| id_err(10, e))?
+            .with_timezone(&Utc),
+    })
+}
+fn row_to_auto_journal_entry(r: &rusqlite::Row<'_>) -> rusqlite::Result<AutoJournalEntry> {
+    let kp: String = r.get(4)?;
+    let created: String = r.get(12)?;
+    let updated: String = r.get(13)?;
+    Ok(AutoJournalEntry {
+        id: r.get(0)?,
+        run_id: r.get(1)?,
+        ai_id: r.get(2)?,
+        entry: r.get(3)?,
+        keyphrases: serde_json::from_str(&kp).map_err(|e| id_err(4, e))?,
+        source_start: cursor(r.get(5)?, r.get(6)?),
+        source_end: cursor(r.get(7)?, r.get(8)?),
+        status: parse_entry_status(&r.get::<_, String>(9)?),
+        response_status: r.get(10)?,
+        response_message: r.get(11)?,
+        created_at: DateTime::parse_from_rfc3339(&created)
+            .map_err(|e| id_err(12, e))?
+            .with_timezone(&Utc),
+        updated_at: DateTime::parse_from_rfc3339(&updated)
+            .map_err(|e| id_err(13, e))?
+            .with_timezone(&Utc),
+    })
 }
 
 fn row_to_character(row: &rusqlite::Row<'_>) -> rusqlite::Result<Character> {
@@ -865,6 +1310,11 @@ fn row_to_push_log(row: &rusqlite::Row<'_>) -> rusqlite::Result<PushLogEntry> {
     let wipe: Option<i32> = row.get(9)?;
     let ui_status: i64 = row.get(10)?;
     let cb_status: Option<i64> = row.get(12)?;
+    let journal_ids_json: Option<String> = row.get(14)?;
+    let journal_entry_ids = match journal_ids_json {
+        Some(s) if !s.is_empty() => Some(serde_json::from_str(&s).map_err(|e| id_err(14, e))?),
+        _ => None,
+    };
     Ok(PushLogEntry {
         id: Uuid::parse_str(&id_s).map_err(|e| id_err(0, e))?,
         at: DateTime::parse_from_rfc3339(&at_s)
@@ -880,8 +1330,11 @@ fn row_to_push_log(row: &rusqlite::Row<'_>) -> rusqlite::Result<PushLogEntry> {
         wipe_cascaded: wipe.map(|b| b != 0),
         update_info_status: ui_status as u16,
         update_info_body: row.get(11)?,
+        create_new_ai_status: None,
+        create_new_ai_body: None,
         chat_break_status: cb_status.map(|s| s as u16),
         chat_break_body: row.get(13)?,
+        journal_entry_ids,
     })
 }
 
@@ -909,6 +1362,32 @@ fn row_to_chat_message(row: &rusqlite::Row<'_>) -> rusqlite::Result<ChatMessage>
             .map_err(|e| id_err(14, e))?
             .with_timezone(&Utc),
         favourite: fav != 0,
+    })
+}
+
+fn row_to_journal_entry(row: &rusqlite::Row<'_>) -> rusqlite::Result<JournalEntry> {
+    let id: String = row.get(0)?;
+    let cid_s: String = row.get(1)?;
+    let entry: String = row.get(2)?;
+    let keyphrases_s: String = row.get(3)?;
+    let created_s: String = row.get(4)?;
+    let updated_s: String = row.get(5)?;
+    let keyphrases = if keyphrases_s.is_empty() {
+        Vec::new()
+    } else {
+        serde_json::from_str(&keyphrases_s).map_err(|e| id_err(3, e))?
+    };
+    Ok(JournalEntry {
+        id,
+        character_id: Uuid::parse_str(&cid_s).map_err(|e| id_err(1, e))?,
+        entry,
+        keyphrases,
+        created_at: DateTime::parse_from_rfc3339(&created_s)
+            .map_err(|e| id_err(4, e))?
+            .with_timezone(&Utc),
+        updated_at: DateTime::parse_from_rfc3339(&updated_s)
+            .map_err(|e| id_err(5, e))?
+            .with_timezone(&Utc),
     })
 }
 
@@ -1045,8 +1524,11 @@ mod tests {
             wipe_cascaded: None,
             update_info_status: 200,
             update_info_body: "ok".into(),
+            create_new_ai_status: None,
+            create_new_ai_body: None,
             chat_break_status: None,
             chat_break_body: None,
+            journal_entry_ids: None,
         };
         let entry_id = entry.id;
         repo.append_push_log(entry).await.unwrap();
@@ -1714,5 +2196,294 @@ mod tests {
             .unwrap();
         assert_eq!(only_favs.len(), 1);
         assert_eq!(only_favs[0].kindroid_msg_id, "k1");
+    }
+
+    fn make_journal(character_id: Uuid, id: &str, entry: &str, kp: &[&str]) -> JournalEntry {
+        let now = Utc::now();
+        JournalEntry {
+            id: id.to_string(),
+            character_id,
+            entry: entry.to_string(),
+            keyphrases: kp.iter().map(|s| s.to_string()).collect(),
+            created_at: now,
+            updated_at: now,
+        }
+    }
+
+    #[tokio::test]
+    async fn journal_crud_round_trip() {
+        let repo = SqliteRepository::open_in_memory().unwrap();
+        let c = character("C");
+        let cid = c.id;
+        repo.upsert_character(c).await.unwrap();
+
+        let e1 = make_journal(cid, "je-1", "one", &["a"]);
+        let e2 = make_journal(cid, "je-2", "two", &["b", "c"]);
+        let e3 = make_journal(cid, "je-3", "three", &[]);
+        repo.upsert_journal_entry(&e1).await.unwrap();
+        repo.upsert_journal_entry(&e2).await.unwrap();
+        repo.upsert_journal_entry(&e3).await.unwrap();
+
+        let got = repo.list_journal_entries(cid).await.unwrap();
+        assert_eq!(got.len(), 3);
+        assert_eq!(got[0].entry, "one");
+        assert_eq!(got[1].keyphrases, vec!["b", "c"]);
+        assert!(got[2].keyphrases.is_empty());
+    }
+
+    #[tokio::test]
+    async fn journal_update_preserves_created_at() {
+        let repo = SqliteRepository::open_in_memory().unwrap();
+        let c = character("C");
+        let cid = c.id;
+        repo.upsert_character(c).await.unwrap();
+
+        let mut e = make_journal(cid, "je-1", "first", &[]);
+        repo.upsert_journal_entry(&e).await.unwrap();
+        let original_created = e.created_at;
+
+        e.updated_at = e.created_at + chrono::Duration::seconds(5);
+        e.entry = "second".to_string();
+        repo.upsert_journal_entry(&e).await.unwrap();
+
+        let got = repo.list_journal_entries(cid).await.unwrap();
+        assert_eq!(got.len(), 1);
+        assert_eq!(got[0].entry, "second");
+        assert_eq!(got[0].created_at, original_created);
+        assert!(got[0].updated_at > original_created);
+    }
+
+    #[tokio::test]
+    async fn journal_delete_removes_one() {
+        let repo = SqliteRepository::open_in_memory().unwrap();
+        let c = character("C");
+        let cid = c.id;
+        repo.upsert_character(c).await.unwrap();
+
+        let e1 = make_journal(cid, "je-1", "one", &[]);
+        let e2 = make_journal(cid, "je-2", "two", &[]);
+        repo.upsert_journal_entry(&e1).await.unwrap();
+        repo.upsert_journal_entry(&e2).await.unwrap();
+        repo.delete_journal_entry(cid, "je-1").await.unwrap();
+
+        let got = repo.list_journal_entries(cid).await.unwrap();
+        assert_eq!(got.len(), 1);
+        assert_eq!(got[0].id, "je-2");
+    }
+
+    #[tokio::test]
+    async fn journal_delete_wrong_character_errors() {
+        let repo = SqliteRepository::open_in_memory().unwrap();
+        let c = character("C");
+        let cid = c.id;
+        repo.upsert_character(c).await.unwrap();
+
+        let e = make_journal(cid, "je-1", "x", &[]);
+        repo.upsert_journal_entry(&e).await.unwrap();
+
+        let other = Uuid::new_v4();
+        let err = repo.delete_journal_entry(other, "je-1").await.unwrap_err();
+        assert!(matches!(err, StorageError::NotFound));
+    }
+
+    #[tokio::test]
+    async fn automation_stable_messages_exclude_newest_and_order_ties() {
+        let repo = SqliteRepository::open_in_memory().unwrap();
+        repo.upsert_target(target("T", "ai_auto")).await.unwrap();
+        let messages = (0..13)
+            .map(|i| chat_msg("ai_auto", &format!("m{i:02}"), 100, &format!("m{i}")))
+            .collect::<Vec<_>>();
+        repo.upsert_chat_messages("ai_auto", &messages)
+            .await
+            .unwrap();
+        let stable = repo
+            .list_stable_chat_messages("ai_auto", None, 100, 10)
+            .await
+            .unwrap();
+        assert_eq!(stable.len(), 3);
+        assert_eq!(stable[0].kindroid_msg_id, "m00");
+        assert_eq!(stable[2].kindroid_msg_id, "m02");
+        let after = StableMessageCursor {
+            timestamp: 100,
+            kindroid_msg_id: "m00".into(),
+        };
+        let next = repo
+            .list_stable_chat_messages("ai_auto", Some(&after), 100, 10)
+            .await
+            .unwrap();
+        assert_eq!(next[0].kindroid_msg_id, "m01");
+        assert_eq!(
+            repo.latest_stable_cursor("ai_auto", 10)
+                .await
+                .unwrap()
+                .unwrap()
+                .kindroid_msg_id,
+            "m02"
+        );
+    }
+
+    #[tokio::test]
+    async fn automation_state_and_audit_cascade_round_trip() {
+        let repo = SqliteRepository::open_in_memory().unwrap();
+        let target = target("T", "ai_auto");
+        let target_id = target.id;
+        repo.upsert_target(target).await.unwrap();
+        let state = ChatAutomationState {
+            ai_id: "ai_auto".into(),
+            auto_journal_enabled: true,
+            pending_summary_cursor: Some(StableMessageCursor {
+                timestamp: 4,
+                kindroid_msg_id: "m4".into(),
+            }),
+            ..Default::default()
+        };
+        repo.upsert_chat_automation_state(&state).await.unwrap();
+        assert_eq!(
+            repo.get_chat_automation_state("ai_auto").await.unwrap(),
+            state
+        );
+        let now = Utc::now();
+        let run = AutoJournalRun {
+            id: "run-1".into(),
+            ai_id: "ai_auto".into(),
+            start_cursor: None,
+            end_cursor: None,
+            status: AutoJournalRunStatus::Pending,
+            attempts: 0,
+            completed_at: None,
+            last_error: None,
+            created_at: now,
+        };
+        repo.create_auto_journal_run(&run).await.unwrap();
+        repo.create_auto_journal_entry(&AutoJournalEntry {
+            id: "entry-1".into(),
+            run_id: run.id.clone(),
+            ai_id: run.ai_id.clone(),
+            entry: "remember this".into(),
+            keyphrases: vec!["test".into()],
+            source_start: None,
+            source_end: None,
+            status: AutoJournalEntryStatus::Sent,
+            response_status: Some(200),
+            response_message: Some("OK".into()),
+            created_at: now,
+            updated_at: now,
+        })
+        .await
+        .unwrap();
+        assert_eq!(
+            repo.list_recent_successful_auto_journal_entries("ai_auto", 5)
+                .await
+                .unwrap()
+                .len(),
+            1
+        );
+        repo.delete_target(target_id).await.unwrap();
+        assert!(matches!(
+            repo.get_chat_automation_state("ai_auto").await,
+            Err(StorageError::NotFound)
+        ));
+        assert!(matches!(
+            repo.get_auto_journal_run("run-1").await,
+            Err(StorageError::NotFound)
+        ));
+    }
+
+    #[tokio::test]
+    async fn journal_entries_cascade_on_character_delete() {
+        let repo = SqliteRepository::open_in_memory().unwrap();
+        let c = character("C");
+        let cid = c.id;
+        repo.upsert_character(c).await.unwrap();
+
+        let e1 = make_journal(cid, "je-1", "x", &[]);
+        let e2 = make_journal(cid, "je-2", "y", &[]);
+        repo.upsert_journal_entry(&e1).await.unwrap();
+        repo.upsert_journal_entry(&e2).await.unwrap();
+        assert_eq!(repo.list_journal_entries(cid).await.unwrap().len(), 2);
+
+        repo.delete_character(cid).await.unwrap();
+        assert!(repo.list_journal_entries(cid).await.unwrap().is_empty());
+    }
+
+    #[test]
+    fn migration_0008_adds_columns_to_legacy_0007_state_table() {
+        let mut conn = Connection::open_in_memory().expect("open in-memory");
+        conn.execute_batch("PRAGMA foreign_keys=ON;").unwrap();
+        conn.execute_batch("PRAGMA user_version = 0;").unwrap();
+        run_migrations(&mut conn).unwrap();
+        // Wipe the response columns added in 0008 to simulate a DB from
+        // before that change.
+        conn.execute_batch(
+            "ALTER TABLE chat_automation_state DROP COLUMN journal_last_response;
+             ALTER TABLE chat_automation_state DROP COLUMN summary_last_response;",
+        )
+        .unwrap();
+
+        // Re-running the migrator should re-add the columns via 0008
+        // without losing the table.
+        conn.execute_batch("PRAGMA user_version = 7;").unwrap();
+        run_migrations(&mut conn).unwrap();
+        let cols: Vec<String> = conn
+            .prepare("SELECT name FROM pragma_table_info('chat_automation_state')")
+            .unwrap()
+            .query_map([], |r| r.get(0))
+            .unwrap()
+            .filter_map(|r| r.ok())
+            .collect();
+        assert!(
+            cols.iter().any(|c| c == "journal_last_response"),
+            "0008 should re-add journal_last_response, columns: {cols:?}"
+        );
+        assert!(
+            cols.iter().any(|c| c == "summary_last_response"),
+            "0008 should re-add summary_last_response, columns: {cols:?}"
+        );
+    }
+
+    #[tokio::test]
+    async fn delete_auto_journal_run_removes_run_and_cascades_entries() {
+        let repo = SqliteRepository::open_in_memory().unwrap();
+        let target = target("T", "ai_del");
+        repo.upsert_target(target).await.unwrap();
+        let now = Utc::now();
+        let run = AutoJournalRun {
+            id: "del-run".into(),
+            ai_id: "ai_del".into(),
+            start_cursor: None,
+            end_cursor: None,
+            status: AutoJournalRunStatus::Failed,
+            attempts: 3,
+            completed_at: None,
+            last_error: Some("bad".into()),
+            created_at: now,
+        };
+        repo.create_auto_journal_run(&run).await.unwrap();
+        repo.create_auto_journal_entry(&AutoJournalEntry {
+            id: "del-entry".into(),
+            run_id: run.id.clone(),
+            ai_id: run.ai_id.clone(),
+            entry: "remember this".into(),
+            keyphrases: vec!["test".into()],
+            source_start: None,
+            source_end: None,
+            status: AutoJournalEntryStatus::Error,
+            response_status: Some(400),
+            response_message: Some("bad".into()),
+            created_at: now,
+            updated_at: now,
+        })
+        .await
+        .unwrap();
+        repo.delete_auto_journal_run(&run.id).await.unwrap();
+        assert!(matches!(
+            repo.get_auto_journal_run(&run.id).await,
+            Err(StorageError::NotFound)
+        ));
+        assert!(repo
+            .list_auto_journal_entries(&run.id)
+            .await
+            .unwrap()
+            .is_empty());
     }
 }

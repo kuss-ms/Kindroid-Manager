@@ -39,8 +39,11 @@ export interface PushLogEntry {
   wipe_cascaded?: boolean | null;
   update_info_status: number;
   update_info_body: string;
+  create_new_ai_status?: number;
+  create_new_ai_body?: string;
   chat_break_status?: number | null;
   chat_break_body?: string | null;
+  journal_entry_ids?: string[] | null;
 }
 
 export interface StepResult {
@@ -49,10 +52,41 @@ export interface StepResult {
   message: string;
 }
 
+export interface JournalEntryStep {
+  id: string;
+  status: number;
+  ok: boolean;
+  message: string;
+}
+
+export interface JournalEntry {
+  id: string;
+  character_id: Uuid;
+  entry: string;
+  keyphrases: string[];
+  created_at: string;
+  updated_at: string;
+}
+
+export interface JournalEntryInput {
+  id?: string | null;
+  entry: string;
+  keyphrases: string[];
+}
+
 export interface PushResult {
   update_info: StepResult;
+  journal_entries: JournalEntryStep[];
   chat_break?: StepResult | null;
   log_id: Uuid;
+}
+
+export interface CreateNewKinResult {
+  create_new_ai: StepResult;
+  update_info?: StepResult | null;
+  journal_entries: JournalEntryStep[];
+  log_id: Uuid;
+  target: Target;
 }
 
 export interface PushRequest {
@@ -60,6 +94,7 @@ export interface PushRequest {
   target_id: Uuid;
   fields: string[];
   chat_break?: { greeting: string; wipe_cascaded: boolean } | null;
+  journalEntryIds?: string[] | null;
 }
 
 export interface SettingsDto {
@@ -72,6 +107,23 @@ export interface TestTokenResult {
   rate_limited: boolean;
   message: string;
   status: number;
+}
+
+export interface AiSettingsDto {
+  base_url: string;
+  model: string;
+  token_configured: boolean;
+}
+
+export interface TestAiResult {
+  ok: boolean;
+  status: number;
+  message: string;
+}
+
+export interface AiChatCompletionResponse {
+  content: string;
+  model: string | null;
 }
 
 export interface ChatMessage {
@@ -159,3 +211,136 @@ export const FIELD_SOFT_LIMITS: Partial<Record<PersonaField, number>> & {
   ai_additional_context: 2500,
   ai_avatar_description: 800,
 };
+
+export type SummaryBackend = 'additional_context' | 'key_memories';
+
+export const SUMMARY_BACKEND_LABELS: Record<SummaryBackend, string> = {
+  additional_context: 'Additional context',
+  key_memories: 'Key memories',
+};
+
+export const SUMMARY_BACKEND_LIMIT: Record<SummaryBackend, number> = {
+  additional_context: 2500,
+  key_memories: 1000,
+};
+
+export type SummaryBootstrapMode = 'full_history' | 'incremental_only';
+
+export const BOOTSTRAP_MODE_LABELS: Record<SummaryBootstrapMode, string> = {
+  full_history: 'Bootstrap from existing history',
+  incremental_only: 'Incremental only (wait for new messages)',
+};
+
+export type AutoJournalRunStatus = 'pending' | 'running' | 'completed' | 'failed';
+export type AutoJournalEntryStatus = 'pending' | 'sent' | 'error';
+
+export interface StableMessageCursor {
+  timestamp: number;
+  kindroid_msg_id: string;
+}
+
+export interface ChatAutomationState {
+  ai_id: string;
+  auto_journal_enabled: boolean;
+  auto_summary_enabled: boolean;
+  interval: number;
+  journal_cap: number;
+  summary_backend: SummaryBackend;
+  bootstrap_mode: SummaryBootstrapMode;
+  journal_instructions_override: string | null;
+  summary_instructions_override: string | null;
+  journal_cursor: StableMessageCursor | null;
+  summary_cursor: StableMessageCursor | null;
+  journal_initialised: boolean;
+  summary: string | null;
+  summary_backend_stored: SummaryBackend;
+  pending_summary_candidate: string | null;
+  pending_summary_backend: SummaryBackend | null;
+  pending_summary_created_at: string | null;
+  pending_summary_cursor: StableMessageCursor | null;
+  pending_reformat: boolean;
+  journal_last_error: string | null;
+  summary_last_error: string | null;
+  journal_last_run_at: string | null;
+  summary_last_run_at: string | null;
+  journal_last_response: string | null;
+  summary_last_response: string | null;
+}
+
+export interface AutoJournalRun {
+  id: string;
+  ai_id: string;
+  start_cursor: StableMessageCursor | null;
+  end_cursor: StableMessageCursor | null;
+  status: AutoJournalRunStatus;
+  attempts: number;
+  completed_at: string | null;
+  last_error: string | null;
+  created_at: string;
+}
+
+export interface AutoJournalEntry {
+  id: string;
+  run_id: string;
+  ai_id: string;
+  entry: string;
+  keyphrases: string[];
+  source_start: StableMessageCursor | null;
+  source_end: StableMessageCursor | null;
+  status: AutoJournalEntryStatus;
+  response_status: number | null;
+  response_message: string | null;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface ChatAutomationDto {
+  state: ChatAutomationState;
+  journal_instructions: string;
+  summary_instructions: string;
+  recent_journal_entries: AutoJournalEntry[];
+  automation_in_progress: boolean;
+}
+
+export interface SetChatAutomationSettingsInput {
+  ai_id: string;
+  auto_journal_enabled: boolean;
+  auto_summary_enabled: boolean;
+  interval: number;
+  journal_cap: number;
+  summary_backend: SummaryBackend;
+  bootstrap_mode: SummaryBootstrapMode;
+  journal_instructions_override: string | null;
+  summary_instructions_override: string | null;
+}
+
+export interface ResetChatSummaryInput {
+  ai_id: string;
+}
+
+export interface ClearStuckAutoJournalRunsInput {
+  ai_id: string;
+}
+
+export interface ClearStuckAutoJournalRunsResult {
+  removed: number;
+}
+
+export interface RunSummaryNowInput {
+  ai_id: string;
+}
+
+export interface RunSummaryNowResult {
+  ran: boolean;
+  message: string;
+}
+
+export interface SetAutomationInstructionsInput {
+  journal: string;
+  summary: string;
+}
+
+export interface AutomationInstructionsDefaults {
+  journal: string;
+  summary: string;
+}

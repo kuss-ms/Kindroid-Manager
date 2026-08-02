@@ -60,7 +60,26 @@ export function HistoryDetailPage() {
             )}{' '}
           </span>{' '}
         </div>{' '}
+        {e.journal_entry_ids && e.journal_entry_ids.length > 0 && (
+          <div className="detail-row">
+            <span className="detail-label">Journal entries</span>
+            <span className="detail-value">
+              {e.journal_entry_ids.length} (
+              {e.journal_entry_ids.map((id: string) => id.slice(0, 8)).join(', ')})
+            </span>
+          </div>
+        )}{' '}
       </div>{' '}
+      {e.create_new_ai_status !== undefined && (
+        <div className="card">
+          {' '}
+          <h3>create-new-ai response</h3>{' '}
+          <p className="muted" style={{ fontSize: 12 }}>
+            Status: {e.create_new_ai_status}
+          </p>{' '}
+          <pre>{e.create_new_ai_body ?? ''}</pre>{' '}
+        </div>
+      )}{' '}
       <div className="card">
         {' '}
         <h3>update-info response</h3>{' '}

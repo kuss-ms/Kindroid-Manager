@@ -1,6 +1,7 @@
 use serde::{Deserialize, Serialize};
 use thiserror::Error;
 
+use crate::kindroid::ai::AiError;
 use crate::kindroid::KindroidError;
 use crate::security::secrets::SecretStoreError;
 use crate::storage::StorageError;
@@ -32,6 +33,8 @@ pub enum AppError {
     Secret(#[from] SecretStoreError),
     #[error(transparent)]
     Kindroid(#[from] KindroidError),
+    #[error(transparent)]
+    Ai(#[from] AiError),
 }
 
 impl AppError {
@@ -68,10 +71,30 @@ impl From<StorageError> for AppError {
 }
 
 #[derive(Debug, Serialize, Deserialize)]
+pub struct CreateNewKinResult {
+    pub create_new_ai: StepResult,
+    pub update_info: Option<StepResult>,
+    pub journal_entries: Vec<JournalEntryStep>,
+    pub log_id: uuid::Uuid,
+    pub target: crate::domain::target::Target,
+}
+
+#[derive(Debug, Serialize, Deserialize)]
 pub struct PushResult {
     pub update_info: StepResult,
+    /// Per-entry journal-create result. Empty when the step was skipped.
+    #[serde(default)]
+    pub journal_entries: Vec<JournalEntryStep>,
     pub chat_break: Option<StepResult>,
     pub log_id: uuid::Uuid,
+}
+
+#[derive(Debug, Serialize, Deserialize)]
+pub struct JournalEntryStep {
+    pub id: String,
+    pub status: u16,
+    pub ok: bool,
+    pub message: String,
 }
 
 #[derive(Debug, Serialize, Deserialize)]

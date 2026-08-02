@@ -4,7 +4,14 @@ use thiserror::Error;
 
 pub mod http;
 
+pub mod ai;
+
 pub use http::KindroidClient;
+
+#[derive(Debug, Clone)]
+pub struct CreateNewAiRequest {
+    pub body: serde_json::Value,
+}
 
 #[derive(Debug, Clone)]
 pub struct UpdateInfoRequest {
@@ -23,6 +30,13 @@ pub struct ChatBreakRequest {
 pub struct ToggleMessagePinRequest {
     pub ai_id: String,
     pub message_id: String,
+}
+
+#[derive(Debug, Clone)]
+pub struct JournalCreateRequest<'a> {
+    pub ai_id: &'a str,
+    pub entry: &'a str,
+    pub keyphrases: &'a [String],
 }
 
 /// Server response from `POST /toggle-message-pin` — the canonical pin state

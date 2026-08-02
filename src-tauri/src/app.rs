@@ -2,8 +2,10 @@ use std::sync::Arc;
 
 use tauri::Manager;
 
+use crate::commands::share_code::ShareImageStash;
 use crate::commands::sync_registry::SyncRegistry;
 use crate::commands::tauri_wrappers;
+use crate::kindroid::ai::{AiClient, HttpAiClient};
 use crate::kindroid::http::HttpKindroidClient;
 use crate::kindroid::KindroidClient;
 use crate::storage::sqlite::SqliteRepository;
@@ -16,13 +18,18 @@ pub fn run() {
         .setup(|app| {
             let data_dir = app.path().app_data_dir().expect("app data dir");
             std::fs::create_dir_all(&data_dir).ok();
+            #[cfg(target_os = "android")]
+            crate::security::secrets::Secrets::init(data_dir.clone());
             let db_path = data_dir.join("kindroid-manager.db");
             let repo: Arc<dyn Repository> =
                 Arc::new(SqliteRepository::open(&db_path).expect("open sqlite"));
             let client: Arc<dyn KindroidClient> = Arc::new(HttpKindroidClient::new());
+            let ai_client: Arc<dyn AiClient> = Arc::new(HttpAiClient::new());
             app.manage(repo);
             app.manage(client);
+            app.manage(ai_client);
             app.manage(Arc::new(SyncRegistry::new()));
+            app.manage(Arc::new(ShareImageStash::new()));
             Ok(())
         })
         .invoke_handler(tauri::generate_handler![
@@ -36,10 +43,12 @@ pub fn run() {
             tauri_wrappers::save_target,
             tauri_wrappers::delete_target,
             tauri_wrappers::push_to_target,
+            tauri_wrappers::push_create_new_kin,
             tauri_wrappers::list_push_history,
             tauri_wrappers::get_push_log,
             tauri_wrappers::import_share_image,
             tauri_wrappers::export_share_image,
+            tauri_wrappers::take_stashed_share_image,
             tauri_wrappers::set_character_image,
             tauri_wrappers::get_character_image,
             tauri_wrappers::get_settings,
@@ -57,6 +66,22 @@ pub fn run() {
             tauri_wrappers::start_chat_sync,
             tauri_wrappers::cancel_chat_sync,
             tauri_wrappers::reset_chat_history,
+            tauri_wrappers::get_chat_automation_state,
+            tauri_wrappers::set_chat_automation_settings,
+            tauri_wrappers::reset_chat_summary,
+            tauri_wrappers::clear_stuck_auto_journal_runs,
+            tauri_wrappers::run_summary_now,
+            tauri_wrappers::get_automation_instructions_defaults,
+            tauri_wrappers::set_automation_instructions,
+            tauri_wrappers::list_journal_entries,
+            tauri_wrappers::save_journal_entry,
+            tauri_wrappers::delete_journal_entry,
+            tauri_wrappers::get_ai_settings,
+            tauri_wrappers::set_ai_settings,
+            tauri_wrappers::set_ai_token,
+            tauri_wrappers::clear_ai_token,
+            tauri_wrappers::test_ai_connection,
+            tauri_wrappers::ai_chat_completion,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

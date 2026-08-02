@@ -3,12 +3,14 @@ import { useNavigate, useParams } from 'react-router-dom';
 import { useEffect, useRef, useState } from 'react';
 import { Controller, useForm, type UseFormRegisterReturn } from 'react-hook-form';
 import { zodResolver } from '@hookform/resolvers/zod';
-import { api, errorMessage } from '../lib/api';
+import { api, errorMessage, isAndroid } from '../lib/api';
 import { characterInputSchema, type CharacterFormValues } from '../lib/schemas';
 import { toast } from '../components/Toaster';
 import { ConfirmDialog } from '../components/ConfirmDialog';
+import { JournalEntryForm } from '../components/JournalEntryForm';
+import { RowActions, type RowAction } from '../components/RowActions';
 import { FIELD_SOFT_LIMITS, GENDER_OPTIONS } from '../lib/types';
-import type { Uuid } from '../lib/types';
+import type { JournalEntry, JournalEntryInput, Uuid } from '../lib/types';
 
 const MAX_NOTE = 5000;
 
@@ -68,6 +70,10 @@ export function CharacterEditorPage() {
   const exportImage = useMutation<void, unknown, void>({
     mutationFn: async () => {
       if (!id) throw new Error('Save the character first');
+      if (isAndroid()) {
+        await api.copyShareImageToClipboard(id);
+        return;
+      }
       const bytes = await api.exportShareImage(id);
       const blob = new Blob([new Uint8Array(bytes)], { type: 'image/png' });
       const url = URL.createObjectURL(blob);
@@ -81,7 +87,8 @@ export function CharacterEditorPage() {
       a.remove();
       URL.revokeObjectURL(url);
     },
-    onSuccess: () => toast('success', 'Share image downloaded'),
+    onSuccess: () =>
+      toast('success', isAndroid() ? 'Share image copied to clipboard' : 'Share image downloaded'),
     onError: (e) => toast('error', errorMessage(e)),
   });
 
@@ -209,51 +216,44 @@ export function CharacterEditorPage() {
       <div className="page-header">
         <h2>{id ? 'Edit character' : 'New character'}</h2>
         <div className="page-header-actions">
-          <button
-            type="button"
-            className="btn btn-primary"
-            disabled={!isDirty && !!id}
-            onClick={onSubmit}
-          >
-            Save
-          </button>
-          <button
-            type="button"
-            className="btn"
-            onClick={() => fileInputRef.current?.click()}
-            disabled={uploadImage.isPending || save.isPending}
-            title={
-              id
-                ? 'Upload a cover image'
-                : 'Save the character first (auto-saves with current form values)'
+          <RowActions
+            actions={
+              [
+                {
+                  label: 'Save',
+                  onClick: onSubmit,
+                  disabled: !isDirty && !!id,
+                },
+                {
+                  label: 'Upload image',
+                  onClick: () => fileInputRef.current?.click(),
+                  disabled: uploadImage.isPending || save.isPending,
+                  title: id
+                    ? 'Upload a cover image'
+                    : 'Save the character first (auto-saves with current form values)',
+                },
+                ...(id
+                  ? [
+                      {
+                        label: 'Export share image',
+                        onClick: () => exportImage.mutate(),
+                        disabled: exportImage.isPending || !character.data?.cover_image,
+                        title: character.data?.cover_image
+                          ? isAndroid()
+                            ? 'Copy a PNG with the persona + journal entries embedded to the clipboard'
+                            : 'Download a PNG with the persona + journal entries embedded'
+                          : 'Upload a cover image first',
+                      },
+                      {
+                        label: 'Delete',
+                        danger: true,
+                        onClick: () => setConfirmDelete(true),
+                      },
+                    ]
+                  : []),
+              ] satisfies RowAction[]
             }
-          >
-            {uploadImage.isPending || save.isPending ? 'Uploading…' : 'Upload image'}
-          </button>
-          {id && (
-            <>
-              <button
-                type="button"
-                className="btn"
-                onClick={() => exportImage.mutate()}
-                disabled={exportImage.isPending || !character.data?.cover_image}
-                title={
-                  character.data?.cover_image
-                    ? 'Download a PNG with the persona embedded'
-                    : 'Upload a cover image first'
-                }
-              >
-                Export share image
-              </button>
-              <button
-                type="button"
-                className="btn btn-danger"
-                onClick={() => setConfirmDelete(true)}
-              >
-                Delete
-              </button>
-            </>
-          )}
+          />
         </div>
       </div>
 
@@ -311,7 +311,7 @@ export function CharacterEditorPage() {
           rows={4}
           name="ai_avatar_description"
           soft={FIELD_SOFT_LIMITS.ai_avatar_description}
-          hint="Local-only. Not sent to Kindroid. Use the copy button on the Push screen to paste it manually into Kindroid's avatar prompt."
+          hint="Sent to Kindroid only when pushing as a new Kin. Ignored on regular pushes to an existing AI."
           control={control}
         />
         <TextAreaWithCounter
@@ -369,6 +369,14 @@ export function CharacterEditorPage() {
           <textarea className="textarea" {...register('notes')} rows={3} maxLength={MAX_NOTE} />
         </Field>
       </form>
+
+      {id ? (
+        <JournalEditor characterId={id} />
+      ) : (
+        <div className="card muted" style={{ fontSize: 12 }}>
+          Save the character first to enable journal entries.
+        </div>
+      )}
 
       <ConfirmDialog
         open={confirmDelete}
@@ -483,6 +491,149 @@ function SoftCounter({ value, soft }: { value: string | undefined; soft: number 
   return (
     <div className={`soft-counter ${warn ? 'warn' : ''}`}>
       {len} / {soft}
+    </div>
+  );
+}
+
+function JournalEditor({ characterId }: { characterId: Uuid }) {
+  const queryClient = useQueryClient();
+  const entries = useQuery({
+    queryKey: ['journal-entries', characterId],
+    queryFn: () => api.listJournalEntries(characterId),
+  });
+  const [editing, setEditing] = useState<JournalEntryInput | null>(null);
+  const [confirmDelete, setConfirmDelete] = useState<string | null>(null);
+
+  const save = useMutation({
+    mutationFn: (input: JournalEntryInput) => api.saveJournalEntry(characterId, input),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ['journal-entries', characterId] });
+      setEditing(null);
+      toast('success', 'Journal entry saved');
+    },
+    onError: (e) => toast('error', errorMessage(e)),
+  });
+
+  const del = useMutation({
+    mutationFn: (entryId: string) => api.deleteJournalEntry(characterId, entryId),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ['journal-entries', characterId] });
+      toast('success', 'Journal entry deleted');
+    },
+    onError: (e) => toast('error', errorMessage(e)),
+  });
+
+  return (
+    <div className="card">
+      <div
+        style={{
+          display: 'flex',
+          alignItems: 'center',
+          justifyContent: 'space-between',
+        }}
+      >
+        <h3 style={{ margin: 0 }}>Journal entries</h3>
+        {editing == null && (
+          <button
+            type="button"
+            className="btn btn-sm"
+            onClick={() => setEditing({ entry: '', keyphrases: [] })}
+          >
+            Add entry
+          </button>
+        )}
+      </div>
+      <p className="muted" style={{ fontSize: 12, marginTop: 6 }}>
+        Up to 500 characters and up to 8 specific, 1-3 word keyphrases per entry (Kindroid&apos;s
+        recall is verbatim on the user&apos;s input, so generic single common words like
+        &quot;love&quot; or &quot;wings&quot; hurt recall — pick proper nouns, dates, distinctive
+        compounds). Not sent unless you tick the entry on the Push page.
+      </p>
+
+      {editing && (
+        <JournalEntryForm
+          initial={editing}
+          onSubmit={(v) => save.mutate(v)}
+          onCancel={() => setEditing(null)}
+          submitting={save.isPending}
+        />
+      )}
+
+      {entries.isLoading && <p className="muted">Loading…</p>}
+      {(entries.data ?? []).length === 0 && !entries.isLoading && editing == null && (
+        <div className="empty" style={{ marginTop: 12 }}>
+          No journal entries yet.
+        </div>
+      )}
+      <ul style={{ listStyle: 'none', padding: 0, marginTop: 12 }}>
+        {(entries.data ?? []).map((e: JournalEntry) => (
+          <li
+            key={e.id}
+            style={{
+              borderTop: '1px solid var(--border)',
+              padding: '8px 0',
+            }}
+          >
+            <div style={{ display: 'flex', justifyContent: 'space-between', gap: 8 }}>
+              <div style={{ flex: 1 }}>
+                <div style={{ whiteSpace: 'pre-wrap' }}>{e.entry}</div>
+                {e.keyphrases.length > 0 && (
+                  <div
+                    style={{
+                      display: 'flex',
+                      gap: 4,
+                      flexWrap: 'wrap',
+                      marginTop: 6,
+                    }}
+                  >
+                    {e.keyphrases.map((k) => (
+                      <span key={k} className="badge badge-muted">
+                        {k}
+                      </span>
+                    ))}
+                  </div>
+                )}
+                <div className="muted" style={{ fontSize: 11, marginTop: 4 }}>
+                  updated {new Date(e.updated_at).toLocaleString()}
+                </div>
+              </div>
+              <div style={{ display: 'flex', flexDirection: 'column', gap: 4 }}>
+                <button
+                  type="button"
+                  className="btn btn-sm"
+                  onClick={() =>
+                    setEditing({
+                      id: e.id,
+                      entry: e.entry,
+                      keyphrases: e.keyphrases,
+                    })
+                  }
+                >
+                  Edit
+                </button>
+                <button
+                  type="button"
+                  className="btn btn-sm btn-danger"
+                  onClick={() => setConfirmDelete(e.id)}
+                >
+                  Delete
+                </button>
+              </div>
+            </div>
+          </li>
+        ))}
+      </ul>
+      <ConfirmDialog
+        open={confirmDelete != null}
+        title="Delete journal entry?"
+        body="This cannot be undone. The entry is local; nothing on the Kindroid server is touched."
+        confirmLabel="Delete"
+        onConfirm={() => {
+          if (confirmDelete) del.mutate(confirmDelete);
+          setConfirmDelete(null);
+        }}
+        onCancel={() => setConfirmDelete(null)}
+      />
     </div>
   );
 }

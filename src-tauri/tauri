@@ -1,0 +1,5 @@
+#!/usr/bin/env node
+// Wrapper so the Tauri 2 gradle plugin's `node tauri android android-studio-script`
+// invocation (which runs from src-tauri/ and hardcodes `tauri` as the first arg)
+// finds the actual CLI. We import and delegate to the real entry point.
+import '../node_modules/@tauri-apps/cli/tauri.js';

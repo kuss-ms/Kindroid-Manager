@@ -1,14 +1,29 @@
 import { invoke } from '@tauri-apps/api/core';
 import type {
+  AutomationInstructionsDefaults,
   Character,
+  ChatAutomationDto,
   ChatMessage,
   ChatSyncState,
+  JournalEntry,
+  JournalEntryInput,
   PushLogEntry,
   PushRequest,
   PushResult,
+  CreateNewKinResult,
+  ResetChatSummaryInput,
+  ClearStuckAutoJournalRunsInput,
+  ClearStuckAutoJournalRunsResult,
+  RunSummaryNowInput,
+  RunSummaryNowResult,
+  SetAutomationInstructionsInput,
+  SetChatAutomationSettingsInput,
   SettingsDto,
+  AiSettingsDto,
+  AiChatCompletionResponse,
   Target,
   TestTokenResult,
+  TestAiResult,
   Uuid,
 } from './types';
 
@@ -83,6 +98,8 @@ export const api = {
 
   // Push
   pushToTarget: (req: PushRequest) => invoke<PushResult>('push_to_target', { req }),
+  pushCreateNewKin: (characterId: Uuid) =>
+    invoke<CreateNewKinResult>('push_create_new_kin', { characterId }),
 
   // History
   listPushHistory: (limit: number, offset: number) =>
@@ -93,9 +110,40 @@ export const api = {
   importShareImage: (bytes: number[] | Uint8Array) =>
     invoke<Character>('import_share_image', { bytes: Array.from(bytes) }),
   exportShareImage: (id: Uuid) => invoke<number[]>('export_share_image', { id }),
+  /**
+   * Read and clear the in-app stash of the last exported share image.
+   * Returns `null` if the stash is empty (the user pasted a different
+   * image, or the app was restarted since the last export). Used by the
+   * paste handler so the in-app copy→paste round-trip works even when
+   * the OS clipboard transcodes the PNG (which strips the `kindroid`
+   * `tEXt` chunk on Windows WebView2 and on some Linux clipboard
+   * managers / OEM Android WebViews).
+   */
+  takeStashedShareImage: () => invoke<number[] | null>('take_stashed_share_image'),
   setCharacterImage: (id: Uuid, bytes: number[] | Uint8Array) =>
     invoke<Character>('set_character_image', { id, bytes: Array.from(bytes) }),
   getCharacterImage: (id: Uuid) => invoke<number[] | null>('get_character_image', { id }),
+
+  /**
+   * Copy the encoded share image for `id` to the system clipboard as PNG.
+   *
+   * Used in place of the `<a download>` flow on Android, where Tauri 2's
+   * WebView has no `DownloadListener` and silently ignores anchor download
+   * clicks. Throws if the running environment lacks the async Clipboard API
+   * with image support.
+   */
+  copyShareImageToClipboard: async (id: Uuid): Promise<void> => {
+    const bytes = await invoke<number[]>('export_share_image', { id });
+    const blob = new Blob([new Uint8Array(bytes)], { type: 'image/png' });
+    if (
+      typeof ClipboardItem === 'undefined' ||
+      typeof navigator === 'undefined' ||
+      !navigator.clipboard?.write
+    ) {
+      throw new Error('Image clipboard write not supported in this environment');
+    }
+    await navigator.clipboard.write([new ClipboardItem({ 'image/png': blob })]);
+  },
 
   // Settings / token
   getSettings: () => invoke<SettingsDto>('get_settings'),
@@ -104,6 +152,23 @@ export const api = {
   setToken: (token: string) => invoke<void>('set_token', { token }),
   clearToken: () => invoke<void>('clear_token'),
   testToken: () => invoke<TestTokenResult>('test_token'),
+
+  // AI provider
+  getAiSettings: () => invoke<AiSettingsDto>('get_ai_settings'),
+  setAiSettings: (input: { base_url: string; model: string }) =>
+    invoke<void>('set_ai_settings', { input }),
+  setAiToken: (token: string) => invoke<void>('set_ai_token', { token }),
+  clearAiToken: () => invoke<void>('clear_ai_token'),
+  testAiConnection: (input: { base_url: string; model: string; bearer_token: string | null }) =>
+    invoke<TestAiResult>('test_ai_connection', { input }),
+  aiChatCompletion: (input: {
+    base_url: string;
+    model: string;
+    system: string | null;
+    user: string;
+    json_mode: boolean;
+    bearer_token: string | null;
+  }) => invoke<AiChatCompletionResponse>('ai_chat_completion', { input }),
 
   // Chat history
   listChatMessages: (
@@ -133,31 +198,110 @@ export const api = {
       favouritesOnly,
     }),
   chatMessageCount: (aiId: string) => invoke<number>('chat_message_count', { aiId }),
-  getChatSyncState: (aiId: string) =>
-    invoke<ChatSyncState | null>('get_chat_sync_state', { aiId }),
+  getChatSyncState: (aiId: string) => invoke<ChatSyncState | null>('get_chat_sync_state', { aiId }),
   getCurrentSync: () => invoke<string | null>('get_current_sync'),
   startChatSync: (aiId: string) => invoke<void>('start_chat_sync', { aiId }),
   cancelChatSync: () => invoke<void>('cancel_chat_sync'),
   resetChatHistory: (aiId: string) => invoke<number>('reset_chat_history', { aiId }),
   setChatMessageFavourite: (aiId: string, kindroidMsgId: string) =>
     invoke<boolean>('toggle_chat_message_favourite', { aiId, kindroidMsgId }),
+
+  // Journal entries (character-scoped)
+  listJournalEntries: (characterId: string) =>
+    invoke<JournalEntry[]>('list_journal_entries', { characterId }),
+  saveJournalEntry: (characterId: string, input: JournalEntryInput) =>
+    invoke<JournalEntry>('save_journal_entry', { characterId, input }),
+  deleteJournalEntry: (characterId: string, entryId: string) =>
+    invoke<void>('delete_journal_entry', { characterId, entryId }),
+
+  // Chat automation (auto-journal / auto-summary)
+  getChatAutomationState: (aiId: string) =>
+    invoke<ChatAutomationDto>('get_chat_automation_state', { aiId }),
+  setChatAutomationSettings: (input: SetChatAutomationSettingsInput) =>
+    invoke<ChatAutomationDto>('set_chat_automation_settings', { input }),
+  resetChatSummary: (input: ResetChatSummaryInput) =>
+    invoke<ChatAutomationDto>('reset_chat_summary', { input }),
+  clearStuckAutoJournalRuns: (input: ClearStuckAutoJournalRunsInput) =>
+    invoke<ClearStuckAutoJournalRunsResult>('clear_stuck_auto_journal_runs', { input }),
+  runSummaryNow: (input: RunSummaryNowInput) =>
+    invoke<RunSummaryNowResult>('run_summary_now', { input }),
+  getAutomationInstructionsDefaults: () =>
+    invoke<AutomationInstructionsDefaults>('get_automation_instructions_defaults'),
+  setAutomationInstructions: (input: SetAutomationInstructionsInput) =>
+    invoke<void>('set_automation_instructions', { input }),
 };
 
 /**
- * Escape an arbitrary user query into a safe FTS5 prefix-match expression.
+ * Escape an arbitrary user query into a safe FTS5 expression.
  *
- * Each whitespace-separated token is double-quoted (so FTS5 treats it as
- * a literal phrase), stripped of FTS5 metacharacters, with internal `"`
- * doubled, and suffixed with `*` for prefix matching. The result is
- * `token1* OR token2* OR token3*`. The Porter stemmer in
- * `chat_messages_fts` collapses inflectional variants automatically.
+ * Tokens are whitespace-separated. A token wrapped in `"..."` becomes an
+ * **exact phrase** match (no wildcard). An unwrapped token becomes a
+ * **prefix** match (suffix `*`). All parts are joined with ` AND ` so that
+ * every term (or phrase) must be present in a matching message.
+ *
+ * Each raw token / phrase is stripped of FTS5 metacharacters
+ * (`*`, `(`, `)`, `:`, `^`), any internal `"` is doubled so it survives
+ * FTS5 phrase parsing, and the cleaned text is then re-wrapped. Empty
+ * parts after cleaning are dropped. An unmatched opening quote is
+ * forgiving: the remainder of the input is treated as a plain unquoted
+ * token rather than producing an error.
+ *
+ * The Porter stemmer in `chat_messages_fts` collapses inflectional
+ * variants automatically, both for standalone tokens and for the words
+ * inside quoted phrases.
  */
 export function escapeFtsQuery(query: string): string {
   const FTS_META = /[*()^:]/g;
-  const tokens = query
-    .split(/\s+/)
-    .map((t) => t.replace(FTS_META, ''))
-    .filter((t) => t.length > 0);
-  if (tokens.length === 0) return '';
-  return tokens.map((t) => `"${t.replace(/"/g, '""')}"*`).join(' OR ');
+  const parts: string[] = [];
+  const len = query.length;
+  let i = 0;
+
+  while (i < len) {
+    while (i < len && /\s/.test(query[i]!)) i++;
+    if (i >= len) break;
+
+    if (query[i] === '"') {
+      i++;
+      const start = i;
+      while (i < len && query[i] !== '"') i++;
+      const raw = query.slice(start, i);
+      const closed = i < len;
+      if (closed) i++;
+      // FTS5 tokenisation matches our linear scan: an unmatched opening
+      // quote falls back to being treated as a plain token (so the user
+      // still gets prefix-matching feedback instead of a silently
+      // different search mode).
+      const cleaned = raw.replace(FTS_META, '').replace(/"/g, '""');
+      if (cleaned.length > 0) {
+        parts.push(closed ? `"${cleaned}"` : `"${cleaned}"*`);
+      }
+    } else {
+      const start = i;
+      while (i < len && !/\s/.test(query[i]!) && query[i] !== '"') i++;
+      const raw = query.slice(start, i);
+      const cleaned = raw.replace(FTS_META, '').replace(/"/g, '""');
+      if (cleaned.length > 0) parts.push(`"${cleaned}"*`);
+    }
+  }
+
+  return parts.length === 0 ? '' : parts.join(' AND ');
+}
+
+/**
+ * `true` when the app is running inside the Tauri 2 Android WebView.
+ *
+ * Detection uses `navigator.userAgent` because the WebView's UA always
+ * contains "Android" (the WebView inherits Chrome's mobile UA string).
+ * Cached after the first call so the work happens at most once per
+ * page load.
+ */
+let cachedIsAndroid: boolean | null = null;
+export function isAndroid(): boolean {
+  if (cachedIsAndroid !== null) return cachedIsAndroid;
+  if (typeof navigator === 'undefined' || !navigator.userAgent) {
+    cachedIsAndroid = false;
+    return false;
+  }
+  cachedIsAndroid = navigator.userAgent.includes('Android');
+  return cachedIsAndroid;
 }

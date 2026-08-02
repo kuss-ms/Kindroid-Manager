@@ -243,6 +243,119 @@ select {
   .section-grid {
     grid-template-columns: 1fr;
   }
+} /* Mobile bottom nav + full-screen modals.
+   See .kilo/plans/1785596514600-android-deployment-plan.md step 5.
+   The drag-drop / paste handlers in AppLayout work everywhere, but
+   Android System WebView does not fire HTML5 drop events for files, so
+   the Characters page exposes a visible "Import share image" button that
+   opens the OS file picker via a hidden <input>. */
+.app-bottom-nav {
+  display: none;
+}
+@media (max-width: 720px) {
+  .app-brand-text {
+    display: none;
+  }
+  .app-nav {
+    display: none;
+  }
+  .app-bottom-nav {
+    display: flex;
+    position: fixed;
+    bottom: 0;
+    left: 0;
+    right: 0;
+    height: 64px;
+    background: var(--surface);
+    border-top: 1px solid var(--border);
+    box-shadow: 0 -1px 3px rgba(15, 23, 42, 0.06);
+    z-index: 60;
+  }
+  .app-bottom-nav a {
+    flex: 1;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    color: var(--text-muted);
+    font-weight: 500;
+    font-size: 11px;
+    text-decoration: none;
+    border: none;
+    padding: 0 2px;
+  }
+  .app-bottom-nav a.active {
+    color: var(--primary-hover);
+    background: var(--primary-soft);
+  }
+  .app-main {
+    padding-bottom: 80px;
+  }
+  /* Full-screen modals with a sticky header and footer so the title and
+     confirm/cancel buttons stay visible while the body scrolls. Without
+     this the modal was a fixed-height column with no overflow handling,
+     so the action buttons vanished under the bottom nav / status bar
+     on long forms like the Character editor. */
+  .modal {
+    display: flex;
+    flex-direction: column;
+    max-width: 100vw;
+    max-height: 100vh;
+    width: 100%;
+    height: 100%;
+    border-radius: 0;
+    min-width: 0;
+    padding: var(--space-4);
+  }
+  .modal h3 {
+    flex-shrink: 0;
+    margin-bottom: var(--space-2);
+  }
+  .modal-body {
+    flex: 1;
+    overflow-y: auto;
+    min-height: 0;
+    margin: 0 0 var(--space-3) 0;
+  }
+  .modal-actions {
+    flex-shrink: 0;
+    margin-top: var(--space-3);
+  }
+  /* Stack page-header vertically so the title, search input and primary
+     action button never overflow each other on a 360dp viewport. */
+  .page-header {
+    flex-direction: column;
+    align-items: stretch;
+    gap: var(--space-2);
+  }
+  .page-header h2 {
+    flex: none;
+  }
+  .page-header-actions {
+    flex-wrap: wrap;
+  }
+  .page-header-actions .input-search {
+    flex: 1;
+    min-width: 0;
+  }
+  /* List rows: keep only the primary action visible, hide the rest
+     behind a "⋯" overflow menu on mobile. The overflow-menu button itself
+     is hidden on desktop and the secondary buttons are hidden on mobile.
+     Both selectors are anchored to .list-item-actions to out-specify the
+     base .btn rule below (display: inline-flex on the secondary buttons)
+     and the desktop .list-item-overflow rule further down. Without the
+     extra anchor the later rules win by source order and the mobile UI
+     never shows on touch devices. */
+  .list-item-actions .list-item-secondary {
+    display: none;
+  }
+  .list-item-actions .list-item-overflow {
+    display: inline-block;
+  }
+  .table {
+    display: block;
+    max-width: 100%;
+    overflow-x: auto;
+  }
 } /* Buttons */
 .btn {
   display: inline-flex;
@@ -314,6 +427,14 @@ select {
 .btn-sm {
   padding: 5px 10px;
   font-size: 12px;
+}
+/* Buttons with dynamic text (e.g. "Push 8 fields and 3 journals to MyBot")
+   that need to wrap on narrow viewports. Default .btn has
+   white-space: nowrap. */
+.btn-wrap-text {
+  white-space: normal;
+  text-align: center;
+  line-height: 1.3;
 } /* Form */
 .form {
   display: flex;
@@ -486,6 +607,58 @@ select {
 .list-item-actions {
   display: flex;
   gap: 6px;
+}
+/* Desktop: hide the mobile-only "⋯" overflow button. Mobile media query
+   flips this so the secondary action buttons are hidden instead. */
+.list-item-overflow {
+  display: none;
+}
+/* Overflow menu ("⋯" button + popup). Used by RowActions to fold
+   secondary row actions behind a single tap on mobile. */
+.overflow-menu {
+  position: relative;
+  display: inline-block;
+}
+.overflow-menu-popup {
+  position: absolute;
+  right: 0;
+  top: 100%;
+  margin-top: 4px;
+  min-width: 180px;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  box-shadow: var(--shadow-lg);
+  z-index: 70;
+  display: flex;
+  flex-direction: column;
+  padding: 4px;
+}
+.overflow-menu-item {
+  text-align: left;
+  padding: 8px 12px;
+  background: transparent;
+  border: none;
+  border-radius: var(--radius-sm);
+  color: var(--text);
+  cursor: pointer;
+  font-size: 13px;
+  width: 100%;
+}
+.overflow-menu-item:hover:not(:disabled) {
+  background: var(--surface-2);
+}
+.overflow-menu-item.danger {
+  color: var(--danger);
+}
+.overflow-menu-item:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+.btn-icon {
+  padding: 4px 10px;
+  font-size: 16px;
+  line-height: 1;
 }
 .empty {
   padding: var(--space-8);
@@ -786,4 +959,21 @@ pre {
   background: var(--surface-2);
   color: var(--text-muted);
   font-size: 13px;
+}
+/* Chip input row: text input + Add button side by side. The Android
+   virtual keyboard has no "Enter" key for committing a keyphrase (its
+   action button is "Next", which moves focus and silently drops the
+   pending text). The visible "Add" button gives mobile users a tap
+   target, `onBlur` catches the focus-stealing "Next" arrow, and
+   `enterKeyHint="done"` tells the keyboard to label its action as
+   "Done" instead. The flex layout collapses cleanly on narrow
+   viewports because `.btn-sm` keeps its intrinsic min-width. */
+.keyphrase-input-row {
+  display: flex;
+  gap: var(--space-2);
+  align-items: stretch;
+}
+.keyphrase-input-row .input {
+  flex: 1 1 0;
+  min-width: 0;
 }

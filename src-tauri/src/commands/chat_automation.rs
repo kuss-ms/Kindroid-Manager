@@ -344,8 +344,7 @@ async fn process_journal(
     );
     let prompt = journal_prompt(&instructions, &context, &prior, state.journal_cap);
     let response = ai_completion(repo, ai, &state, journal_system_prompt(), prompt).await?;
-    let parsed: JournalResponse = serde_json::from_str(&response)
-        .map_err(|e| AppError::invalid(format!("AI returned invalid journal JSON: {e}")))?;
+    let parsed: JournalResponse = parse_json_response::<JournalResponse>(&response, "journal")?;
     if parsed.entries.len() > state.journal_cap as usize {
         return Err(AppError::invalid("AI returned too many journal entries"));
     }
@@ -533,8 +532,7 @@ async fn process_summary(
         limit,
     );
     let response = ai_completion(repo, ai, &state, summary_system_prompt(limit), prompt).await?;
-    let parsed: SummaryResponse = serde_json::from_str(&response)
-        .map_err(|e| AppError::invalid(format!("AI returned invalid summary JSON: {e}")))?;
+    let parsed: SummaryResponse = parse_json_response::<SummaryResponse>(&response, "summary")?;
     if parsed.summary.chars().count() > limit {
         return Err(AppError::invalid(format!(
             "summary exceeds {limit} characters"
@@ -766,6 +764,88 @@ fn before_cursor(a: &StableMessageCursor, b: &StableMessageCursor) -> bool {
     (a.timestamp, &a.kindroid_msg_id) < (b.timestamp, &b.kindroid_msg_id)
 }
 
+/// Try to coax a single JSON object out of an AI response. Models
+/// sometimes wrap replies in markdown code fences or add a leading
+/// apology / explanation that breaks a naive `serde_json::from_str`.
+/// We try the raw payload first, then strip a single ``` fence, then
+/// take the substring from the first `{` to the last matching `}`.
+/// The first successful parse wins.
+fn extract_json_object(raw: &str) -> Option<&str> {
+    let trimmed = raw.trim();
+    if try_parse(trimmed) {
+        return Some(trimmed);
+    }
+    let fenced = strip_fenced(trimmed);
+    if try_parse(&fenced) {
+        return find_in(trimmed, &fenced);
+    }
+    let sliced = slice_first_object(trimmed);
+    if !sliced.is_empty() && try_parse(&sliced) {
+        return find_in(trimmed, &sliced);
+    }
+    None
+}
+
+fn try_parse(candidate: &str) -> bool {
+    serde_json::from_str::<serde_json::Value>(candidate).is_ok()
+}
+
+/// Find the substring `needle` within `haystack` and return that slice of
+/// `haystack`. Used by `extract_json_object` so the returned reference
+/// borrows from the original input, not from the owned cleanup buffers.
+fn find_in<'a>(haystack: &'a str, needle: &str) -> Option<&'a str> {
+    let idx = haystack.find(needle)?;
+    Some(&haystack[idx..idx + needle.len()])
+}
+
+fn strip_fenced(s: &str) -> String {
+    let mut out = s.to_string();
+    if let Some(start) = out.find("```") {
+        if let Some(end_rel) = out[start + 3..].find("```") {
+            out = out[start + 3..start + 3 + end_rel].to_string();
+            if let Some(nl) = out.find('\n') {
+                out = out[nl + 1..].to_string();
+            } else if let Some(first_line_end) = out.find(|c: char| !c.is_ascii_alphanumeric()) {
+                out = out[first_line_end..].to_string();
+            }
+        }
+    }
+    out
+}
+
+fn slice_first_object(s: &str) -> String {
+    let bytes = s.as_bytes();
+    let Some(open) = bytes.iter().position(|&b| b == b'{') else {
+        return String::new();
+    };
+    let mut depth: i32 = 0;
+    for (i, &b) in bytes.iter().enumerate().skip(open) {
+        match b {
+            b'{' => depth += 1,
+            b'}' => {
+                depth -= 1;
+                if depth == 0 {
+                    return s[open..=i].to_string();
+                }
+            }
+            _ => {}
+        }
+    }
+    String::new()
+}
+
+fn parse_json_response<T: for<'de> Deserialize<'de>>(
+    raw: &str,
+    label: &str,
+) -> Result<T, AppError> {
+    let snippet: String = raw.chars().take(160).collect();
+    let candidate = extract_json_object(raw).ok_or_else(|| {
+        AppError::invalid(format!("AI returned non-JSON {label} response: {snippet}"))
+    })?;
+    serde_json::from_str(candidate)
+        .map_err(|e| AppError::invalid(format!("AI returned invalid {label} JSON: {e}")))
+}
+
 async fn load_state(
     repo: &Arc<dyn Repository>,
     ai_id: &str,
@@ -892,5 +972,60 @@ fn kindroid_status(error: &crate::kindroid::KindroidError) -> u16 {
         | crate::kindroid::KindroidError::NotFound { status, .. }
         | crate::kindroid::KindroidError::Server { status, .. } => *status,
         crate::kindroid::KindroidError::Network(_) => 0,
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{extract_json_object, parse_json_response};
+    use serde::Deserialize;
+
+    #[derive(Debug, Deserialize, PartialEq)]
+    struct Sample {
+        entries: Vec<Entry>,
+    }
+    #[derive(Debug, Deserialize, PartialEq)]
+    struct Entry {
+        entry: String,
+        #[serde(default)]
+        keyphrases: Vec<String>,
+    }
+
+    #[test]
+    fn parse_raw_json_object() {
+        let raw = r#"{"entries":[{"entry":"hello","keyphrases":["greeting"]}]}"#;
+        let parsed: Sample = parse_json_response(raw, "journal").unwrap();
+        assert_eq!(parsed.entries.len(), 1);
+        assert_eq!(parsed.entries[0].entry, "hello");
+    }
+
+    #[test]
+    fn parse_fenced_json_object() {
+        let raw =
+            "Here you go:\n```json\n{\"entries\":[{\"entry\":\"hi\",\"keyphrases\":[]}]}\n```\nThanks!";
+        let parsed: Sample = parse_json_response(raw, "journal").unwrap();
+        assert_eq!(parsed.entries[0].entry, "hi");
+    }
+
+    #[test]
+    fn parse_first_object_in_prose() {
+        let raw = "Sorry, here's the data:\n{\"entries\":[]}\nHope this helps.";
+        let parsed: Sample = parse_json_response(raw, "journal").unwrap();
+        assert!(parsed.entries.is_empty());
+    }
+
+    #[test]
+    fn parse_empty_string_reports_meaningful_error() {
+        let err = parse_json_response::<Sample>("", "journal").unwrap_err();
+        let msg = format!("{err}");
+        assert!(msg.contains("non-JSON journal response"), "{msg}");
+    }
+
+    #[test]
+    fn extract_json_object_keeps_ref_origin() {
+        let raw = "prefix ```json\n{\"entries\":[]}\n``` suffix";
+        let slice = extract_json_object(raw).unwrap();
+        let ptr = slice.as_ptr();
+        assert!(raw.as_ptr() <= ptr && ptr <= raw.as_ptr().wrapping_add(raw.len()));
     }
 }

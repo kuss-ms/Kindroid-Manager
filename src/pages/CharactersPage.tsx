@@ -151,7 +151,7 @@ export function CharactersPage() {
                           onClick: () => share.mutate(c.id),
                           disabled: share.isPending || !c.cover_image,
                           title: c.cover_image
-                            ? 'Copy share image (with persona) to clipboard'
+                            ? 'Copy share image (with persona + journal entries) to clipboard'
                             : 'Upload a cover image first',
                         },
                         {

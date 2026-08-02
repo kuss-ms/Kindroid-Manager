@@ -960,3 +960,20 @@ pre {
   color: var(--text-muted);
   font-size: 13px;
 }
+/* Chip input row: text input + Add button side by side. The Android
+   virtual keyboard has no "Enter" key for committing a keyphrase (its
+   action button is "Next", which moves focus and silently drops the
+   pending text). The visible "Add" button gives mobile users a tap
+   target, `onBlur` catches the focus-stealing "Next" arrow, and
+   `enterKeyHint="done"` tells the keyboard to label its action as
+   "Done" instead. The flex layout collapses cleanly on narrow
+   viewports because `.btn-sm` keeps its intrinsic min-width. */
+.keyphrase-input-row {
+  display: flex;
+  gap: var(--space-2);
+  align-items: stretch;
+}
+.keyphrase-input-row .input {
+  flex: 1 1 0;
+  min-width: 0;
+}

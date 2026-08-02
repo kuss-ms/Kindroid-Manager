@@ -18,9 +18,7 @@ export function AppLayout() {
       (characters.data?.length ?? 0) === 0 ||
       (targets.data?.length ?? 0) === 0);
   useEffect(() => {
-    const handleDrop = async (file: File) => {
-      const buf = await file.arrayBuffer();
-      const bytes = Array.from(new Uint8Array(buf));
+    const handleBytes = async (bytes: Uint8Array) => {
       try {
         const draft = await api.importShareImage(bytes);
         queryClient.setQueryData(['character', draft.id], draft);
@@ -29,6 +27,50 @@ export function AppLayout() {
         navigate(`/characters/${draft.id}`);
       } catch (e) {
         toast('error', errorMessage(e));
+      }
+    };
+    const readBytesFromFile = async (file: File) => {
+      const buf = await file.arrayBuffer();
+      await handleBytes(new Uint8Array(buf));
+    };
+    const onDrop = async (e: DragEvent) => {
+      e.preventDefault();
+      dragCounter.current = 0;
+      setDropActive(false);
+      const file = e.dataTransfer?.files[0];
+      if (!file || !file.type.startsWith('image/')) {
+        toast('error', 'Please drop a PNG image.');
+        return;
+      }
+      // Prefer the in-app stash (verbatim bytes from the most recent
+      // export) over the dropped file's bytes — the OS clipboard may
+      // have transcoded the file and stripped the `kindroid` tEXt chunk.
+      const stashed = await api.takeStashedShareImage();
+      if (stashed) {
+        await handleBytes(new Uint8Array(stashed));
+        return;
+      }
+      await readBytesFromFile(file);
+    };
+    const onPaste = async (e: ClipboardEvent) => {
+      const items = e.clipboardData?.items;
+      if (!items) return;
+      // Prefer the in-app stash first (see onDrop for rationale).
+      const stashed = await api.takeStashedShareImage();
+      if (stashed) {
+        e.preventDefault();
+        await handleBytes(new Uint8Array(stashed));
+        return;
+      }
+      for (const item of items) {
+        if (item.type.startsWith('image/')) {
+          const file = item.getAsFile();
+          if (file) {
+            e.preventDefault();
+            await readBytesFromFile(file);
+            return;
+          }
+        }
       }
     };
     const onDragEnter = (e: DragEvent) => {
@@ -45,31 +87,6 @@ export function AppLayout() {
     };
     const onDragOver = (e: DragEvent) => {
       e.preventDefault();
-    };
-    const onDrop = (e: DragEvent) => {
-      e.preventDefault();
-      dragCounter.current = 0;
-      setDropActive(false);
-      const file = e.dataTransfer?.files[0];
-      if (!file || !file.type.startsWith('image/')) {
-        toast('error', 'Please drop a PNG image.');
-        return;
-      }
-      void handleDrop(file);
-    };
-    const onPaste = (e: ClipboardEvent) => {
-      const items = e.clipboardData?.items;
-      if (!items) return;
-      for (const item of items) {
-        if (item.type.startsWith('image/')) {
-          const file = item.getAsFile();
-          if (file) {
-            e.preventDefault();
-            void handleDrop(file);
-            return;
-          }
-        }
-      }
     };
     window.addEventListener('dragenter', onDragEnter);
     window.addEventListener('dragleave', onDragLeave);

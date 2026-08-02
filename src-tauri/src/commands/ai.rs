@@ -83,7 +83,8 @@ pub async fn set_ai_settings(
         ));
     }
     repo.set_setting(SETTING_AI_BASE_URL, trimmed_url).await?;
-    repo.set_setting(SETTING_AI_MODEL, input.model.trim()).await?;
+    repo.set_setting(SETTING_AI_MODEL, input.model.trim())
+        .await?;
     Ok(())
 }
 

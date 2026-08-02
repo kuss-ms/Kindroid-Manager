@@ -2,6 +2,7 @@ use std::sync::Arc;
 
 use tauri::Manager;
 
+use crate::commands::share_code::ShareImageStash;
 use crate::commands::sync_registry::SyncRegistry;
 use crate::commands::tauri_wrappers;
 use crate::kindroid::ai::{AiClient, HttpAiClient};
@@ -28,6 +29,7 @@ pub fn run() {
             app.manage(client);
             app.manage(ai_client);
             app.manage(Arc::new(SyncRegistry::new()));
+            app.manage(Arc::new(ShareImageStash::new()));
             Ok(())
         })
         .invoke_handler(tauri::generate_handler![
@@ -46,6 +48,7 @@ pub fn run() {
             tauri_wrappers::get_push_log,
             tauri_wrappers::import_share_image,
             tauri_wrappers::export_share_image,
+            tauri_wrappers::take_stashed_share_image,
             tauri_wrappers::set_character_image,
             tauri_wrappers::get_character_image,
             tauri_wrappers::get_settings,

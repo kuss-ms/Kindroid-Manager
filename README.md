@@ -20,7 +20,14 @@ backend can be added later without touching the UI.
   character between installs. Drop the PNG (or paste from clipboard)
   on the main window to import; the image itself is saved as the
   character's cover image. Two installs interoperate; Kindroid does
-  not consume the metadata.
+  not consume the metadata. The share code embeds the persona fields
+  (name, backstory, memory, directive, example message, additional
+  context, current scene, greeting, avatar description) plus the
+  per-character **journal entries** (entry text + keyphrases; ids and
+  timestamps are local-only and regenerated on import). `notes` is
+  still local-only and is not part of the share code. The wire format
+  is `CURRENT_VERSION = 2` in `domain::share_code`; v=1 codes still
+  decode (without the journal entries they were missing).
 - A push history with the full request/response body and a one-click
   re-push.
 - A **Chat History** viewer that pulls messages from the
@@ -97,8 +104,8 @@ to.
 6. Edit the backstory, push again with chat-break + greeting →
    confirm both took effect and the History page shows two entries.
 7. Export a share image, reset the app's data folder, drop the share
-   image on the main window → character reappears with all fields and
-   the cover image intact.
+   image on the main window → character reappears with all fields, the
+   cover image, and the journal entries intact.
 8. From the History page, click **Re-push** on the last entry → Push
    page opens with the same character / target / fields / chat-break
    pre-filled. Push again to confirm the round-trip.

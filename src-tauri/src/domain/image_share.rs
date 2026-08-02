@@ -10,6 +10,7 @@
 use serde::{Deserialize, Serialize};
 
 use crate::domain::character::Character;
+use crate::domain::journal_entry::JournalEntry;
 use crate::domain::share_code::{build_partial, PartialCharacter, CURRENT_VERSION};
 
 pub const KEYWORD: &[u8] = b"kindroid";
@@ -50,9 +51,13 @@ pub fn decode_image(image_bytes: &[u8]) -> Result<PartialCharacter, ImageShareEr
     Ok(payload.p)
 }
 
-/// Encode `(character, image)` into a PNG with the persona payload
-/// embedded as a `tEXt` chunk.
-pub fn encode_image(image_bytes: &[u8], character: &Character) -> Result<Vec<u8>, ImageShareError> {
+/// Encode `(character, journals, image)` into a PNG with the persona +
+/// journal payload embedded as a `tEXt` chunk.
+pub fn encode_image(
+    image_bytes: &[u8],
+    character: &Character,
+    journals: &[JournalEntry],
+) -> Result<Vec<u8>, ImageShareError> {
     let dynamic =
         image::load_from_memory(image_bytes).map_err(|e| ImageShareError::Codec(e.to_string()))?;
     let rgba = dynamic.to_rgba8();
@@ -60,7 +65,7 @@ pub fn encode_image(image_bytes: &[u8], character: &Character) -> Result<Vec<u8>
 
     let payload = serde_json::to_string(&SharePayload {
         v: CURRENT_VERSION,
-        p: build_partial(character),
+        p: build_partial(character, journals),
     })
     .map_err(|e| ImageShareError::Malformed(format!("json: {e}")))?;
 
@@ -234,7 +239,7 @@ mod tests {
     fn round_trip() {
         let png = make_png(4, 4, [255, 0, 0, 255]);
         let character = make_character();
-        let encoded = encode_image(&png, &character).unwrap();
+        let encoded = encode_image(&png, &character, &[]).unwrap();
         let partial = decode_image(&encoded).unwrap();
         assert_eq!(partial.ai_name.as_deref(), Some("Aria"));
         assert_eq!(partial.greeting.as_deref(), Some("Hello!"));
@@ -246,10 +251,45 @@ mod tests {
     }
 
     #[test]
+    fn round_trip_includes_journal_entries() {
+        let png = make_png(2, 2, [0, 0, 0, 255]);
+        let character = make_character();
+        let now = chrono::Utc::now();
+        let journals = vec![
+            crate::domain::journal_entry::JournalEntry {
+                id: uuid::Uuid::new_v4().to_string(),
+                character_id: character.id,
+                entry: "Journal one".into(),
+                keyphrases: vec!["alpha".into(), "beta".into()],
+                created_at: now,
+                updated_at: now,
+            },
+            crate::domain::journal_entry::JournalEntry {
+                id: uuid::Uuid::new_v4().to_string(),
+                character_id: character.id,
+                entry: "Journal two".into(),
+                keyphrases: vec![],
+                created_at: now,
+                updated_at: now,
+            },
+        ];
+        let encoded = encode_image(&png, &character, &journals).unwrap();
+        let partial = decode_image(&encoded).unwrap();
+        assert_eq!(partial.journal_entries.len(), 2);
+        assert_eq!(partial.journal_entries[0].entry, "Journal one");
+        assert_eq!(
+            partial.journal_entries[0].keyphrases,
+            vec!["alpha".to_string(), "beta".to_string()]
+        );
+        assert_eq!(partial.journal_entries[1].entry, "Journal two");
+        assert!(partial.journal_entries[1].keyphrases.is_empty());
+    }
+
+    #[test]
     fn encoded_image_contains_kindroid_chunk() {
         let png = make_png(2, 2, [0, 0, 0, 255]);
         let character = make_character();
-        let encoded = encode_image(&png, &character).unwrap();
+        let encoded = encode_image(&png, &character, &[]).unwrap();
         let mut found = false;
         let mut pos = 8;
         while pos + 12 <= encoded.len() {
@@ -365,7 +405,7 @@ mod tests {
                 .unwrap();
         }
         let character = make_character();
-        let encoded = encode_image(&buf, &character).unwrap();
+        let encoded = encode_image(&buf, &character, &[]).unwrap();
         let partial = decode_image(&encoded).unwrap();
         assert_eq!(partial.ai_name.as_deref(), Some("Aria"));
     }
@@ -381,7 +421,7 @@ mod tests {
                 .unwrap();
         }
         let character = make_character();
-        let encoded = encode_image(&buf, &character).unwrap();
+        let encoded = encode_image(&buf, &character, &[]).unwrap();
         let partial = decode_image(&encoded).unwrap();
         assert_eq!(partial.ai_name.as_deref(), Some("Aria"));
     }
@@ -397,7 +437,7 @@ mod tests {
                 .unwrap();
         }
         let character = make_character();
-        let encoded = encode_image(&buf, &character).unwrap();
+        let encoded = encode_image(&buf, &character, &[]).unwrap();
         let partial = decode_image(&encoded).unwrap();
         assert_eq!(partial.ai_name.as_deref(), Some("Aria"));
     }
@@ -409,7 +449,7 @@ mod tests {
         character.ai_memory = None;
         character.greeting = None;
         let png = make_png(2, 2, [0, 255, 0, 255]);
-        let encoded = encode_image(&png, &character).unwrap();
+        let encoded = encode_image(&png, &character, &[]).unwrap();
         let partial = decode_image(&encoded).unwrap();
         assert_eq!(partial.ai_backstory, None);
         assert_eq!(partial.greeting, None);
@@ -419,7 +459,7 @@ mod tests {
     fn strip_kindroid_removes_only_our_chunk() {
         let png = make_png(2, 2, [0, 0, 0, 255]);
         let character = make_character();
-        let encoded = encode_image(&png, &character).unwrap();
+        let encoded = encode_image(&png, &character, &[]).unwrap();
         // Sanity: the encoded image contains the kindroid chunk.
         assert!(read_kindroid_text(&encoded).unwrap().is_some());
 
@@ -438,7 +478,7 @@ mod tests {
     fn strip_kindroid_preserves_other_text_chunks() {
         let png = make_png(1, 1, [0, 0, 0, 255]);
         let character = make_character();
-        let mut bytes = encode_image(&png, &character).unwrap();
+        let mut bytes = encode_image(&png, &character, &[]).unwrap();
         // Inject another tEXt chunk with a non-kindroid keyword.
         let payload = b"prompt\0{\"foo\":1}";
         let mut chunk = Vec::new();

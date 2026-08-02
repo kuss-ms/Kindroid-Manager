@@ -101,6 +101,16 @@ export const api = {
   importShareImage: (bytes: number[] | Uint8Array) =>
     invoke<Character>('import_share_image', { bytes: Array.from(bytes) }),
   exportShareImage: (id: Uuid) => invoke<number[]>('export_share_image', { id }),
+  /**
+   * Read and clear the in-app stash of the last exported share image.
+   * Returns `null` if the stash is empty (the user pasted a different
+   * image, or the app was restarted since the last export). Used by the
+   * paste handler so the in-app copy→paste round-trip works even when
+   * the OS clipboard transcodes the PNG (which strips the `kindroid`
+   * `tEXt` chunk on Windows WebView2 and on some Linux clipboard
+   * managers / OEM Android WebViews).
+   */
+  takeStashedShareImage: () => invoke<number[] | null>('take_stashed_share_image'),
   setCharacterImage: (id: Uuid, bytes: number[] | Uint8Array) =>
     invoke<Character>('set_character_image', { id, bytes: Array.from(bytes) }),
   getCharacterImage: (id: Uuid) => invoke<number[] | null>('get_character_image', { id }),

@@ -137,9 +137,17 @@ mod inner {
     #[tauri::command]
     pub async fn export_share_image(
         repo: State<'_, Repo>,
+        stash: State<'_, std::sync::Arc<share_code::ShareImageStash>>,
         id: uuid::Uuid,
     ) -> Result<Vec<u8>, crate::error::AppError> {
-        share_code::export_share_image(repo.inner().clone(), id).await
+        share_code::export_share_image(repo.inner().clone(), stash.inner().clone(), id).await
+    }
+
+    #[tauri::command]
+    pub fn take_stashed_share_image(
+        stash: State<'_, std::sync::Arc<share_code::ShareImageStash>>,
+    ) -> Option<Vec<u8>> {
+        share_code::take_stashed_share_image(stash.inner().clone())
     }
 
     #[tauri::command]

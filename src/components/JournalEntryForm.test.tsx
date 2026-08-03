@@ -1,6 +1,6 @@
 import { describe, expect, it, vi } from 'vitest';
 import { fireEvent, render, screen } from '@testing-library/react';
-import { JournalEntryForm } from './JournalEntryForm';
+import { JournalEntryForm, validateKeyphrase } from './JournalEntryForm';
 
 describe('JournalEntryForm', () => {
   it('shows the "tap Add" hint so Android users see the new affordance', () => {
@@ -149,5 +149,118 @@ describe('JournalEntryForm', () => {
       />,
     );
     expect(screen.getByTestId('keyphrase-input')).toHaveAttribute('enterkeyhint', 'done');
+  });
+});
+
+// Pin the client-side keyphrase validator to the Rust `JournalEntry::validate`
+// rules (see `src-tauri/src/domain/journal_entry.rs`). These tests fail
+// if the constants or the rules drift apart.
+describe('validateKeyphrase', () => {
+  it('accepts a single word', () => {
+    expect(validateKeyphrase('caramel')).toBeNull();
+  });
+
+  it('accepts a two-word phrase', () => {
+    expect(validateKeyphrase('amusement park')).toBeNull();
+  });
+
+  it('accepts a three-word phrase', () => {
+    expect(validateKeyphrase('one two three')).toBeNull();
+  });
+
+  it('accepts a hyphenated phrase', () => {
+    expect(validateKeyphrase('dragon-wings')).toBeNull();
+  });
+
+  it('rejects an empty input', () => {
+    expect(validateKeyphrase('')).toMatch(/empty/);
+    expect(validateKeyphrase('   ')).toMatch(/empty/);
+  });
+
+  it('rejects a phrase longer than 50 characters', () => {
+    const long = 'a'.repeat(51);
+    expect(validateKeyphrase(long)).toMatch(/50 characters/);
+  });
+
+  it('rejects a phrase containing a comma', () => {
+    expect(validateKeyphrase('dragon wings, forked tongue')).toMatch(/separators/);
+  });
+
+  it('rejects a phrase containing a colon', () => {
+    expect(validateKeyphrase('topic: detail')).toMatch(/separators/);
+  });
+
+  it('rejects a phrase containing a semicolon', () => {
+    expect(validateKeyphrase('a; b')).toMatch(/separators/);
+  });
+
+  it('rejects a phrase with more than 3 words', () => {
+    expect(validateKeyphrase('one two three four')).toMatch(/3 words/);
+  });
+});
+
+describe('JournalEntryForm keyphrase error feedback (H4)', () => {
+  it('rejects a keyphrase with a comma and shows the inline error', () => {
+    render(
+      <JournalEntryForm
+        initial={{ entry: 'hi', keyphrases: [] }}
+        onSubmit={() => {}}
+        onCancel={() => {}}
+        submitting={false}
+      />,
+    );
+    const input = screen.getByTestId('keyphrase-input') as HTMLInputElement;
+    fireEvent.change(input, { target: { value: 'dragon wings, forked tongue' } });
+    fireEvent.click(screen.getByTestId('keyphrase-add'));
+    expect(screen.getByTestId('keyphrase-error')).toHaveTextContent(/separators/);
+    // The chip must not have been added.
+    expect(screen.queryByText(/dragon wings, forked tongue/)).not.toBeInTheDocument();
+  });
+
+  it('rejects a 4-word keyphrase and shows the inline error', () => {
+    render(
+      <JournalEntryForm
+        initial={{ entry: 'hi', keyphrases: [] }}
+        onSubmit={() => {}}
+        onCancel={() => {}}
+        submitting={false}
+      />,
+    );
+    const input = screen.getByTestId('keyphrase-input') as HTMLInputElement;
+    fireEvent.change(input, { target: { value: 'one two three four' } });
+    fireEvent.click(screen.getByTestId('keyphrase-add'));
+    expect(screen.getByTestId('keyphrase-error')).toHaveTextContent(/3 words/);
+  });
+
+  it('rejects a >50-char keyphrase and shows the inline error', () => {
+    render(
+      <JournalEntryForm
+        initial={{ entry: 'hi', keyphrases: [] }}
+        onSubmit={() => {}}
+        onCancel={() => {}}
+        submitting={false}
+      />,
+    );
+    const input = screen.getByTestId('keyphrase-input') as HTMLInputElement;
+    fireEvent.change(input, { target: { value: 'a'.repeat(51) } });
+    fireEvent.click(screen.getByTestId('keyphrase-add'));
+    expect(screen.getByTestId('keyphrase-error')).toHaveTextContent(/50 characters/);
+  });
+
+  it('clears the error when the user types again', () => {
+    render(
+      <JournalEntryForm
+        initial={{ entry: 'hi', keyphrases: [] }}
+        onSubmit={() => {}}
+        onCancel={() => {}}
+        submitting={false}
+      />,
+    );
+    const input = screen.getByTestId('keyphrase-input') as HTMLInputElement;
+    fireEvent.change(input, { target: { value: 'a, b' } });
+    fireEvent.click(screen.getByTestId('keyphrase-add'));
+    expect(screen.getByTestId('keyphrase-error')).toBeInTheDocument();
+    fireEvent.change(input, { target: { value: 'good' } });
+    expect(screen.queryByTestId('keyphrase-error')).not.toBeInTheDocument();
   });
 });

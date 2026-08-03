@@ -54,7 +54,13 @@ export function TargetsPage() {
           Open Kindroid{' '}
         </a>{' '}
       </p>{' '}
-      {(targets.data ?? []).length === 0 && (
+      {targets.isError && (
+        <div className="error" role="alert" data-testid="targets-error">
+          Failed to load targets: {errorMessage(targets.error)}
+        </div>
+      )}
+      {targets.isLoading && <div className="muted">Loading targets…</div>}
+      {!targets.isLoading && !targets.isError && (targets.data ?? []).length === 0 && (
         <div className="empty">No targets yet. Add one to start pushing.</div>
       )}{' '}
       {(targets.data ?? []).length > 0 && (

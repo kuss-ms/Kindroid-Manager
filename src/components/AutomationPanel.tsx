@@ -161,6 +161,10 @@ export function AutomationPanel({
     mutationFn: (input) => api.setChatAutomationSettings(input),
     onSuccess: (data) => {
       queryClient.setQueryData(['chat-automation', aiId], data);
+      // Also refresh the global instruction defaults so a "Restore
+      // default" tap here picks up any change the user just made on
+      // Settings (audit M7).
+      queryClient.invalidateQueries({ queryKey: ['automation-instruction-defaults'] });
       toast('success', 'Automation settings saved');
     },
     onError: (e) => toast('error', errorMessage(e)),
@@ -253,19 +257,32 @@ export function AutomationPanel({
   });
 
   if (!aiId) return null;
+  // Check the error branch first: when the initial query fails, `dto` and
+  // `pending` stay null indefinitely, which would otherwise hit the
+  // "Loading…" branch forever (audit M6).
+  if (stateQuery.isError) {
+    return (
+      <div className="card" style={{ marginTop: 12 }}>
+        <h3>Automation</h3>
+        <p className="form-error" data-testid="automation-error">
+          Failed to load: {errorMessage(stateQuery.error)}
+        </p>
+        <button
+          type="button"
+          className="btn btn-sm"
+          style={{ marginTop: 8 }}
+          onClick={() => stateQuery.refetch()}
+        >
+          Retry
+        </button>
+      </div>
+    );
+  }
   if (stateQuery.isLoading || !pending || !dto) {
     return (
       <div className="card" style={{ marginTop: 12 }}>
         <h3>Automation</h3>
         <p className="muted">Loading automation state…</p>
-      </div>
-    );
-  }
-  if (stateQuery.error) {
-    return (
-      <div className="card" style={{ marginTop: 12 }}>
-        <h3>Automation</h3>
-        <p className="form-error">Failed to load: {errorMessage(stateQuery.error)}</p>
       </div>
     );
   }
@@ -441,10 +458,10 @@ export function AutomationPanel({
             <button
               type="button"
               className="btn btn-sm"
-              disabled={!pending.hasJournalOverride || !pending.journalOverride}
+              disabled={defaultsQuery.isLoading || !defaultsQuery.data}
               onClick={() => update('journalOverride', defaultsQuery.data?.journal ?? '')}
             >
-              Restore default
+              {defaultsQuery.isLoading ? 'Loading…' : 'Restore default'}
             </button>
             <button
               type="button"
@@ -484,10 +501,10 @@ export function AutomationPanel({
             <button
               type="button"
               className="btn btn-sm"
-              disabled={!pending.hasSummaryOverride || !pending.summaryOverride}
+              disabled={defaultsQuery.isLoading || !defaultsQuery.data}
               onClick={() => update('summaryOverride', defaultsQuery.data?.summary ?? '')}
             >
-              Restore default
+              {defaultsQuery.isLoading ? 'Loading…' : 'Restore default'}
             </button>
             <button
               type="button"

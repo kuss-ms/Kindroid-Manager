@@ -158,6 +158,7 @@ export function CharacterEditorPage() {
     handleSubmit,
     reset,
     control,
+    watch,
     formState: { errors, isDirty },
   } = useForm<CharacterFormValues>({
     resolver: zodResolver(characterInputSchema),
@@ -213,6 +214,12 @@ export function CharacterEditorPage() {
 
   return (
     <div className="page">
+      {id && character.isError && (
+        <div className="error" role="alert" data-testid="character-load-error">
+          Failed to load character: {errorMessage(character.error)}
+        </div>
+      )}
+      {id && character.isLoading && <p className="muted">Loading character…</p>}
       <div className="page-header">
         <h2>{id ? 'Edit character' : 'New character'}</h2>
         <div className="page-header-actions">
@@ -326,6 +333,7 @@ export function CharacterEditorPage() {
           rows={4}
           reg={register('ai_memory')}
           soft={FIELD_SOFT_LIMITS.ai_memory}
+          value={watch('ai_memory') ?? ''}
         />
         <TextAreaWithCounter
           label="Response directive"
@@ -353,6 +361,7 @@ export function CharacterEditorPage() {
           rows={3}
           reg={register('current_scene')}
           soft={FIELD_SOFT_LIMITS.current_scene}
+          value={watch('current_scene') ?? ''}
         />
 
         <h3 style={{ marginTop: 8 }}>Greeting</h3>
@@ -424,17 +433,22 @@ function TextArea({
   reg,
   hint,
   soft,
+  value,
 }: {
   label: string;
   rows: number;
   reg: UseFormRegisterReturn<keyof CharacterFormValues>;
   hint?: string;
   soft?: number;
+  // Pre-watched value so the SoftCounter can show the current length
+  // (was `undefined` before, which made the counter always read 0 —
+  // see audit M14).
+  value?: string;
 }) {
   return (
     <Field label={label} hint={hint}>
       <textarea className="textarea" {...reg} rows={rows} />
-      <SoftCounter value={undefined} soft={soft} />
+      <SoftCounter value={value} soft={soft} />
     </Field>
   );
 }
@@ -560,7 +574,12 @@ function JournalEditor({ characterId }: { characterId: Uuid }) {
       )}
 
       {entries.isLoading && <p className="muted">Loading…</p>}
-      {(entries.data ?? []).length === 0 && !entries.isLoading && editing == null && (
+      {entries.isError && (
+        <div className="error" role="alert" data-testid="journal-error">
+          Failed to load journal entries: {errorMessage(entries.error)}
+        </div>
+      )}
+      {(entries.data ?? []).length === 0 && !entries.isLoading && !entries.isError && editing == null && (
         <div className="empty" style={{ marginTop: 12 }}>
           No journal entries yet.
         </div>

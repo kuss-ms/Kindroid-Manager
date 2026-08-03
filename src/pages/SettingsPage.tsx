@@ -147,12 +147,17 @@ export function SettingsPage() {
   const saveInstructions = useMutation({
     mutationFn: (input: { journal: string; summary: string }) =>
       api.setAutomationInstructions(input),
-    onSuccess: () => {
-      toast('success', 'Automation instructions saved');
-      resetInstr({
-        journal: instructionsDefaults.data?.journal ?? '',
-        summary: instructionsDefaults.data?.summary ?? '',
+    onSuccess: async () => {
+      // Re-fetch the canonical defaults from the server so the form
+      // resets to what was actually saved (the previous code reset to
+      // the pre-save cached values, leaving the UI out of sync with the
+      // server until the next page reload — audit M7).
+      const data = await queryClient.fetchQuery({
+        queryKey: ['automation-instruction-defaults'],
+        queryFn: api.getAutomationInstructionsDefaults,
       });
+      resetInstr({ journal: data.journal, summary: data.summary });
+      toast('success', 'Automation instructions saved');
     },
     onError: (e) => toast('error', errorMessage(e)),
   });

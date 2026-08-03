@@ -36,13 +36,49 @@ export const aiSettingsSchema = z.object({
   model: z.string(),
 });
 export type AiSettingsForm = z.infer<typeof aiSettingsSchema>;
-export const shareCodeSchema = z.object({
-  code: z.string().trim().min(1, 'Share code is required'),
+
+// Zod schemas for the AI provider command payloads. These mirror the
+// Rust request structs in `src-tauri/src/kindroid/ai.rs` and are
+// optional — the Tauri commands accept a single `input` struct — but
+// validating client-side surfaces malformed URLs or empty user text
+// before they hit the network.
+
+const httpUrl = z
+  .string()
+  .trim()
+  .min(1, 'URL is required')
+  .refine((u) => /^https?:\/\//.test(u), 'must start with http:// or https://');
+
+export const testAiRequestSchema = z.object({
+  base_url: httpUrl,
+  model: z.string().trim().min(1, 'Model is required'),
+  bearer_token: z.string().nullable(),
 });
+export type TestAiRequestForm = z.infer<typeof testAiRequestSchema>;
+
+export const aiChatCompletionRequestSchema = z.object({
+  base_url: httpUrl,
+  model: z.string().trim().min(1, 'Model is required'),
+  system: z.string().nullable(),
+  user: z.string().trim().min(1, 'User message is required'),
+  json_mode: z.boolean(),
+  bearer_token: z.string().nullable(),
+});
+export type AiChatCompletionRequestForm = z.infer<typeof aiChatCompletionRequestSchema>;
 
 const noPlaceholderSyntax = (val: string) => !val.includes('{{') && !val.includes('}}');
 
 export const chatAutomationSettingsSchema = z.object({
+  // Fields below must mirror every field in
+  // `src-tauri/src/commands/chat_automation.rs::SetChatAutomationSettingsInput`
+  // — a previous audit (M2) found that this schema silently stripped
+  // `ai_id` / `auto_journal_enabled` / `auto_summary_enabled`, so the
+  // Tauri command received an incomplete payload. Re-adding them
+  // here is the safe half of the fix; the unsafe half was already
+  // mitigated on the Rust side (the inner `code` tag, see H1).
+  ai_id: z.string().trim().min(1, 'AI id is required'),
+  auto_journal_enabled: z.boolean(),
+  auto_summary_enabled: z.boolean(),
   interval: z
     .number({ invalid_type_error: 'Interval must be a number' })
     .int('Interval must be a whole number')

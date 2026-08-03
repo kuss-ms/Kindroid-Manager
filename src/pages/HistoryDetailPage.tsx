@@ -1,6 +1,6 @@
 import { useQuery } from '@tanstack/react-query';
 import { useNavigate, useParams } from 'react-router-dom';
-import { api } from '../lib/api';
+import { api, errorMessage } from '../lib/api';
 export function HistoryDetailPage() {
   const { id } = useParams();
   const navigate = useNavigate();
@@ -9,7 +9,19 @@ export function HistoryDetailPage() {
     queryFn: () => (id ? api.getPushLog(id) : Promise.resolve(null)),
     enabled: !!id,
   });
-  if (!entry.data) return <p className="muted">Loading…</p>;
+  if (entry.isLoading) return <p className="muted">Loading…</p>;
+  if (entry.isError)
+    return (
+      <div className="page">
+        <div className="error" role="alert" data-testid="history-detail-error">
+          Failed to load push detail: {errorMessage(entry.error)}
+        </div>
+        <button className="btn" onClick={() => navigate('/history')}>
+          ← Back
+        </button>
+      </div>
+    );
+  if (!entry.data) return <p className="muted">Push detail not found.</p>;
   const e = entry.data;
   return (
     <div className="page">

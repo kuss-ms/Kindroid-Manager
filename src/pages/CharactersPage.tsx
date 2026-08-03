@@ -117,7 +117,13 @@ export function CharactersPage() {
         {' '}
         Drop a PNG anywhere on the window (or paste from clipboard) to import a share image.{' '}
       </p>{' '}
-      {list.length === 0 && (
+      {characters.isError && (
+        <div className="error" role="alert" data-testid="characters-error">
+          Failed to load characters: {errorMessage(characters.error)}
+        </div>
+      )}
+      {characters.isLoading && <div className="muted">Loading characters…</div>}
+      {!characters.isLoading && !characters.isError && list.length === 0 && (
         <div className="empty">No characters yet. Create one or drop a share image.</div>
       )}{' '}
       {list.length > 0 && (

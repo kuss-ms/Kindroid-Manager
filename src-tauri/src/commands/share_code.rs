@@ -1,5 +1,4 @@
 use chrono::Utc;
-use serde::Serialize;
 use uuid::Uuid;
 
 use crate::domain::character::Character;
@@ -197,26 +196,6 @@ fn default_name_from_partial(p: &PartialCharacter) -> String {
         .clone()
         .filter(|s| !s.trim().is_empty())
         .unwrap_or_else(|| "Imported character".to_string())
-}
-
-#[derive(Debug, Serialize)]
-pub struct ExportShareCodeResponse {
-    pub code: String,
-}
-
-#[allow(dead_code)]
-pub async fn export_share_code_full(
-    repo: std::sync::Arc<dyn Repository>,
-    id: Uuid,
-) -> Result<ExportShareCodeResponse, AppError> {
-    let c = repo.get_character(id).await?;
-    let journals = repo
-        .list_journal_entries(id)
-        .await
-        .map_err(|e| AppError::database(e.to_string()))?;
-    Ok(ExportShareCodeResponse {
-        code: crate::domain::share_code::encode(&c, &journals),
-    })
 }
 
 #[cfg(test)]

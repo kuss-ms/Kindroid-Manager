@@ -168,6 +168,27 @@ export function SettingsPage() {
     onError: (e) => toast('error', errorMessage(e)),
   });
 
+  // Debug toggle: gates whether the chat-automation cycle captures the
+  // raw AI provider response into process memory and surfaces it via the
+  // AutomationPanel. Defaults to OFF — turning it on stores nothing on
+  // disk (privacy-preserving); the cache is process-local and is lost on
+  // restart.
+  const [debugShowResponse, setDebugShowResponse] = useState(false);
+  useEffect(() => {
+    if (settings.data) setDebugShowResponse(settings.data.debug_show_automation_response);
+  }, [settings.data]);
+  const debugDirty = debugShowResponse !== (settings.data?.debug_show_automation_response ?? false);
+  const saveDebugFlags = useMutation({
+    mutationFn: () =>
+      api.setDebugFlags({ debug_show_automation_response: debugShowResponse }),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ['settings'] });
+      queryClient.invalidateQueries({ queryKey: ['chat-automation'] });
+      toast('success', 'Debug settings saved');
+    },
+    onError: (e) => toast('error', errorMessage(e)),
+  });
+
   return (
     <div className="page">
       <div className="page-header">
@@ -389,6 +410,37 @@ export function SettingsPage() {
             </button>
           </div>
         </form>
+      </div>
+      <div className="card">
+        <h3>Debug</h3>
+        <p className="muted" style={{ fontSize: 12, marginTop: 6 }}>
+          Off by default. When <strong>Show AI response preview</strong> is on, the chat-automation
+          cycle keeps the most recent journal + summary AI provider response in process memory and
+          the AutomationPanel renders it. Nothing is written to the database — the captured
+          responses live only until the app is restarted.
+        </p>
+        <label
+          className="flex-row"
+          style={{ marginTop: 12, gap: 8, alignItems: 'center', cursor: 'pointer' }}
+        >
+          <input
+            type="checkbox"
+            checked={debugShowResponse}
+            onChange={(e) => setDebugShowResponse(e.target.checked)}
+            data-testid="debug-show-automation-response"
+          />
+          <span>Show AI response preview</span>
+        </label>
+        <div className="flex-row" style={{ marginTop: 8 }}>
+          <button
+            type="button"
+            className="btn btn-primary"
+            disabled={!debugDirty || saveDebugFlags.isPending}
+            onClick={() => saveDebugFlags.mutate()}
+          >
+            {saveDebugFlags.isPending ? 'Saving…' : 'Save debug settings'}
+          </button>
+        </div>
       </div>
       <div className="card">
         <h3>Appearance</h3>

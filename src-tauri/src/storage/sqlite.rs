@@ -138,6 +138,10 @@ fn discover_migrations() -> Result<Vec<(u32, String)>, String> {
             "0010_chat_favourite_index.sql",
             include_str!("migrations/0010_chat_favourite_index.sql"),
         ),
+        (
+            "0011_drop_automation_responses.sql",
+            include_str!("migrations/0011_drop_automation_responses.sql"),
+        ),
     ];
     let mut out = Vec::new();
     for (name, body) in bodies {
@@ -987,7 +991,7 @@ impl Repository for SqliteRepository {
              journal_initialised, summary, summary_backend_stored, pending_summary_candidate,
              pending_summary_backend, pending_summary_created_at, pending_summary_cursor_timestamp,
              pending_summary_cursor_msg_id, pending_reformat, journal_last_error, summary_last_error,
-             journal_last_run_at, summary_last_run_at, journal_last_response, summary_last_response
+             journal_last_run_at, summary_last_run_at
              FROM chat_automation_state WHERE ai_id = ?1",
             params![ai_id], row_to_chat_automation_state,
         ).optional().map_err(|e| StorageError::Database(e.to_string()))?.ok_or(StorageError::NotFound)
@@ -999,7 +1003,7 @@ impl Repository for SqliteRepository {
     ) -> Result<(), StorageError> {
         let conn = lock(&self.conn).await;
         conn.execute(
-            "INSERT INTO chat_automation_state VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,?12,?13,?14,?15,?16,?17,?18,?19,?20,?21,?22,?23,?24,?25,?26,?27,?28)
+            "INSERT INTO chat_automation_state VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,?12,?13,?14,?15,?16,?17,?18,?19,?20,?21,?22,?23,?24,?25,?26)
              ON CONFLICT(ai_id) DO UPDATE SET auto_journal_enabled=excluded.auto_journal_enabled,
              auto_summary_enabled=excluded.auto_summary_enabled, interval=excluded.interval, journal_cap=excluded.journal_cap,
              summary_backend=excluded.summary_backend, bootstrap_mode=excluded.bootstrap_mode,
@@ -1013,9 +1017,7 @@ impl Repository for SqliteRepository {
              pending_summary_cursor_msg_id=excluded.pending_summary_cursor_msg_id,
              pending_reformat=excluded.pending_reformat, journal_last_error=excluded.journal_last_error,
              summary_last_error=excluded.summary_last_error, journal_last_run_at=excluded.journal_last_run_at,
-             summary_last_run_at=excluded.summary_last_run_at,
-             journal_last_response=excluded.journal_last_response,
-             summary_last_response=excluded.summary_last_response",
+             summary_last_run_at=excluded.summary_last_run_at",
             params![s.ai_id, s.auto_journal_enabled as i32, s.auto_summary_enabled as i32, s.interval, s.journal_cap,
                 s.summary_backend.as_str(), s.bootstrap_mode.as_str(), s.journal_instructions_override, s.summary_instructions_override,
                 s.journal_cursor.as_ref().map(|c| c.timestamp), s.journal_cursor.as_ref().map(|c| c.kindroid_msg_id.as_str()),
@@ -1024,8 +1026,7 @@ impl Repository for SqliteRepository {
                 s.pending_summary_backend.as_ref().map(SummaryBackend::as_str), s.pending_summary_created_at.map(|d| d.to_rfc3339()),
                 s.pending_summary_cursor.as_ref().map(|c| c.timestamp), s.pending_summary_cursor.as_ref().map(|c| c.kindroid_msg_id.as_str()),
                 s.pending_reformat as i32, s.journal_last_error, s.summary_last_error,
-                s.journal_last_run_at.map(|d| d.to_rfc3339()), s.summary_last_run_at.map(|d| d.to_rfc3339()),
-                s.journal_last_response, s.summary_last_response]
+                s.journal_last_run_at.map(|d| d.to_rfc3339()), s.summary_last_run_at.map(|d| d.to_rfc3339())]
         ).map_err(|e| StorageError::Database(e.to_string()))?;
         Ok(())
     }
@@ -1237,8 +1238,6 @@ fn row_to_chat_automation_state(row: &rusqlite::Row<'_>) -> rusqlite::Result<Cha
         summary_last_error: row.get(23)?,
         journal_last_run_at: parse_optional_dt(row.get(24)?, 24)?,
         summary_last_run_at: parse_optional_dt(row.get(25)?, 25)?,
-        journal_last_response: row.get(26)?,
-        summary_last_response: row.get(27)?,
     })
 }
 fn run_status_str(s: AutoJournalRunStatus) -> &'static str {
@@ -2634,24 +2633,32 @@ mod tests {
     }
 
     #[test]
-    fn migration_0008_adds_columns_to_legacy_0007_state_table() {
+    fn migration_0011_drops_automation_response_columns() {
+        // Regression test for the privacy cleanup: 0011 drops
+        // journal_last_response / summary_last_response from
+        // chat_automation_state. We use the same "run migrations, roll
+        // back, run again" pattern as the 0008 / 0009 tests so the
+        // migration runs once against a v10 schema (where the columns
+        // are still present) and asserts the v10→v11 transition drops
+        // them. After the second run, the columns are gone.
         let mut conn = Connection::open_in_memory().expect("open in-memory");
         conn.execute_batch("PRAGMA foreign_keys=ON;").unwrap();
         conn.execute_batch("PRAGMA user_version = 0;").unwrap();
         run_migrations(&mut conn).unwrap();
-        // Wipe the response columns added in 0008 to simulate a DB from
-        // before that change.
+
+        // Re-add the columns (0011 just dropped them on the first run)
+        // and roll the schema back to v10 so the second `run_migrations`
+        // applies only 0011. This isolates the drop to 0011 and proves
+        // the migration lands the schema change without help from any
+        // other migration.
         conn.execute_batch(
-            "ALTER TABLE chat_automation_state DROP COLUMN journal_last_response;
-             ALTER TABLE chat_automation_state DROP COLUMN summary_last_response;",
+            "ALTER TABLE chat_automation_state ADD COLUMN journal_last_response TEXT;
+             ALTER TABLE chat_automation_state ADD COLUMN summary_last_response TEXT;",
         )
         .unwrap();
+        conn.execute_batch("PRAGMA user_version = 10;").unwrap();
 
-        // Re-running the migrator should re-add the columns via 0008
-        // without losing the table.
-        conn.execute_batch("PRAGMA user_version = 7;").unwrap();
-        run_migrations(&mut conn).unwrap();
-        let cols: Vec<String> = conn
+        let cols_before: Vec<String> = conn
             .prepare("SELECT name FROM pragma_table_info('chat_automation_state')")
             .unwrap()
             .query_map([], |r| r.get(0))
@@ -2659,13 +2666,49 @@ mod tests {
             .filter_map(|r| r.ok())
             .collect();
         assert!(
-            cols.iter().any(|c| c == "journal_last_response"),
-            "0008 should re-add journal_last_response, columns: {cols:?}"
+            cols_before.iter().any(|c| c == "journal_last_response"),
+            "pre-0011 schema should still have journal_last_response, columns: {cols_before:?}"
+        );
+
+        run_migrations(&mut conn).unwrap();
+        let cols_after: Vec<String> = conn
+            .prepare("SELECT name FROM pragma_table_info('chat_automation_state')")
+            .unwrap()
+            .query_map([], |r| r.get(0))
+            .unwrap()
+            .filter_map(|r| r.ok())
+            .collect();
+        assert!(
+            !cols_after.iter().any(|c| c == "journal_last_response"),
+            "0011 must drop journal_last_response, columns: {cols_after:?}"
         );
         assert!(
-            cols.iter().any(|c| c == "summary_last_response"),
-            "0008 should re-add summary_last_response, columns: {cols:?}"
+            !cols_after.iter().any(|c| c == "summary_last_response"),
+            "0011 must drop summary_last_response, columns: {cols_after:?}"
         );
+    }
+
+    #[tokio::test]
+    async fn chat_automation_state_round_trip_without_response_columns() {
+        // After 0011 the schema no longer carries the response fields.
+        // Confirm a full upsert → read round-trip works against the
+        // post-migration schema (would have hit a column-count mismatch
+        // if the SELECT or INSERT were still sized for 28 columns).
+        let repo = SqliteRepository::open_in_memory().unwrap();
+        let target = target("T", "ai_x");
+        repo.upsert_target(target).await.unwrap();
+
+        let state = ChatAutomationState {
+            ai_id: "ai_x".into(),
+            journal_last_error: Some("boom".into()),
+            summary_last_error: Some("kaboom".into()),
+            ..Default::default()
+        };
+        repo.upsert_chat_automation_state(&state).await.unwrap();
+        let got = repo.get_chat_automation_state("ai_x").await.unwrap();
+        assert_eq!(got.ai_id, "ai_x");
+        assert_eq!(got.journal_last_error.as_deref(), Some("boom"));
+        assert_eq!(got.summary_last_error.as_deref(), Some("kaboom"));
     }
 
     #[tokio::test]

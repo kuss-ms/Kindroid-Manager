@@ -22,6 +22,15 @@ use crate::storage::{Repository, StorageError};
 
 pub const AUTO_JOURNAL_INSTRUCTIONS_KEY: &str = "auto_journal_user_instructions";
 pub const AUTO_SUMMARY_INSTRUCTIONS_KEY: &str = "auto_summary_user_instructions";
+/// Settings-page toggle that gates the *in-memory* debug capture of the
+/// raw AI provider response. When OFF (the default) the automation cycle
+/// never stashes anything; when ON, the most recent journal and summary
+/// responses are kept in process memory and surfaced via
+/// `ChatAutomationDto::journal_last_response_debug` /
+/// `summary_last_response_debug`. The values never touch the database —
+/// see migration 0011 which dropped the prior `chat_automation_state`
+/// columns for this exact reason.
+pub const SETTING_DEBUG_SHOW_AUTOMATION_RESPONSE: &str = "debug_show_automation_response";
 const EXCLUDE_NEWEST_N: u32 = 10;
 const MAX_INSTRUCTIONS_CHARS: usize = 4000;
 
@@ -37,6 +46,17 @@ pub struct ChatAutomationDto {
     pub summary_instructions: String,
     pub recent_journal_entries: Vec<AutoJournalEntry>,
     pub automation_in_progress: bool,
+    /// Raw AI provider response from the most recent journal cycle.
+    /// Populated only when the SettingsPage debug toggle
+    /// `debug_show_automation_response` is ON; otherwise `None`. Lives in
+    /// process memory only — the database stores nothing about this.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub journal_last_response_debug: Option<String>,
+    /// Raw AI provider response from the most recent summary cycle, with
+    /// the same toggle/storage semantics as
+    /// `journal_last_response_debug`.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub summary_last_response_debug: Option<String>,
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -132,6 +152,55 @@ fn is_in_progress(ai_id: &str) -> bool {
     in_progress().lock().unwrap().contains(ai_id)
 }
 
+/// Process-memory cache of the most recent raw AI provider responses per
+/// `ai_id`, gated by the SettingsPage debug toggle. Stored as a
+/// process-global `OnceLock<Mutex<HashMap<...>>>` (like `IN_PROGRESS`
+/// above) so the background sync loop and the UI polling
+/// `get_chat_automation_state` share the same view without threading
+/// state through the trait.
+type DebugResponseMap =
+    Mutex<std::collections::HashMap<String, AutomationDebugResponses>>;
+static DEBUG_RESPONSES: OnceLock<DebugResponseMap> = OnceLock::new();
+
+fn debug_responses() -> &'static DebugResponseMap {
+    DEBUG_RESPONSES.get_or_init(|| Mutex::new(std::collections::HashMap::new()))
+}
+
+#[derive(Debug, Default, Clone)]
+struct AutomationDebugResponses {
+    journal: Option<String>,
+    summary: Option<String>,
+}
+
+/// Read the SettingsPage toggle. Missing/invalid values are treated as
+/// OFF — the privacy-safe default.
+async fn debug_response_capture_enabled(repo: &dyn Repository) -> bool {
+    match repo.get_setting(SETTING_DEBUG_SHOW_AUTOMATION_RESPONSE).await {
+        Ok(Some(v)) => matches!(v.trim().to_ascii_lowercase().as_str(), "1" | "true" | "yes" | "on"),
+        _ => false,
+    }
+}
+
+fn stash_debug_response(ai_id: &str, journal: Option<String>, summary: Option<String>) {
+    let mut map = debug_responses().lock().unwrap();
+    let entry = map.entry(ai_id.to_string()).or_default();
+    if journal.is_some() {
+        entry.journal = journal;
+    }
+    if summary.is_some() {
+        entry.summary = summary;
+    }
+}
+
+fn read_debug_responses(ai_id: &str) -> AutomationDebugResponses {
+    debug_responses()
+        .lock()
+        .unwrap()
+        .get(ai_id)
+        .cloned()
+        .unwrap_or_default()
+}
+
 pub async fn get_chat_automation_state(
     repo: Arc<dyn Repository>,
     ai_id: String,
@@ -142,6 +211,11 @@ pub async fn get_chat_automation_state(
     let recent = repo
         .list_recent_successful_auto_journal_entries(&ai_id, 5)
         .await?;
+    let debug = if debug_response_capture_enabled(&*repo).await {
+        read_debug_responses(&ai_id)
+    } else {
+        AutomationDebugResponses::default()
+    };
     Ok(ChatAutomationDto {
         journal_instructions: resolve_instructions(
             state.journal_instructions_override.as_deref(),
@@ -160,6 +234,8 @@ pub async fn get_chat_automation_state(
         state,
         recent_journal_entries: recent,
         automation_in_progress: is_in_progress(&ai_id),
+        journal_last_response_debug: debug.journal,
+        summary_last_response_debug: debug.summary,
     })
 }
 
@@ -397,15 +473,11 @@ async fn process_journal(
     );
     let prompt = journal_prompt(&instructions, &context, &prior, state.journal_cap, ai_name);
     let response = ai_completion(repo, ai, &state, journal_system_prompt(ai_name), prompt).await?;
-    tracing::info!(
-        ai_id = %ai_id,
-        bytes = response.len(),
-        "journal AI response:\n{}",
-        response
-    );
-    state.journal_last_response = Some(response.clone());
     state.journal_last_error = None;
     repo.upsert_chat_automation_state(&state).await?;
+    if debug_response_capture_enabled(&**repo).await {
+        stash_debug_response(ai_id, Some(response.clone()), None);
+    }
     let parsed = match parse_journal_payload(&response, state.journal_cap) {
         Ok(p) => p,
         Err(e) => {
@@ -609,16 +681,11 @@ async fn process_summary(
         prompt,
     )
     .await?;
-    tracing::info!(
-        ai_id = %ai_id,
-        mode = ?state.summary_backend,
-        bytes = response.len(),
-        "summary AI response:\n{}",
-        response
-    );
-    state.summary_last_response = Some(response.clone());
     state.summary_last_error = None;
     repo.upsert_chat_automation_state(&state).await?;
+    if debug_response_capture_enabled(&**repo).await {
+        stash_debug_response(ai_id, None, Some(response.clone()));
+    }
     let parsed = match parse_json_response::<SummaryResponse>(&response, "summary") {
         Ok(p) => p,
         Err(e) => {
@@ -1134,10 +1201,15 @@ async fn persist_journal_error(
 ) {
     if let Ok(mut state) = load_state(repo, ai_id).await {
         state.journal_last_error = Some(error);
-        if let Some(r) = response {
-            state.journal_last_response = Some(r);
-        }
         let _ = repo.upsert_chat_automation_state(&state).await;
+    }
+    // The raw AI response (when available) is debug-only — see
+    // `SETTING_DEBUG_SHOW_AUTOMATION_RESPONSE`. If the cycle stashed
+    // anything on the success path earlier in this run we'd already
+    // have it; this branch only updates when a JSON-parse failure
+    // happens (so the user can see what came back).
+    if response.is_some() && debug_response_capture_enabled(&**repo).await {
+        stash_debug_response(ai_id, response, None);
     }
 }
 
@@ -1149,10 +1221,10 @@ async fn persist_summary_error(
 ) {
     if let Ok(mut state) = load_state(repo, ai_id).await {
         state.summary_last_error = Some(error);
-        if let Some(r) = response {
-            state.summary_last_response = Some(r);
-        }
         let _ = repo.upsert_chat_automation_state(&state).await;
+    }
+    if response.is_some() && debug_response_capture_enabled(&**repo).await {
+        stash_debug_response(ai_id, None, response);
     }
 }
 
@@ -1322,5 +1394,31 @@ mod tests {
         // the timestamp stays at the very top of the entry.
         let out = super::prepend_date("  \n body".to_string(), "Date: X\n");
         assert_eq!(out, "Date: X\nbody");
+    }
+
+    #[test]
+    fn stash_and_read_debug_responses_round_trip() {
+        // Use a fresh ai_id that no other test touches. We don't share
+        // state with other tests; the OnceLock is process-global, but
+        // distinct ai_ids give each test its own row.
+        let ai_id = "test_debug_round_trip";
+        super::stash_debug_response(
+            ai_id,
+            Some("journal-response".into()),
+            Some("summary-response".into()),
+        );
+        let got = super::read_debug_responses(ai_id);
+        assert_eq!(got.journal.as_deref(), Some("journal-response"));
+        assert_eq!(got.summary.as_deref(), Some("summary-response"));
+
+        // A partial update keeps the other field intact.
+        super::stash_debug_response(ai_id, Some("journal-response-2".into()), None);
+        let got2 = super::read_debug_responses(ai_id);
+        assert_eq!(got2.journal.as_deref(), Some("journal-response-2"));
+        assert_eq!(
+            got2.summary.as_deref(),
+            Some("summary-response"),
+            "summary must survive a journal-only update"
+        );
     }
 }

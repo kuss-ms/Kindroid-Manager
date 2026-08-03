@@ -102,6 +102,12 @@ export interface PushRequest {
 export interface SettingsDto {
   base_url: string;
   token_configured: boolean;
+  /**
+   * When true, the chat-automation cycle captures the raw AI provider
+   * response in process memory and the AutomationPanel renders it for
+   * debugging. Lives in the `settings` table; defaults to false.
+   */
+  debug_show_automation_response: boolean;
 }
 
 export interface TestTokenResult {
@@ -265,8 +271,6 @@ export interface ChatAutomationState {
   summary_last_error: string | null;
   journal_last_run_at: string | null;
   summary_last_run_at: string | null;
-  journal_last_response: string | null;
-  summary_last_response: string | null;
 }
 
 export interface AutoJournalRun {
@@ -302,6 +306,15 @@ export interface ChatAutomationDto {
   summary_instructions: string;
   recent_journal_entries: AutoJournalEntry[];
   automation_in_progress: boolean;
+  /**
+   * Raw AI provider response from the most recent journal cycle. Populated
+   * only when the SettingsPage debug toggle `debug_show_automation_response`
+   * is ON; otherwise `undefined`. Lives in process memory only — never
+   * written to the database.
+   */
+  journal_last_response_debug?: string;
+  /** Same semantics as `journal_last_response_debug` but for summary. */
+  summary_last_response_debug?: string;
 }
 
 export interface SetChatAutomationSettingsInput {

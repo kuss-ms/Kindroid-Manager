@@ -10,6 +10,12 @@ use crate::storage::Repository;
 pub struct SettingsDto {
     pub base_url: String,
     pub token_configured: bool,
+    /// SettingsPage debug toggle. When true, the chat-automation cycle
+    /// captures the raw AI provider response into process memory and
+    /// surfaces it via `ChatAutomationDto::journal_last_response_debug`
+    /// / `summary_last_response_debug`. Lives in the `settings` table;
+    /// defaults to false.
+    pub debug_show_automation_response: bool,
 }
 
 pub async fn get_settings(repo: std::sync::Arc<dyn Repository>) -> Result<SettingsDto, AppError> {
@@ -17,9 +23,19 @@ pub async fn get_settings(repo: std::sync::Arc<dyn Repository>) -> Result<Settin
         .get_setting(SETTING_BASE_URL)
         .await?
         .unwrap_or_else(|| DEFAULT_BASE_URL.to_string());
+    let debug_show_automation_response = matches!(
+        repo.get_setting(crate::commands::chat_automation::SETTING_DEBUG_SHOW_AUTOMATION_RESPONSE)
+            .await?
+            .as_deref()
+            .map(str::trim)
+            .map(str::to_ascii_lowercase)
+            .as_deref(),
+        Some("1") | Some("true") | Some("yes") | Some("on")
+    );
     Ok(SettingsDto {
         base_url,
         token_configured: Secrets::exists(API_TOKEN_KEY),
+        debug_show_automation_response,
     })
 }
 
@@ -62,6 +78,35 @@ pub fn set_token(token: String) -> Result<(), AppError> {
 
 pub fn clear_token() -> Result<(), AppError> {
     Secrets::clear(API_TOKEN_KEY).map_err(map_secret_err)?;
+    Ok(())
+}
+
+#[derive(Debug, Deserialize)]
+pub struct SetDebugFlagsInput {
+    /// `true` to capture the raw AI provider response from each
+    /// automation cycle in process memory (no DB writes). The value is
+    /// surfaced via `ChatAutomationDto::journal_last_response_debug` /
+    /// `summary_last_response_debug` so the AutomationPanel can render
+    /// the most recent response for debugging.
+    pub debug_show_automation_response: bool,
+}
+
+/// Persist the SettingsPage debug toggles. Today there is only one
+/// (`debug_show_automation_response`); more can be added to the input
+/// struct without changing the command signature.
+pub async fn set_debug_flags(
+    repo: std::sync::Arc<dyn Repository>,
+    input: SetDebugFlagsInput,
+) -> Result<(), AppError> {
+    repo.set_setting(
+        crate::commands::chat_automation::SETTING_DEBUG_SHOW_AUTOMATION_RESPONSE,
+        if input.debug_show_automation_response {
+            "true"
+        } else {
+            "false"
+        },
+    )
+    .await?;
     Ok(())
 }
 

@@ -13,7 +13,6 @@ use crate::storage::Repository;
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
-    init_tracing();
     tauri::Builder::default()
         .setup(|app| {
             let data_dir = app.path().app_data_dir().expect("app data dir");
@@ -57,6 +56,7 @@ pub fn run() {
             tauri_wrappers::set_token,
             tauri_wrappers::clear_token,
             tauri_wrappers::test_token,
+            tauri_wrappers::set_debug_flags,
             tauri_wrappers::list_chat_messages,
             tauri_wrappers::search_chat,
             tauri_wrappers::toggle_chat_message_favourite,
@@ -85,10 +85,4 @@ pub fn run() {
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");
-}
-
-fn init_tracing() {
-    use tracing_subscriber::{fmt, EnvFilter};
-    let filter = EnvFilter::try_from_default_env().unwrap_or_else(|_| EnvFilter::new("info"));
-    let _ = fmt().with_env_filter(filter).try_init();
 }

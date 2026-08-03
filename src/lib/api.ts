@@ -260,6 +260,15 @@ export const api = {
   setToken: (token: string) => invoke<void>('set_token', { token }),
   clearToken: () => invoke<void>('clear_token'),
   testToken: () => invoke<TestTokenResult>('test_token'),
+  /**
+   * Persist SettingsPage debug toggles (currently just the
+   * `debug_show_automation_response` flag). When ON, the chat-automation
+   * cycle captures the raw AI provider response into process memory and
+   * the AutomationPanel renders it for debugging. The values never
+   * touch the database.
+   */
+  setDebugFlags: (input: { debug_show_automation_response: boolean }) =>
+    invoke<void>('set_debug_flags', { input }),
 
   // AI provider
   getAiSettings: () => invoke<AiSettingsDto>('get_ai_settings'),

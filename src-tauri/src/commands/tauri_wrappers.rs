@@ -194,8 +194,16 @@ mod inner {
     }
 
     #[tauri::command]
-    pub fn clear_token() -> Result<(), crate::error::AppError> {
+    pub async fn clear_token() -> Result<(), crate::error::AppError> {
         settings::clear_token()
+    }
+
+    #[tauri::command]
+    pub async fn set_debug_flags(
+        repo: State<'_, Repo>,
+        input: settings::SetDebugFlagsInput,
+    ) -> Result<(), crate::error::AppError> {
+        settings::set_debug_flags(repo.inner().clone(), input).await
     }
 
     #[tauri::command]

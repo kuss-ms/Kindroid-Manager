@@ -107,7 +107,6 @@ pub async fn run_sync_loop(
     )
     .await
     {
-        tracing::error!(ai_id = %ai_id, error = %e, "sync loop exited with error");
         // Preserve the existing cursor + total + full_sync_done so the
         // user can resume by clicking Sync again. We only flip to
         // `Error` and reset `is_syncing`.
@@ -383,13 +382,7 @@ async fn drain_pages(
                 let deleted = repo
                     .delete_missing_chat_messages(ai_id, sa, prev_cursor, &keep_ids)
                     .await?;
-                if deleted > 0 {
-                    tracing::info!(
-                        ai_id = %ai_id,
-                        deleted,
-                        "removed messages that were deleted on the server"
-                    );
-                }
+                let _ = deleted;
                 stats.last_deleted_count = deleted as u64;
                 // The deletes may have changed the row count, so refresh
                 // the cached total.

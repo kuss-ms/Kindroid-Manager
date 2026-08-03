@@ -578,7 +578,7 @@ export function AutomationPanel({
               {clearStuckMutation.isPending ? 'Clearing…' : 'Clear stuck runs'}
             </button>
           )}
-          {safeDto.state.journal_last_response && (
+          {safeDto.journal_last_response_debug && (
             <details style={{ marginTop: 4 }}>
               <summary className="muted" style={{ fontSize: 12, cursor: 'pointer' }}>
                 Show last AI response (debug)
@@ -596,7 +596,7 @@ export function AutomationPanel({
                   marginTop: 4,
                 }}
               >
-                {safeDto.state.journal_last_response}
+                {safeDto.journal_last_response_debug}
               </pre>
             </details>
           )}
@@ -618,7 +618,7 @@ export function AutomationPanel({
               Pending candidate ({candidateChars} chars) will be retried on the next drain.
             </p>
           )}
-          {safeDto.state.summary_last_response && (
+          {safeDto.summary_last_response_debug && (
             <details style={{ marginTop: 4 }}>
               <summary className="muted" style={{ fontSize: 12, cursor: 'pointer' }}>
                 Show last AI response (debug)
@@ -636,7 +636,7 @@ export function AutomationPanel({
                   marginTop: 4,
                 }}
               >
-                {safeDto.state.summary_last_response}
+                {safeDto.summary_last_response_debug}
               </pre>
             </details>
           )}

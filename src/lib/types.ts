@@ -11,6 +11,8 @@ export interface Character {
   ai_example_message?: string | null;
   ai_additional_context?: string | null;
   current_scene?: string | null;
+  user_name?: string | null;
+  user_gender?: string | null;
   greeting?: string | null;
   notes?: string | null;
   ai_avatar_description?: string | null;
@@ -94,7 +96,7 @@ export interface PushRequest {
   target_id: Uuid;
   fields: string[];
   chat_break?: { greeting: string; wipe_cascaded: boolean } | null;
-  journalEntryIds?: string[] | null;
+  journal_entry_ids?: string[] | null;
 }
 
 export interface SettingsDto {

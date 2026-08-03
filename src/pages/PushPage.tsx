@@ -43,7 +43,7 @@ export function PushPage() {
     enabled: !!characterId,
   });
   const fieldsParam = params.get('fields');
-  const journalParams = params.get('journalEntryIds');
+  const journalParams = params.get('journal_entry_ids');
   useEffect(() => {
     if (!character.data) return;
     if (fieldsParam) {
@@ -76,7 +76,7 @@ export function PushPage() {
         target_id: target.data.id,
         fields: Array.from(selected),
         chat_break: chatBreak ? { greeting, wipe_cascaded: wipeCascaded } : null,
-        journalEntryIds: journalIds.length ? journalIds : null,
+        journal_entry_ids: journalIds.length ? journalIds : null,
       };
       return api.pushToTarget(req);
     },

@@ -130,6 +130,14 @@ fn discover_migrations() -> Result<Vec<(u32, String)>, String> {
             "0008_chat_automation_response.sql",
             include_str!("migrations/0008_chat_automation_response.sql"),
         ),
+        (
+            "0009_push_log_create_new_ai.sql",
+            include_str!("migrations/0009_push_log_create_new_ai.sql"),
+        ),
+        (
+            "0010_chat_favourite_index.sql",
+            include_str!("migrations/0010_chat_favourite_index.sql"),
+        ),
     ];
     let mut out = Vec::new();
     for (name, body) in bodies {
@@ -373,8 +381,9 @@ impl Repository for SqliteRepository {
             "INSERT INTO push_log
              (id, at, character_id, character_name, target_id, target_ai_id, fields_sent,
               did_chat_break, greeting, wipe_cascaded, update_info_status, update_info_body,
-              chat_break_status, chat_break_body, journal_entry_ids)
-             VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,?12,?13,?14,?15)",
+              chat_break_status, chat_break_body, journal_entry_ids,
+              create_new_ai_status, create_new_ai_body)
+             VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,?12,?13,?14,?15,?16,?17)",
             params![
                 entry.id.to_string(),
                 entry.at.to_rfc3339(),
@@ -391,6 +400,8 @@ impl Repository for SqliteRepository {
                 entry.chat_break_status.map(|s| s as i64),
                 entry.chat_break_body,
                 journal_ids_json,
+                entry.create_new_ai_status.map(|s| s as i64),
+                entry.create_new_ai_body,
             ],
         )
         .map_err(|e| StorageError::Database(e.to_string()))?;
@@ -408,7 +419,8 @@ impl Repository for SqliteRepository {
                 "SELECT id, at, character_id, character_name, target_id, target_ai_id,
                         fields_sent, did_chat_break, greeting, wipe_cascaded,
                         update_info_status, update_info_body, chat_break_status,
-                        chat_break_body, journal_entry_ids
+                        chat_break_body, journal_entry_ids,
+                        create_new_ai_status, create_new_ai_body
                  FROM push_log ORDER BY at DESC LIMIT ?1 OFFSET ?2",
             )
             .map_err(|e| StorageError::Database(e.to_string()))?;
@@ -425,7 +437,8 @@ impl Repository for SqliteRepository {
             "SELECT id, at, character_id, character_name, target_id, target_ai_id,
                     fields_sent, did_chat_break, greeting, wipe_cascaded,
                     update_info_status, update_info_body, chat_break_status,
-                    chat_break_body, journal_entry_ids
+                    chat_break_body, journal_entry_ids,
+                    create_new_ai_status, create_new_ai_body
              FROM push_log WHERE id = ?1",
             params![id.to_string()],
             row_to_push_log,
@@ -469,17 +482,34 @@ impl Repository for SqliteRepository {
             .map_err(|e| StorageError::Database(e.to_string()))?;
         let rel = format!("images/{character_id}.{ext}");
         let path = self.data_dir.join(&rel);
-        // Remove any previously stored image files for this character before
-        // writing the new one. Otherwise a stale file with a different
-        // extension (e.g. the previous PNG after uploading a JPG) stays on
-        // disk and would be returned by `read_character_image_bytes`
-        // ahead of the newly written file.
-        let _ = self.delete_character_image_bytes(character_id).await;
-        tokio::fs::write(&path, bytes)
+        // Write the new bytes to a sibling `*.tmp` first, then rename
+        // atomically over the final path. Atomic rename is the POSIX /
+        // NTFS guarantee that an interrupted `write` never leaves a
+        // half-written file at the canonical path — either the new bytes
+        // are fully visible, or the previous file is unchanged. The temp
+        // name is unique per call so two concurrent uploads for the same
+        // character do not race the rename target.
+        let tmp = self.data_dir.join(format!(
+            "images/{character_id}.{ext}.{}.tmp",
+            uuid::Uuid::new_v4()
+        ));
+        tokio::fs::write(&tmp, bytes)
             .await
             .map_err(|e| StorageError::Database(e.to_string()))?;
-        // Update the character's cover_image column so the field is
-        // consistent with the file on disk.
+        if let Err(e) = tokio::fs::rename(&tmp, &path).await {
+            // Best-effort cleanup of the orphan temp; ignore the error
+            // because the rename failure is the one we have to surface.
+            let _ = tokio::fs::remove_file(&tmp).await;
+            return Err(StorageError::Database(format!(
+                "atomic image rename failed: {e}"
+            )));
+        }
+        // After the rename succeeds the canonical file on disk matches
+        // the new bytes, so it's safe to update the DB column and then
+        // delete any leftover files for this character (e.g. a previous
+        // upload with a different extension). Hold the DB mutex across
+        // the file+UPDATE sequence to serialise concurrent uploads for
+        // the same character.
         let conn = lock(&self.conn).await;
         let updated_at = now();
         conn.execute(
@@ -487,6 +517,21 @@ impl Repository for SqliteRepository {
             params![rel, updated_at.to_rfc3339(), character_id.to_string()],
         )
         .map_err(|e| StorageError::Database(e.to_string()))?;
+        drop(conn);
+        // Best-effort stale-file cleanup, scoped to files OTHER than the
+        // one we just wrote (the delete helper matches by character id
+        // prefix, so it would otherwise remove the new file too).
+        if let Ok(mut entries) = tokio::fs::read_dir(&dir).await {
+            while let Ok(Some(entry)) = entries.next_entry().await {
+                let name = entry.file_name();
+                let name = name.to_string_lossy();
+                if name.starts_with(&character_id.to_string())
+                    && name != format!("{character_id}.{ext}")
+                {
+                    let _ = tokio::fs::remove_file(entry.path()).await;
+                }
+            }
+        }
         Ok(rel)
     }
 
@@ -530,6 +575,11 @@ impl Repository for SqliteRepository {
         let mut entries = tokio::fs::read_dir(&dir)
             .await
             .map_err(|e| StorageError::Database(e.to_string()))?;
+        // Surface the FIRST delete error rather than silently swallowing
+        // it (audit M10). A stale file left behind because the OS
+        // refused the unlink (Windows file lock, perms) used to be
+        // invisible to the caller, which then wrote the new bytes over
+        // the canonical path and left the stale file shadowing them.
         while let Some(entry) = entries
             .next_entry()
             .await
@@ -538,7 +588,12 @@ impl Repository for SqliteRepository {
             let name = entry.file_name();
             let name = name.to_string_lossy();
             if name.starts_with(&character_id.to_string()) {
-                let _ = tokio::fs::remove_file(entry.path()).await;
+                if let Err(e) = tokio::fs::remove_file(entry.path()).await {
+                    return Err(StorageError::Database(format!(
+                        "failed to remove stale image file {}: {e}",
+                        entry.path().display()
+                    )));
+                }
             }
         }
         Ok(())
@@ -1311,6 +1366,7 @@ fn row_to_push_log(row: &rusqlite::Row<'_>) -> rusqlite::Result<PushLogEntry> {
     let ui_status: i64 = row.get(10)?;
     let cb_status: Option<i64> = row.get(12)?;
     let journal_ids_json: Option<String> = row.get(14)?;
+    let create_new_ai_status: Option<i64> = row.get(15)?;
     let journal_entry_ids = match journal_ids_json {
         Some(s) if !s.is_empty() => Some(serde_json::from_str(&s).map_err(|e| id_err(14, e))?),
         _ => None,
@@ -1330,8 +1386,8 @@ fn row_to_push_log(row: &rusqlite::Row<'_>) -> rusqlite::Result<PushLogEntry> {
         wipe_cascaded: wipe.map(|b| b != 0),
         update_info_status: ui_status as u16,
         update_info_body: row.get(11)?,
-        create_new_ai_status: None,
-        create_new_ai_body: None,
+        create_new_ai_status: create_new_ai_status.map(|s| s as u16),
+        create_new_ai_body: row.get(16)?,
         chat_break_status: cb_status.map(|s| s as u16),
         chat_break_body: row.get(13)?,
         journal_entry_ids,
@@ -1537,6 +1593,177 @@ mod tests {
         assert_eq!(list[0].id, entry_id);
         let got = repo.get_push_log(entry_id).await.unwrap();
         assert_eq!(got.update_info_status, 200);
+    }
+
+    #[tokio::test]
+    async fn push_log_create_new_ai_fields_round_trip() {
+        // Regression test for the C1 audit finding: real SQLite-backed
+        // push_log rows must persist the create-new-ai step result so the
+        // History detail page shows it for "Push as new Kin" pushes.
+        let repo = SqliteRepository::open_in_memory().unwrap();
+        let c = character("C");
+        let cid = c.id;
+        let t = target("T", "ai_NEW_OK");
+        let tid = t.id;
+        repo.upsert_character(c).await.unwrap();
+        repo.upsert_target(t).await.unwrap();
+
+        let entry = PushLogEntry {
+            id: Uuid::new_v4(),
+            at: Utc::now(),
+            character_id: cid,
+            character_name: "C".into(),
+            target_id: tid,
+            target_ai_id: "ai_NEW_OK".into(),
+            fields_sent: vec!["ai_name".into(), "ai_backstory".into()],
+            did_chat_break: false,
+            greeting: None,
+            wipe_cascaded: None,
+            update_info_status: 200,
+            update_info_body: "ok".into(),
+            create_new_ai_status: Some(200),
+            create_new_ai_body: Some("ai_NEW_OK".into()),
+            chat_break_status: None,
+            chat_break_body: None,
+            journal_entry_ids: None,
+        };
+        let entry_id = entry.id;
+        repo.append_push_log(entry).await.unwrap();
+
+        let got = repo.get_push_log(entry_id).await.unwrap();
+        assert_eq!(got.create_new_ai_status, Some(200));
+        assert_eq!(got.create_new_ai_body.as_deref(), Some("ai_NEW_OK"));
+
+        let list = repo.list_push_history(10, 0).await.unwrap();
+        assert_eq!(list[0].create_new_ai_status, Some(200));
+        assert_eq!(list[0].create_new_ai_body.as_deref(), Some("ai_NEW_OK"));
+    }
+
+    #[test]
+    fn migration_0009_persists_create_new_ai_columns() {
+        // The legacy simulate-and-rerun pattern from the 0008 test: confirm
+        // 0009's recreate-table migration lands the new columns on a DB
+        // that started at v8 and is rolled back.
+        let mut conn = Connection::open_in_memory().expect("open in-memory");
+        conn.execute_batch("PRAGMA foreign_keys=ON;").unwrap();
+        conn.execute_batch("PRAGMA user_version = 0;").unwrap();
+        run_migrations(&mut conn).unwrap();
+        conn.execute_batch("PRAGMA user_version = 8;").unwrap();
+        run_migrations(&mut conn).unwrap();
+        let cols: Vec<String> = conn
+            .prepare("SELECT name FROM pragma_table_info('push_log')")
+            .unwrap()
+            .query_map([], |r| r.get(0))
+            .unwrap()
+            .filter_map(|r| r.ok())
+            .collect();
+        assert!(
+            cols.iter().any(|c| c == "create_new_ai_status"),
+            "0009 should add create_new_ai_status, columns: {cols:?}"
+        );
+        assert!(
+            cols.iter().any(|c| c == "create_new_ai_body"),
+            "0009 should add create_new_ai_body, columns: {cols:?}"
+        );
+    }
+
+    #[tokio::test]
+    async fn save_character_image_atomic_rename_leaves_no_partial_file() {
+        // Regression test for the H2 audit finding: image save must
+        // write to a sibling temp file and rename atomically so an
+        // interrupted write never leaves a half-written file at the
+        // canonical path, and the cover_image column never points at a
+        // file that doesn't yet exist on disk.
+        let dir = tempfile::tempdir().unwrap();
+        let db_path = dir.path().join("kindroid.sqlite");
+        let repo = SqliteRepository::open(&db_path).unwrap();
+        let c = character("C");
+        let cid = c.id;
+        repo.upsert_character(c).await.unwrap();
+
+        // Minimal valid PNG bytes (1×1 transparent).
+        let png = [
+            0x89u8, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a, 0x00, 0x00, 0x00, 0x0d, 0x49, 0x48,
+            0x44, 0x52, 0x00, 0x00, 0x00, 0x01, 0x00, 0x00, 0x00, 0x01, 0x08, 0x06, 0x00, 0x00,
+            0x00, 0x1f, 0x15, 0xc4, 0x89, 0x00, 0x00, 0x00, 0x0d, 0x49, 0x44, 0x41, 0x54, 0x78,
+            0x9c, 0x63, 0x00, 0x01, 0x00, 0x00, 0x05, 0x00, 0x01, 0x0d, 0x0a, 0x2d, 0xb4, 0x00,
+            0x00, 0x00, 0x00, 0x49, 0x45, 0x4e, 0x44, 0xae, 0x42, 0x60, 0x82,
+        ];
+
+        let rel = repo.save_character_image_bytes(cid, &png).await.unwrap();
+        assert_eq!(rel, format!("images/{cid}.png"));
+
+        // Final file is exactly the bytes we wrote.
+        let on_disk = tokio::fs::read(dir.path().join(&rel)).await.unwrap();
+        assert_eq!(on_disk, png);
+
+        // No leftover `*.tmp` files in the images dir after a successful
+        // save.
+        let mut tmp_count = 0usize;
+        let mut entries = tokio::fs::read_dir(dir.path().join("images"))
+            .await
+            .unwrap();
+        while let Some(e) = entries.next_entry().await.unwrap() {
+            let n = e.file_name();
+            if n.to_string_lossy().ends_with(".tmp") {
+                tmp_count += 1;
+            }
+        }
+        assert_eq!(tmp_count, 0, "atomic save must not leave temp files");
+
+        // Column and disk agree.
+        let after = repo.get_character(cid).await.unwrap();
+        assert_eq!(after.cover_image.as_deref(), Some(rel.as_str()));
+
+        // Re-saving with different content (different extension this
+        // time, a JPEG) replaces the old file and the column updates.
+        let jpg = [
+            0xFFu8, 0xD8, 0xFF, 0xE0, 0x00, 0x10, b'J', b'F', b'I', b'F', 0, 0, 0, 0, 0, 0,
+        ];
+        let rel2 = repo.save_character_image_bytes(cid, &jpg).await.unwrap();
+        assert_eq!(rel2, format!("images/{cid}.jpg"));
+        let on_disk2 = tokio::fs::read(dir.path().join(&rel2)).await.unwrap();
+        assert_eq!(on_disk2, jpg);
+        // Stale PNG is best-effort cleaned up.
+        let stale_exists = tokio::fs::try_exists(dir.path().join(format!("images/{cid}.png")))
+            .await
+            .unwrap();
+        assert!(
+            !stale_exists,
+            "stale PNG from previous upload should be removed"
+        );
+    }
+
+    #[test]
+    fn migration_0010_creates_partial_favourite_index() {
+        // Regression test for the H3 audit finding: the favourites_only
+        // filter path needs an index on chat_messages.favourite or it
+        // degrades to a full table scan as the table grows.
+        let mut conn = Connection::open_in_memory().expect("open in-memory");
+        conn.execute_batch("PRAGMA foreign_keys=ON;").unwrap();
+        conn.execute_batch("PRAGMA user_version = 0;").unwrap();
+        run_migrations(&mut conn).unwrap();
+        let mut stmt = conn
+            .prepare(
+                "SELECT name, sql FROM sqlite_master
+                 WHERE type = 'index' AND tbl_name = 'chat_messages'",
+            )
+            .unwrap();
+        let mut rows = stmt.query([]).unwrap();
+        let mut found = false;
+        while let Some(r) = rows.next().unwrap() {
+            let name: String = r.get(0).unwrap();
+            let sql: Option<String> = r.get(1).unwrap();
+            if name == "idx_chat_messages_favourite" {
+                let sql = sql.unwrap_or_default();
+                assert!(
+                    sql.contains("WHERE favourite = 1"),
+                    "index should be partial, got: {sql}"
+                );
+                found = true;
+            }
+        }
+        assert!(found, "0010 should create idx_chat_messages_favourite");
     }
 
     #[test]

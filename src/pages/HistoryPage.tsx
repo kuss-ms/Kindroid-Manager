@@ -1,7 +1,7 @@
 import { useQuery } from '@tanstack/react-query';
 import { useNavigate } from 'react-router-dom';
 import { useState } from 'react';
-import { api } from '../lib/api';
+import { api, errorMessage } from '../lib/api';
 import type { PushLogEntry } from '../lib/types';
 export function HistoryPage() {
   const [limit] = useState(50);
@@ -17,7 +17,12 @@ export function HistoryPage() {
         <h2>Push history</h2>
       </div>
       {history.isLoading && <p className="muted">Loading…</p>}
-      {(history.data ?? []).length === 0 && !history.isLoading && (
+      {history.isError && (
+        <div className="error" role="alert" data-testid="history-error">
+          Failed to load push history: {errorMessage(history.error)}
+        </div>
+      )}
+      {(history.data ?? []).length === 0 && !history.isLoading && !history.isError && (
         <div className="empty">No pushes yet.</div>
       )}
       {(history.data ?? []).length > 0 && (
@@ -77,7 +82,7 @@ export function HistoryPage() {
                       const wipe = row.wipe_cascaded ? '1' : '0';
                       const journalIds =
                         row.journal_entry_ids && row.journal_entry_ids.length > 0
-                          ? `&journalEntryIds=${encodeURIComponent(row.journal_entry_ids.join(','))}`
+                          ? `&journal_entry_ids=${encodeURIComponent(row.journal_entry_ids.join(','))}`
                           : '';
                       navigate(
                         `/push?characterId=${row.character_id}&targetId=${row.target_id}&fields=${fields}&chatBreak=${cb}&greeting=${encodeURIComponent(greet)}&wipe=${wipe}${journalIds}`,

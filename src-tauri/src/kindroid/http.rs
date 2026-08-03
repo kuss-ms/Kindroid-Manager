@@ -87,7 +87,11 @@ impl HttpKindroidClient {
             .await
         {
             Ok(r) => r,
-            Err(e) => return Err(KindroidError::Network(e.to_string())),
+            Err(e) => {
+                return Err(KindroidError::Network {
+                    message: e.to_string(),
+                })
+            }
         };
         let status = resp.status().as_u16();
         let headers = resp.headers().clone();
@@ -115,7 +119,11 @@ impl HttpKindroidClient {
             .await
         {
             Ok(r) => r,
-            Err(e) => return Err(KindroidError::Network(e.to_string())),
+            Err(e) => {
+                return Err(KindroidError::Network {
+                    message: e.to_string(),
+                })
+            }
         };
         let status = resp.status().as_u16();
         let headers = resp.headers().clone();

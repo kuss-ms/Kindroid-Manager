@@ -55,31 +55,139 @@ export interface SettingsInput {
 }
 
 /**
- * Extract a human-readable message from a Tauri invoke rejection.
- * Tauri 2 wraps the JSON-serialized `AppError` as
- * `{ message: '{"kind":"…","message":"…"}' }`. For nested AppError
- * shapes we surface the inner `message` field; for plain strings we
- * pass them through; for anything else we fall back to `String(e)`.
+ * Tauri 2 wraps every `invoke` rejection as
+ * `{ message: '<serialized error>' }`. For an `AppError` the inner string
+ * is the JSON-encoded tagged enum from `error.rs`:
+ *   `{"kind":"…", …payload}`
+ * For a plain `Result<_, String>` command the inner is a raw string.
+ *
+ * This helper extracts a human-readable string for every known variant,
+ * including the nested `KindroidError` / `AiError` / `SecretStoreError`
+ * payloads. The nested enums are tagged with `code` (not `kind`) so the
+ * outer `AppError.kind` and the inner `…code` discriminator do not
+ * collide in the JSON. Unknown shapes fall back to the raw `e.message`
+ * string.
  */
 export function errorMessage(e: unknown): string {
   if (typeof e === 'string') return e;
-  if (e && typeof e === 'object') {
-    const any = e as Record<string, unknown>;
-    const raw = any.message;
-    if (typeof raw === 'string') {
-      try {
-        const inner = JSON.parse(raw);
-        if (inner && typeof inner === 'object' && 'message' in inner) {
-          const m = (inner as Record<string, unknown>).message;
-          if (typeof m === 'string') return m;
-        }
-      } catch {
-        // Not JSON — fall through to the raw message string.
-      }
-      return raw;
-    }
+  if (!e || typeof e !== 'object') return String(e);
+
+  const any = e as Record<string, unknown>;
+  const raw = any.message;
+  if (typeof raw !== 'string') return String(e);
+
+  let inner: Record<string, unknown> | null = null;
+  try {
+    const parsed = JSON.parse(raw);
+    if (parsed && typeof parsed === 'object') inner = parsed as Record<string, unknown>;
+  } catch {
+    return raw;
   }
-  return String(e);
+  if (!inner) return raw;
+
+  const kind = inner.kind as string | undefined;
+  switch (kind) {
+    case 'not_found':
+      return 'Not found.';
+    case 'invalid':
+      return `Invalid input: ${stringField(inner, 'message') ?? 'unknown'}`;
+    case 'nothing_to_push':
+      return 'Nothing to push — pick a character and a target with persona fields selected.';
+    case 'missing_greeting':
+      return 'A greeting is required when chat-break is enabled.';
+    case 'token_missing':
+      return 'No API token configured — open Settings and set a token first.';
+    case 'share_code':
+      return `Invalid share image: ${stringField(inner, 'message') ?? 'malformed'}`;
+    case 'database':
+      return `Storage error: ${stringField(inner, 'message') ?? 'unknown'}`;
+    case 'internal':
+      return `Internal error: ${stringField(inner, 'message') ?? 'unknown'}`;
+    case 'sync_conflict':
+      return `A sync is already running for ${
+        stringField(inner, 'aiId') ?? stringField(inner, 'ai_id') ?? 'another target'
+      }. Cancel it first.`;
+    case 'secret':
+      return secretMessage(inner);
+    case 'kindroid':
+      return kindroidMessage(inner);
+    case 'ai':
+      return aiMessage(inner);
+    default:
+      return raw;
+  }
+}
+
+function stringField(o: Record<string, unknown>, k: string): string | null {
+  const v = o[k];
+  return typeof v === 'string' ? v : null;
+}
+
+function secretMessage(o: Record<string, unknown>): string {
+  const code = o.code as string | undefined;
+  const body = stringField(o, 'body') ?? stringField(o, 'message');
+  switch (code) {
+    case 'unavailable':
+      return 'OS keychain is not available — the token cannot be stored. Check that a Secret Service / Credential Manager / Keychain is running.';
+    case 'access_denied':
+      return 'The keychain denied access to the token. Re-enter it in Settings.';
+    case 'not_found':
+      return 'No token stored — open Settings and set one.';
+    case 'other':
+      return body ? `Keychain error: ${body}` : 'Keychain error.';
+    default:
+      return body ?? 'Keychain error.';
+  }
+}
+
+function kindroidMessage(o: Record<string, unknown>): string {
+  const code = o.code as string | undefined;
+  const body = stringField(o, 'body') ?? '';
+  switch (code) {
+    case 'auth':
+      return 'Invalid or missing API key — check the token in Settings.';
+    case 'rate_limited':
+      return body
+        ? `Rate limited by Kindroid. ${body}`
+        : 'Rate limited by Kindroid. Try again in a moment.';
+    case 'bad_request':
+      return body ? `Kindroid rejected the request: ${body}` : 'Kindroid rejected the request.';
+    case 'not_found':
+      return 'Kindroid returned 404 — the target may have been deleted on the server.';
+    case 'server':
+      return body ? `Kindroid server error: ${body}` : 'Kindroid server error.';
+    case 'network':
+      return body ? `(network) ${body}` : '(network) request failed.';
+    default:
+      return body || 'Kindroid request failed.';
+  }
+}
+
+function aiMessage(o: Record<string, unknown>): string {
+  const code = o.code as string | undefined;
+  const body = stringField(o, 'body') ?? '';
+  switch (code) {
+    case 'auth':
+      return body
+        ? `AI provider rejected the credentials: ${body}`
+        : 'AI provider rejected the credentials — check the bearer token in Settings.';
+    case 'rate_limited':
+      return body ? `AI provider rate limited: ${body}` : 'AI provider rate limited.';
+    case 'bad_request':
+      return body
+        ? `AI provider rejected the request: ${body}`
+        : 'AI provider rejected the request.';
+    case 'server':
+      return body ? `AI provider server error: ${body}` : 'AI provider server error.';
+    case 'network':
+      return body ? `(network) ${body}` : '(network) AI request failed.';
+    case 'decode':
+      return body
+        ? `AI provider returned an unparseable response: ${body}`
+        : 'AI provider returned an unparseable response.';
+    default:
+      return body || 'AI request failed.';
+  }
 }
 
 export const api = {

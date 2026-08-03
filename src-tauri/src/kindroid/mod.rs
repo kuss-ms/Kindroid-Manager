@@ -92,7 +92,7 @@ pub struct RawChatMessage {
 }
 
 #[derive(Debug, Clone, Serialize, Error)]
-#[serde(tag = "kind", rename_all = "snake_case")]
+#[serde(tag = "code", rename_all = "snake_case")]
 pub enum KindroidError {
     #[error("invalid or missing API key")]
     Auth { status: u16, body: String },
@@ -108,8 +108,8 @@ pub enum KindroidError {
     NotFound { status: u16, body: String },
     #[error("server error")]
     Server { status: u16, body: String },
-    #[error("(network) {0}")]
-    Network(String),
+    #[error("(network) {message}")]
+    Network { message: String },
 }
 
 pub const REQUEST_TIMEOUT: Duration = Duration::from_secs(30);

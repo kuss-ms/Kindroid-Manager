@@ -141,7 +141,7 @@ pub async fn test_token(
             message: format!("Server error {status}: {body}"),
             status,
         },
-        Err(crate::kindroid::KindroidError::Network(msg)) => TestTokenResult {
+        Err(crate::kindroid::KindroidError::Network { message: msg }) => TestTokenResult {
             ok: false,
             rate_limited: false,
             message: format!("(network) {msg}"),
@@ -152,5 +152,5 @@ pub async fn test_token(
 }
 
 fn map_secret_err(e: SecretStoreError) -> AppError {
-    AppError::Secret(e)
+    AppError::from(e)
 }

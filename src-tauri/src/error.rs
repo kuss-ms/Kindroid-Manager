@@ -29,12 +29,45 @@ pub enum AppError {
     Internal { message: String },
     #[error("sync already running for {ai_id}")]
     SyncConflict { ai_id: String },
+    // Transparent wrappers are emitted as struct variants with
+    // `#[serde(flatten)]` so the outer `kind` is preserved and the inner
+    // enum's fields (including its own `code` discriminator) are
+    // inlined. The frontend `errorMessage()` dispatches on
+    // `inner.kind` first, then on the inner `code` (see tests in
+    // `error.rs` and `src/lib/api.test.ts`).
     #[error(transparent)]
-    Secret(#[from] SecretStoreError),
+    Secret {
+        #[serde(flatten)]
+        source: SecretStoreError,
+    },
     #[error(transparent)]
-    Kindroid(#[from] KindroidError),
+    Kindroid {
+        #[serde(flatten)]
+        source: KindroidError,
+    },
     #[error(transparent)]
-    Ai(#[from] AiError),
+    Ai {
+        #[serde(flatten)]
+        source: AiError,
+    },
+}
+
+impl From<SecretStoreError> for AppError {
+    fn from(source: SecretStoreError) -> Self {
+        AppError::Secret { source }
+    }
+}
+
+impl From<KindroidError> for AppError {
+    fn from(source: KindroidError) -> Self {
+        AppError::Kindroid { source }
+    }
+}
+
+impl From<AiError> for AppError {
+    fn from(source: AiError) -> Self {
+        AppError::Ai { source }
+    }
 }
 
 impl AppError {
@@ -145,5 +178,30 @@ mod tests {
             let json = serde_json::to_string(&v).expect("serialize");
             assert!(json.contains("\"kind\":"), "missing kind tag: {json}");
         }
+    }
+
+    #[test]
+    fn transparent_wrappers_use_distinct_code_tag() {
+        // The inner enums (SecretStoreError, KindroidError, AiError) use
+        // `#[serde(tag = "code")]` and the outer `AppError` wraps them
+        // in struct variants with `#[serde(flatten)]`. The wire format
+        // is therefore `{"kind":"<wrapper>","code":"<inner>"}` with no
+        // duplicate keys. Locking the shape protects the frontend
+        // `errorMessage()` dispatcher from silent regressions.
+        let s = AppError::Secret {
+            source: SecretStoreError::Unavailable,
+        };
+        let s_json = serde_json::to_string(&s).unwrap();
+        assert_eq!(s_json, r#"{"kind":"secret","code":"unavailable"}"#);
+        let s2 = AppError::Secret {
+            source: SecretStoreError::Other {
+                body: "disk full".into(),
+            },
+        };
+        let s2_json = serde_json::to_string(&s2).unwrap();
+        assert_eq!(
+            s2_json,
+            r#"{"kind":"secret","code":"other","body":"disk full"}"#
+        );
     }
 }

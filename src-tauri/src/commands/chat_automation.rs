@@ -349,7 +349,7 @@ async fn process_journal(
     let token = match Secrets::get(API_TOKEN_KEY) {
         Ok(token) => token,
         Err(SecretStoreError::NotFound) => return Err(AppError::TokenMissing),
-        Err(e) => return Err(AppError::Secret(e)),
+        Err(e) => return Err(AppError::from(e)),
     };
     let base_url = repo
         .get_setting(SETTING_BASE_URL)
@@ -670,7 +670,7 @@ async fn send_summary_candidate(
     let token = match Secrets::get(API_TOKEN_KEY) {
         Ok(token) => token,
         Err(SecretStoreError::NotFound) => return Err(AppError::TokenMissing),
-        Err(e) => return Err(AppError::Secret(e)),
+        Err(e) => return Err(AppError::from(e)),
     };
     let base_url = repo
         .get_setting(SETTING_BASE_URL)
@@ -731,7 +731,7 @@ async fn ai_completion(
     let bearer = match Secrets::get(AI_TOKEN_KEY) {
         Ok(token) => token,
         Err(SecretStoreError::NotFound) => String::new(),
-        Err(e) => return Err(AppError::Secret(e)),
+        Err(e) => return Err(AppError::from(e)),
     };
     let response = ai
         .chat_completion(
@@ -1163,7 +1163,7 @@ fn kindroid_status(error: &crate::kindroid::KindroidError) -> u16 {
         | crate::kindroid::KindroidError::BadRequest { status, .. }
         | crate::kindroid::KindroidError::NotFound { status, .. }
         | crate::kindroid::KindroidError::Server { status, .. } => *status,
-        crate::kindroid::KindroidError::Network(_) => 0,
+        crate::kindroid::KindroidError::Network { message: _ } => 0,
     }
 }
 

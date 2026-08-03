@@ -35,7 +35,7 @@ pub const AI_TOKEN_KEY: &str = "ai_api_token";
 static ANDROID_DATA_DIR: OnceLock<PathBuf> = OnceLock::new();
 
 #[derive(Debug, Error, Serialize)]
-#[serde(tag = "kind", rename_all = "snake_case")]
+#[serde(tag = "code", rename_all = "snake_case")]
 pub enum SecretStoreError {
     #[error("OS keychain is not available")]
     Unavailable,
@@ -43,8 +43,8 @@ pub enum SecretStoreError {
     AccessDenied,
     #[error("no token stored")]
     NotFound,
-    #[error("keychain error: {0}")]
-    Other(String),
+    #[error("keychain error: {body}")]
+    Other { body: String },
 }
 
 pub struct Secrets;
@@ -123,7 +123,9 @@ fn map_err(e: keyring::Error) -> SecretStoreError {
         Error::NoEntry => SecretStoreError::NotFound,
         Error::PlatformFailure(_) | Error::NoStorageAccess(_) => SecretStoreError::Unavailable,
         Error::Ambiguous(_) | Error::Invalid(_, _) => SecretStoreError::AccessDenied,
-        other => SecretStoreError::Other(other.to_string()),
+        other => SecretStoreError::Other {
+            body: other.to_string(),
+        },
     }
 }
 
@@ -145,22 +147,30 @@ fn read_token_file(p: &Path) -> Result<Option<String>, SecretStoreError> {
             }
         }
         Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(None),
-        Err(e) => Err(SecretStoreError::Other(e.to_string())),
+        Err(e) => Err(SecretStoreError::Other {
+            body: e.to_string(),
+        }),
     }
 }
 
 fn write_token_file(p: &Path, token: &str) -> Result<(), SecretStoreError> {
     if let Some(parent) = p.parent() {
-        std::fs::create_dir_all(parent).map_err(|e| SecretStoreError::Other(e.to_string()))?;
+        std::fs::create_dir_all(parent).map_err(|e| SecretStoreError::Other {
+            body: e.to_string(),
+        })?;
     }
-    std::fs::write(p, token).map_err(|e| SecretStoreError::Other(e.to_string()))
+    std::fs::write(p, token).map_err(|e| SecretStoreError::Other {
+        body: e.to_string(),
+    })
 }
 
 fn delete_token_file(p: &Path) -> Result<(), SecretStoreError> {
     match std::fs::remove_file(p) {
         Ok(()) => Ok(()),
         Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(()),
-        Err(e) => Err(SecretStoreError::Other(e.to_string())),
+        Err(e) => Err(SecretStoreError::Other {
+            body: e.to_string(),
+        }),
     }
 }
 

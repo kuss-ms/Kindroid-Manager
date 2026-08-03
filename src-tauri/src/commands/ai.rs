@@ -270,7 +270,7 @@ fn keychain_token() -> Result<Option<String>, AppError> {
     match Secrets::get(AI_TOKEN_KEY) {
         Ok(t) => Ok(Some(t)),
         Err(SecretStoreError::NotFound) => Ok(None),
-        Err(e) => Err(AppError::Secret(e)),
+        Err(e) => Err(AppError::from(e)),
     }
 }
 
@@ -309,7 +309,7 @@ fn map_test_result(
                 message: format!("Rate limited (status {status}{extra})"),
             }
         }
-        Err(AiError::Network(msg)) => TestAiResult {
+        Err(AiError::Network { message: msg }) => TestAiResult {
             ok: false,
             status: 0,
             message: format!("(network) {msg}"),
@@ -328,12 +328,12 @@ fn other_status(err: &AiError) -> u16 {
         | AiError::BadRequest { status, .. }
         | AiError::RateLimited { status, .. }
         | AiError::Server { status, .. } => *status,
-        AiError::Network(_) | AiError::Decode(_) => 0,
+        AiError::Network { message: _ } | AiError::Decode { message: _ } => 0,
     }
 }
 
 fn map_secret_err(e: SecretStoreError) -> AppError {
-    AppError::Secret(e)
+    AppError::from(e)
 }
 
 #[cfg(test)]

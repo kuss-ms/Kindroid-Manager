@@ -80,7 +80,7 @@ pub async fn toggle_chat_message_favourite(
 }
 
 fn map_secret_err(e: SecretStoreError) -> AppError {
-    AppError::Secret(e)
+    AppError::from(e)
 }
 
 pub async fn chat_message_count(repo: Arc<dyn Repository>, ai_id: String) -> Result<u64, AppError> {

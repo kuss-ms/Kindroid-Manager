@@ -9,7 +9,7 @@ use thiserror::Error;
 pub const REQUEST_TIMEOUT: Duration = Duration::from_secs(30);
 
 #[derive(Debug, Error, Serialize)]
-#[serde(tag = "kind", rename_all = "snake_case")]
+#[serde(tag = "code", rename_all = "snake_case")]
 pub enum AiError {
     #[error("auth failed: {body}")]
     Auth { status: u16, body: String },
@@ -23,10 +23,10 @@ pub enum AiError {
     },
     #[error("server error {status}: {body}")]
     Server { status: u16, body: String },
-    #[error("(network) {0}")]
-    Network(String),
-    #[error("decode error: {0}")]
-    Decode(String),
+    #[error("(network) {message}")]
+    Network { message: String },
+    #[error("decode error: {message}")]
+    Decode { message: String },
 }
 
 #[derive(Debug, Serialize)]
@@ -120,7 +120,11 @@ impl AiClient for HttpAiClient {
         }
         let resp = match builder.json(&req).send().await {
             Ok(r) => r,
-            Err(e) => return Err(AiError::Network(e.to_string())),
+            Err(e) => {
+                return Err(AiError::Network {
+                    message: e.to_string(),
+                })
+            }
         };
         let status = resp.status().as_u16();
         let headers = resp.headers().clone();
@@ -133,12 +137,16 @@ impl AiClient for HttpAiClient {
             return Err(map_error(status, &headers, body));
         }
         let parsed: ChatCompletionBody =
-            serde_json::from_str(&body).map_err(|e| AiError::Decode(e.to_string()))?;
+            serde_json::from_str(&body).map_err(|e| AiError::Decode {
+                message: e.to_string(),
+            })?;
         let choice = parsed
             .choices
             .into_iter()
             .next()
-            .ok_or_else(|| AiError::Decode("missing choices".into()))?;
+            .ok_or_else(|| AiError::Decode {
+                message: "missing choices".into(),
+            })?;
         Ok(ChatCompletionResponse {
             content: choice.message.content,
             model: parsed.model,
@@ -401,7 +409,7 @@ mod tests {
             .chat_completion("http://127.0.0.1:1/v1", Some("t"), make_request())
             .await
             .unwrap_err();
-        assert!(matches!(err, AiError::Network(_)));
+        assert!(matches!(err, AiError::Network { message: _ }));
     }
 
     #[tokio::test]
@@ -419,7 +427,7 @@ mod tests {
             .chat_completion(&server.uri(), Some("t"), make_request())
             .await
             .unwrap_err();
-        assert!(matches!(err, AiError::Decode(_)));
+        assert!(matches!(err, AiError::Decode { message: _ }));
     }
 
     #[tokio::test]
@@ -435,7 +443,7 @@ mod tests {
             .chat_completion(&server.uri(), Some("t"), make_request())
             .await
             .unwrap_err();
-        assert!(matches!(err, AiError::Decode(_)));
+        assert!(matches!(err, AiError::Decode { message: _ }));
     }
 
     #[tokio::test]

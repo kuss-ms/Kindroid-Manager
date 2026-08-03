@@ -271,7 +271,7 @@ fn error_body(error: &KindroidError) -> String {
         | KindroidError::BadRequest { body, .. }
         | KindroidError::NotFound { body, .. }
         | KindroidError::Server { body, .. } => body.clone(),
-        KindroidError::Network(message) => message.clone(),
+        KindroidError::Network { message } => message.clone(),
     }
 }
 
@@ -464,7 +464,7 @@ fn error_step_result(e: &KindroidError) -> StepResult {
         | KindroidError::BadRequest { status, .. }
         | KindroidError::NotFound { status, .. }
         | KindroidError::Server { status, .. } => *status,
-        KindroidError::Network(_) => 0,
+        KindroidError::Network { message: _ } => 0,
     };
     StepResult {
         status,

@@ -811,7 +811,7 @@ export function ChatHistoryPage() {
             </div>
             <p className="muted" style={{ fontSize: 12, marginTop: 0 }}>
               Configure auto-journal and auto-summary for <code>{selectedAiId}</code>. Changes are
-              saved immediately.
+              applied when you click <strong>Save settings</strong>.
             </p>
             <AutomationPanel
               aiId={selectedAiId}

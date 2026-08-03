@@ -980,23 +980,46 @@ fn before_cursor(a: &StableMessageCursor, b: &StableMessageCursor) -> bool {
 }
 
 /// Try to coax a single JSON object out of an AI response. Models
-/// sometimes wrap replies in markdown code fences or add a leading
-/// apology / explanation that breaks a naive `serde_json::from_str`.
-/// We try the raw payload first, then strip a single ``` fence, then
+/// sometimes wrap replies in markdown code fences, add a leading
+/// apology / explanation, or (commonly) wrap the expected object in a
+/// single-element array like `[{"entries": [...]}]` because the chat
+/// completion API accepts both. We try the raw payload first, then
+/// strip a single ``` fence, then unwrap a single-element array, then
 /// take the substring from the first `{` to the last matching `}`.
 /// The first successful parse wins.
 fn extract_json_object(raw: &str) -> Option<&str> {
     let trimmed = raw.trim();
-    if try_parse(trimmed) {
-        return Some(trimmed);
+    if let Some(slice) = try_extract_object(trimmed) {
+        return Some(slice);
     }
     let fenced = strip_fenced(trimmed);
-    if try_parse(&fenced) {
-        return find_in(trimmed, &fenced);
+    if let Some(slice) = try_extract_object(&fenced) {
+        return find_in(trimmed, slice);
     }
     let sliced = slice_first_object(trimmed);
     if !sliced.is_empty() && try_parse(&sliced) {
         return find_in(trimmed, &sliced);
+    }
+    None
+}
+
+/// Try to extract a JSON object substring from `s`. Accepts either a
+/// bare object or a single-element array wrapping the object (some
+/// models return `[{"entries": [...]}]` despite the prompt asking for
+/// `{"entries": [...]}`). Returns a slice of `s` that serde can
+/// deserialize into the expected struct.
+fn try_extract_object(s: &str) -> Option<&str> {
+    let value = serde_json::from_str::<serde_json::Value>(s).ok()?;
+    if value.is_object() {
+        return Some(s);
+    }
+    if let Some(first) = value.as_array().and_then(|arr| arr.first()) {
+        if first.is_object() {
+            let sliced = slice_first_object(s);
+            if !sliced.is_empty() {
+                return find_in(s, &sliced);
+            }
+        }
     }
     None
 }
@@ -1291,6 +1314,18 @@ mod tests {
         let slice = extract_json_object(raw).unwrap();
         let ptr = slice.as_ptr();
         assert!(raw.as_ptr() <= ptr && ptr <= raw.as_ptr().wrapping_add(raw.len()));
+    }
+
+    #[test]
+    fn parse_json_response_unwraps_single_element_array() {
+        // Some models wrap the expected object in a single-element array
+        // (e.g. `[{"entries":[...]}]`) despite the prompt asking for a
+        // bare object. The parser must unwrap that to the inner object.
+        let raw = r#"[{"entries":[{"entry":"Kira is a violet-eyed Succubus with wings.","keyphrases":["Kira","Succubus"]}]}]"#;
+        let parsed: Sample = parse_json_response(raw, "journal").unwrap();
+        assert_eq!(parsed.entries.len(), 1);
+        assert_eq!(parsed.entries[0].entry, "Kira is a violet-eyed Succubus with wings.");
+        assert_eq!(parsed.entries[0].keyphrases, vec!["Kira", "Succubus"]);
     }
 
     #[test]

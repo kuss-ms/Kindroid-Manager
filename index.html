@@ -3,7 +3,36 @@
   <head>
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <meta name="color-scheme" content="light dark" />
     <title>Kindroid Manager</title>
+    <script>
+      // Read the saved theme preference synchronously and apply it to
+      // <html> before the first paint, so users with dark mode enabled
+      // never see a light flash. Mirrors the logic in src/lib/theme.ts —
+      // the React hook then takes over and keeps the attribute in sync
+      // when the user changes the setting in Settings.
+      //
+      // "system" leaves data-theme unset so the @media
+      // (prefers-color-scheme: dark) CSS rules can pick the palette
+      // based on the live OS setting, even before React mounts.
+      (function () {
+        try {
+          var stored = localStorage.getItem('kindroid-manager.theme');
+          var pref = stored === 'light' || stored === 'dark' ? stored : 'system';
+          var resolved;
+          if (pref === 'system') {
+            var mq = window.matchMedia('(prefers-color-scheme: dark)');
+            resolved = mq.matches ? 'dark' : 'light';
+          } else {
+            resolved = pref;
+          }
+          document.documentElement.setAttribute('data-theme', resolved);
+          document.documentElement.style.colorScheme = resolved;
+        } catch (e) {
+          document.documentElement.setAttribute('data-theme', 'light');
+        }
+      })();
+    </script>
   </head>
   <body>
     <div id="root"></div>

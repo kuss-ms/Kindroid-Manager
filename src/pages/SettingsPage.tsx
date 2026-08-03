@@ -4,11 +4,17 @@ import { useForm } from 'react-hook-form';
 import { zodResolver } from '@hookform/resolvers/zod';
 import { api, errorMessage } from '../lib/api';
 import { aiSettingsSchema, automationInstructionsSchema, settingsSchema } from '../lib/schemas';
+import { useTheme, type ThemePreference } from '../lib/theme';
 import { ConfirmDialog } from '../components/ConfirmDialog';
 import { toast } from '../components/Toaster';
 
 export function SettingsPage() {
   const queryClient = useQueryClient();
+  const {
+    preference: themePreference,
+    setPreference: setThemePreference,
+    effective: effectiveTheme,
+  } = useTheme();
   const settings = useQuery({ queryKey: ['settings'], queryFn: api.getSettings });
   const aiSettings = useQuery({ queryKey: ['ai-settings'], queryFn: api.getAiSettings });
   const [token, setToken] = useState('');
@@ -383,6 +389,38 @@ export function SettingsPage() {
             </button>
           </div>
         </form>
+      </div>
+      <div className="card">
+        <h3>Appearance</h3>
+        <p className="muted" style={{ fontSize: 12, marginTop: 6 }}>
+          Theme preference. <strong>System</strong> follows your operating system setting. Your
+          choice is saved on this device only.
+        </p>
+        <div
+          role="radiogroup"
+          aria-label="Color theme"
+          className="theme-segmented"
+          style={{ marginTop: 12 }}
+        >
+          {(['light', 'dark', 'system'] as ThemePreference[]).map((opt) => {
+            const selected = themePreference === opt;
+            return (
+              <button
+                key={opt}
+                type="button"
+                role="radio"
+                aria-checked={selected}
+                className={`btn theme-segmented-option${selected ? ' active' : ''}`}
+                onClick={() => setThemePreference(opt)}
+              >
+                {opt === 'light' ? 'Light' : opt === 'dark' ? 'Dark' : 'System'}
+              </button>
+            );
+          })}
+        </div>
+        <p className="muted" style={{ fontSize: 12, marginTop: 8 }}>
+          Currently using the <strong>{effectiveTheme}</strong> palette.
+        </p>
       </div>
       <div className="card">
         <h3>About</h3>

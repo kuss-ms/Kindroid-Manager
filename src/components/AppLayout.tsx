@@ -4,11 +4,18 @@ import { NavLink, Outlet, useNavigate } from 'react-router-dom';
 import { api, errorMessage } from '../lib/api';
 import { OnboardingBanner } from './OnboardingBanner';
 import { toast } from './Toaster';
+import { useTheme } from '../lib/theme';
 export function AppLayout() {
   const queryClient = useQueryClient();
   const navigate = useNavigate();
   const [dropActive, setDropActive] = useState(false);
   const dragCounter = useRef(0);
+  // Mount the theme hook here so the saved preference stays applied
+  // for the entire lifetime of the app shell, and any future
+  // `<html data-theme>` mutations are immediately followed by
+  // `color-scheme` style updates. The boot script in index.html has
+  // already set the initial attribute before the first paint.
+  useTheme();
   const settings = useQuery({ queryKey: ['settings'], queryFn: api.getSettings });
   const characters = useQuery({ queryKey: ['characters'], queryFn: api.listCharacters });
   const targets = useQuery({ queryKey: ['targets'], queryFn: api.listTargets });
@@ -176,7 +183,8 @@ export function AppLayout() {
           {' '}
           <div className="drop-card">
             {' '}
-            <div className="drop-icon">⬇</div> <div className="drop-title">Drop a Kindroid share image</div>{' '}
+            <div className="drop-icon">⬇</div>{' '}
+            <div className="drop-title">Drop a Kindroid share image</div>{' '}
             <div className="drop-sub">PNG with embedded persona metadata</div>{' '}
           </div>{' '}
         </div>

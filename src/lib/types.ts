@@ -70,6 +70,37 @@ export interface JournalEntry {
   updated_at: string;
 }
 
+export interface CharacterSnapshotFields {
+  name: string;
+  ai_name: string | null;
+  ai_gender: string | null;
+  ai_backstory: string | null;
+  ai_memory: string | null;
+  ai_directive: string | null;
+  ai_example_message: string | null;
+  ai_additional_context: string | null;
+  current_scene: string | null;
+  user_name: string | null;
+  user_gender: string | null;
+  greeting: string | null;
+  notes: string | null;
+  ai_avatar_description: string | null;
+}
+
+export interface CharacterRevisionSummary {
+  id: Uuid;
+  saved_at: string;
+  journal_entry_count: number;
+}
+
+export interface CharacterRevision {
+  id: Uuid;
+  character_id: Uuid;
+  saved_at: string;
+  character_payload: CharacterSnapshotFields;
+  journal_entries: JournalEntry[];
+}
+
 export interface JournalEntryInput {
   id?: string | null;
   entry: string;

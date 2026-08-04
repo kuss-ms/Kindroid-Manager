@@ -2,6 +2,7 @@ import { Navigate, Route, Routes } from 'react-router-dom';
 import { AppLayout } from './components/AppLayout';
 import { CharactersPage } from './pages/CharactersPage';
 import { CharacterEditorPage } from './pages/CharacterEditorPage';
+import { CharacterHistoryPage } from './pages/CharacterHistoryPage';
 import { TargetsPage } from './pages/TargetsPage';
 import { PushPage } from './pages/PushPage';
 import { HistoryPage } from './pages/HistoryPage';
@@ -21,6 +22,7 @@ export default function App() {
           <Route path="/characters" element={<CharactersPage />} />{' '}
           <Route path="/characters/new" element={<CharacterEditorPage />} />{' '}
           <Route path="/characters/:id" element={<CharacterEditorPage />} />{' '}
+          <Route path="/characters/:id/history" element={<CharacterHistoryPage />} />{' '}
           <Route path="/targets" element={<TargetsPage />} />{' '}
           <Route path="/push" element={<PushPage />} />{' '}
           <Route path="/history" element={<HistoryPage />} />{' '}

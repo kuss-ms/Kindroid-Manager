@@ -23,6 +23,7 @@ pub async fn save_journal_entry(
 ) -> Result<JournalEntry, AppError> {
     JournalEntry::validate(&input.entry, &input.keyphrases).map_err(AppError::invalid)?;
     let keyphrases = JournalEntry::normalize_keyphrases(&input.keyphrases);
+    crate::commands::revisions::snapshot_before(&repo, character_id).await;
     let entry = match input.id.clone() {
         Some(id) => {
             let existing = repo
@@ -65,6 +66,7 @@ pub async fn delete_journal_entry(
     character_id: Uuid,
     entry_id: String,
 ) -> Result<(), AppError> {
+    crate::commands::revisions::snapshot_before(&repo, character_id).await;
     match repo.delete_journal_entry(character_id, &entry_id).await {
         Ok(()) => Ok(()),
         Err(StorageError::NotFound) => Err(AppError::invalid("entry does not belong to character")),
@@ -379,6 +381,29 @@ mod tests {
                 return Err(StorageError::NotFound);
             }
             Ok(())
+        }
+        async fn snapshot_character(&self, _: Uuid) -> Result<(), StorageError> {
+            Ok(())
+        }
+        async fn list_character_revisions(
+            &self,
+            _: Uuid,
+        ) -> Result<Vec<crate::domain::character_revision::CharacterRevisionSummary>, StorageError>
+        {
+            Ok(Vec::new())
+        }
+        async fn get_character_revision(
+            &self,
+            _: Uuid,
+        ) -> Result<crate::domain::character_revision::CharacterRevision, StorageError> {
+            Err(StorageError::NotFound)
+        }
+        async fn restore_character_revision(
+            &self,
+            _: Uuid,
+            _: Uuid,
+        ) -> Result<Character, StorageError> {
+            Err(StorageError::NotFound)
         }
     }
 

@@ -252,6 +252,12 @@ export function CharacterEditorPage() {
                           : 'Upload a cover image first',
                       },
                       {
+                        label: 'View history',
+                        onClick: () => navigate(`/characters/${id}/history`),
+                        disabled: !character.data,
+                        title: 'View and restore previous saved versions',
+                      },
+                      {
                         label: 'Delete',
                         danger: true,
                         onClick: () => setConfirmDelete(true),

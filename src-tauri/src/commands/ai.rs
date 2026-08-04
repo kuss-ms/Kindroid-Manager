@@ -711,6 +711,34 @@ mod tests {
         ) -> Result<(), crate::storage::StorageError> {
             Ok(())
         }
+        async fn snapshot_character(&self, _id: Uuid) -> Result<(), crate::storage::StorageError> {
+            Ok(())
+        }
+        async fn list_character_revisions(
+            &self,
+            _id: Uuid,
+        ) -> Result<
+            Vec<crate::domain::character_revision::CharacterRevisionSummary>,
+            crate::storage::StorageError,
+        > {
+            Ok(Vec::new())
+        }
+        async fn get_character_revision(
+            &self,
+            _id: Uuid,
+        ) -> Result<
+            crate::domain::character_revision::CharacterRevision,
+            crate::storage::StorageError,
+        > {
+            Err(crate::storage::StorageError::NotFound)
+        }
+        async fn restore_character_revision(
+            &self,
+            _character_id: Uuid,
+            _revision_id: Uuid,
+        ) -> Result<crate::domain::character::Character, crate::storage::StorageError> {
+            Err(crate::storage::StorageError::NotFound)
+        }
     }
 
     fn repo_keychain(repo: &FakeRepo) -> Result<Option<String>, AppError> {

@@ -1,4 +1,5 @@
 pub mod character;
+pub mod character_revision;
 pub mod chat_automation;
 pub mod chat_message;
 pub mod image_share;

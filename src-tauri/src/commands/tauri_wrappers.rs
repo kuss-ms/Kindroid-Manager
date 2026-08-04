@@ -417,6 +417,35 @@ mod inner {
     }
 
     #[tauri::command]
+    pub async fn list_character_revisions(
+        repo: State<'_, Repo>,
+        character_id: uuid::Uuid,
+    ) -> Result<
+        Vec<crate::domain::character_revision::CharacterRevisionSummary>,
+        crate::error::AppError,
+    > {
+        characters::list_character_revisions(repo.inner().clone(), character_id).await
+    }
+
+    #[tauri::command]
+    pub async fn get_character_revision(
+        repo: State<'_, Repo>,
+        id: uuid::Uuid,
+    ) -> Result<crate::domain::character_revision::CharacterRevision, crate::error::AppError> {
+        characters::get_character_revision(repo.inner().clone(), id).await
+    }
+
+    #[tauri::command]
+    pub async fn restore_character_revision(
+        repo: State<'_, Repo>,
+        character_id: uuid::Uuid,
+        revision_id: uuid::Uuid,
+    ) -> Result<crate::domain::character::Character, crate::error::AppError> {
+        characters::restore_character_revision(repo.inner().clone(), character_id, revision_id)
+            .await
+    }
+
+    #[tauri::command]
     pub async fn get_ai_settings(
         repo: State<'_, Repo>,
     ) -> Result<ai::AiSettingsDto, crate::error::AppError> {

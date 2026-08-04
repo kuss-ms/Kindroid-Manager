@@ -8,6 +8,9 @@ use tokio::sync::Mutex;
 use uuid::Uuid;
 
 use crate::domain::character::Character;
+use crate::domain::character_revision::{
+    CharacterRevision, CharacterRevisionSummary, CharacterSnapshotFields,
+};
 use crate::domain::chat_automation::{
     AutoJournalEntry, AutoJournalEntryStatus, AutoJournalRun, AutoJournalRunStatus,
     ChatAutomationState, StableMessageCursor, SummaryBackend, SummaryBootstrapMode,
@@ -145,6 +148,10 @@ fn discover_migrations() -> Result<Vec<(u32, String)>, String> {
         (
             "0012_drop_sender_type.sql",
             include_str!("migrations/0012_drop_sender_type.sql"),
+        ),
+        (
+            "0013_character_revisions.sql",
+            include_str!("migrations/0013_character_revisions.sql"),
         ),
     ];
     let mut out = Vec::new();
@@ -1192,6 +1199,266 @@ impl Repository for SqliteRepository {
         }
         Ok(())
     }
+
+    async fn snapshot_character(&self, character_id: Uuid) -> Result<(), StorageError> {
+        let conn = lock(&self.conn).await;
+        // Read the persona fields we snapshot. Returns NotFound if the
+        // character was deleted between the trigger caller and the
+        // snapshot — the caller logs and continues with the user's save.
+        let payload: Option<CharacterSnapshotFields> = conn
+            .query_row(
+                "SELECT name, ai_name, ai_gender, ai_backstory, ai_memory, ai_directive,
+                        ai_example_message, ai_additional_context, current_scene, user_name,
+                        user_gender, greeting, notes, ai_avatar_description
+                 FROM characters WHERE id = ?1",
+                params![character_id.to_string()],
+                row_to_snapshot_fields,
+            )
+            .optional()
+            .map_err(|e| StorageError::Database(e.to_string()))?;
+        let Some(payload) = payload else {
+            return Err(StorageError::NotFound);
+        };
+        // Capture the journal entries as they currently exist. The
+        // restored entries keep their original ids + timestamps so a
+        // later restore yields the same row identities.
+        let mut stmt = conn
+            .prepare(
+                "SELECT id, character_id, entry, keyphrases, created_at, updated_at
+                 FROM character_journal_entries WHERE character_id = ?1
+                 ORDER BY created_at ASC",
+            )
+            .map_err(|e| StorageError::Database(e.to_string()))?;
+        let rows = stmt
+            .query_map(params![character_id.to_string()], row_to_journal_entry)
+            .map_err(|e| StorageError::Database(e.to_string()))?;
+        let journal_entries: Vec<JournalEntry> = rows
+            .map(|r| r.map_err(|e| StorageError::Database(e.to_string())))
+            .collect::<Result<_, _>>()?;
+        let payload_json =
+            serde_json::to_string(&payload).map_err(|e| StorageError::Database(e.to_string()))?;
+        let journal_json = serde_json::to_string(&journal_entries)
+            .map_err(|e| StorageError::Database(e.to_string()))?;
+        let id = Uuid::new_v4();
+        let saved_at = now();
+        conn.execute(
+            "INSERT INTO character_revisions
+                (id, character_id, saved_at, character_payload, journal_entries)
+             VALUES (?1, ?2, ?3, ?4, ?5)",
+            params![
+                id.to_string(),
+                character_id.to_string(),
+                saved_at.to_rfc3339(),
+                payload_json,
+                journal_json,
+            ],
+        )
+        .map_err(|e| StorageError::Database(e.to_string()))?;
+        // Keep the most recent 50 snapshots for this character. The
+        // correlated subquery is SQLite-portable and avoids the need
+        // for window functions.
+        conn.execute(
+            "DELETE FROM character_revisions
+             WHERE character_id = ?1
+               AND id NOT IN (
+                 SELECT id FROM character_revisions
+                 WHERE character_id = ?1
+                 ORDER BY saved_at DESC LIMIT 50
+               )",
+            params![character_id.to_string()],
+        )
+        .map_err(|e| StorageError::Database(e.to_string()))?;
+        Ok(())
+    }
+
+    async fn list_character_revisions(
+        &self,
+        character_id: Uuid,
+    ) -> Result<Vec<CharacterRevisionSummary>, StorageError> {
+        let conn = lock(&self.conn).await;
+        let mut stmt = conn
+            .prepare(
+                "SELECT id, saved_at, journal_entries
+                 FROM character_revisions
+                 WHERE character_id = ?1
+                 ORDER BY saved_at DESC",
+            )
+            .map_err(|e| StorageError::Database(e.to_string()))?;
+        let rows = stmt
+            .query_map(params![character_id.to_string()], |row| {
+                let id_s: String = row.get(0)?;
+                let saved_at_s: String = row.get(1)?;
+                let journal_s: String = row.get(2)?;
+                let entries: Vec<JournalEntry> = if journal_s.is_empty() {
+                    Vec::new()
+                } else {
+                    serde_json::from_str(&journal_s).map_err(|e| id_err(2, e))?
+                };
+                Ok(CharacterRevisionSummary {
+                    id: Uuid::parse_str(&id_s).map_err(|e| id_err(0, e))?,
+                    saved_at: DateTime::parse_from_rfc3339(&saved_at_s)
+                        .map_err(|e| id_err(1, e))?
+                        .with_timezone(&Utc),
+                    journal_entry_count: entries.len(),
+                })
+            })
+            .map_err(|e| StorageError::Database(e.to_string()))?;
+        rows.map(|r| r.map_err(|e| StorageError::Database(e.to_string())))
+            .collect()
+    }
+
+    async fn get_character_revision(&self, id: Uuid) -> Result<CharacterRevision, StorageError> {
+        let conn = lock(&self.conn).await;
+        conn.query_row(
+            "SELECT id, character_id, saved_at, character_payload, journal_entries
+             FROM character_revisions WHERE id = ?1",
+            params![id.to_string()],
+            |row| {
+                let id_s: String = row.get(0)?;
+                let cid_s: String = row.get(1)?;
+                let saved_at_s: String = row.get(2)?;
+                let payload_s: String = row.get(3)?;
+                let journal_s: String = row.get(4)?;
+                let payload: CharacterSnapshotFields =
+                    serde_json::from_str(&payload_s).map_err(|e| id_err(3, e))?;
+                let entries: Vec<JournalEntry> = if journal_s.is_empty() {
+                    Vec::new()
+                } else {
+                    serde_json::from_str(&journal_s).map_err(|e| id_err(4, e))?
+                };
+                Ok(CharacterRevision {
+                    id: Uuid::parse_str(&id_s).map_err(|e| id_err(0, e))?,
+                    character_id: Uuid::parse_str(&cid_s).map_err(|e| id_err(1, e))?,
+                    saved_at: DateTime::parse_from_rfc3339(&saved_at_s)
+                        .map_err(|e| id_err(2, e))?
+                        .with_timezone(&Utc),
+                    character_payload: payload,
+                    journal_entries: entries,
+                })
+            },
+        )
+        .optional()
+        .map_err(|e| StorageError::Database(e.to_string()))?
+        .ok_or(StorageError::NotFound)
+    }
+
+    async fn restore_character_revision(
+        &self,
+        character_id: Uuid,
+        revision_id: Uuid,
+    ) -> Result<Character, StorageError> {
+        let conn = lock(&self.conn).await;
+        let updated = {
+            let tx = conn
+                .unchecked_transaction()
+                .map_err(|e| StorageError::Database(e.to_string()))?;
+            // The AND character_id = ?2 clause rejects cross-character
+            // references; the two error cases collapse into a single
+            // NotFound so the command layer can return a uniform message.
+            let payload_json: (String, String) = tx
+                .query_row(
+                    "SELECT character_payload, journal_entries FROM character_revisions
+                     WHERE id = ?1 AND character_id = ?2",
+                    params![revision_id.to_string(), character_id.to_string()],
+                    |row| {
+                        let payload: String = row.get(0)?;
+                        let journal: String = row.get(1)?;
+                        Ok((payload, journal))
+                    },
+                )
+                .optional()
+                .map_err(|e| StorageError::Database(e.to_string()))?
+                .ok_or(StorageError::NotFound)?;
+            let (payload_json, journal_json) = payload_json;
+            let payload: CharacterSnapshotFields = serde_json::from_str(&payload_json)
+                .map_err(|e| StorageError::Database(e.to_string()))?;
+            let entries: Vec<JournalEntry> = if journal_json.is_empty() {
+                Vec::new()
+            } else {
+                serde_json::from_str(&journal_json)
+                    .map_err(|e| StorageError::Database(e.to_string()))?
+            };
+            // Wipe the current journal set and re-insert the snapshot's
+            // entries verbatim — original ids and timestamps preserved.
+            // The character_journal_entries table has no FK to anything we
+            // touch here, so a plain DELETE is sufficient.
+            tx.execute(
+                "DELETE FROM character_journal_entries WHERE character_id = ?1",
+                params![character_id.to_string()],
+            )
+            .map_err(|e| StorageError::Database(e.to_string()))?;
+            for entry in &entries {
+                let keyphrases_json =
+                    serde_json::to_string(&entry.keyphrases).unwrap_or_else(|_| "[]".to_string());
+                tx.execute(
+                    "INSERT INTO character_journal_entries
+                        (id, character_id, entry, keyphrases, created_at, updated_at)
+                     VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
+                    params![
+                        entry.id,
+                        entry.character_id.to_string(),
+                        entry.entry,
+                        keyphrases_json,
+                        entry.created_at.to_rfc3339(),
+                        entry.updated_at.to_rfc3339(),
+                    ],
+                )
+                .map_err(|e| StorageError::Database(e.to_string()))?;
+            }
+            // Persona fields + notes. cover_image and created_at are NOT in
+            // the SET list, so they survive the restore unchanged. updated_at
+            // advances so the editor / list refresh pick the row up.
+            let updated_at = now();
+            tx.execute(
+                "UPDATE characters SET
+                    name = ?1, ai_name = ?2, ai_gender = ?3, ai_backstory = ?4,
+                    ai_memory = ?5, ai_directive = ?6, ai_example_message = ?7,
+                    ai_additional_context = ?8, current_scene = ?9,
+                    user_name = ?10, user_gender = ?11, greeting = ?12,
+                    notes = ?13, ai_avatar_description = ?14,
+                    updated_at = ?15
+                 WHERE id = ?16",
+                params![
+                    payload.name,
+                    payload.ai_name,
+                    payload.ai_gender,
+                    payload.ai_backstory,
+                    payload.ai_memory,
+                    payload.ai_directive,
+                    payload.ai_example_message,
+                    payload.ai_additional_context,
+                    payload.current_scene,
+                    payload.user_name,
+                    payload.user_gender,
+                    payload.greeting,
+                    payload.notes,
+                    payload.ai_avatar_description,
+                    updated_at.to_rfc3339(),
+                    character_id.to_string(),
+                ],
+            )
+            .map_err(|e| StorageError::Database(e.to_string()))?;
+            // Read the row back inside the transaction so we return the
+            // just-restored state without a second repo call. Keeps the
+            // whole restore in one critical section and avoids the
+            // `Transaction<'_>` outliving an await.
+            let updated: Character = tx
+                .query_row(
+                    "SELECT id, name, ai_name, ai_gender, ai_backstory, ai_memory, ai_directive,
+                            ai_example_message, ai_additional_context, current_scene, user_name,
+                            user_gender, greeting, notes, ai_avatar_description, cover_image,
+                            created_at, updated_at
+                     FROM characters WHERE id = ?1",
+                    params![character_id.to_string()],
+                    row_to_character,
+                )
+                .map_err(|e| StorageError::Database(e.to_string()))?;
+            tx.commit()
+                .map_err(|e| StorageError::Database(e.to_string()))?;
+            updated
+        };
+        Ok(updated)
+    }
 }
 
 fn parse_optional_dt(
@@ -1311,6 +1578,25 @@ fn row_to_auto_journal_entry(r: &rusqlite::Row<'_>) -> rusqlite::Result<AutoJour
         updated_at: DateTime::parse_from_rfc3339(&updated)
             .map_err(|e| id_err(13, e))?
             .with_timezone(&Utc),
+    })
+}
+
+fn row_to_snapshot_fields(row: &rusqlite::Row<'_>) -> rusqlite::Result<CharacterSnapshotFields> {
+    Ok(CharacterSnapshotFields {
+        name: row.get(0)?,
+        ai_name: row.get(1)?,
+        ai_gender: row.get(2)?,
+        ai_backstory: row.get(3)?,
+        ai_memory: row.get(4)?,
+        ai_directive: row.get(5)?,
+        ai_example_message: row.get(6)?,
+        ai_additional_context: row.get(7)?,
+        current_scene: row.get(8)?,
+        user_name: row.get(9)?,
+        user_gender: row.get(10)?,
+        greeting: row.get(11)?,
+        notes: row.get(12)?,
+        ai_avatar_description: row.get(13)?,
     })
 }
 

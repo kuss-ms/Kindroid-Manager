@@ -2,6 +2,8 @@ import { invoke } from '@tauri-apps/api/core';
 import type {
   AutomationInstructionsDefaults,
   Character,
+  CharacterRevision,
+  CharacterRevisionSummary,
   ChatAutomationDto,
   ChatMessage,
   ChatSyncState,
@@ -330,6 +332,13 @@ export const api = {
     invoke<JournalEntry>('save_journal_entry', { characterId, input }),
   deleteJournalEntry: (characterId: string, entryId: string) =>
     invoke<void>('delete_journal_entry', { characterId, entryId }),
+
+  // Character revision history (rollback)
+  listCharacterRevisions: (characterId: string) =>
+    invoke<CharacterRevisionSummary[]>('list_character_revisions', { characterId }),
+  getCharacterRevision: (id: string) => invoke<CharacterRevision>('get_character_revision', { id }),
+  restoreCharacterRevision: (characterId: string, revisionId: string) =>
+    invoke<Character>('restore_character_revision', { characterId, revisionId }),
 
   // Chat automation (auto-journal / auto-summary)
   getChatAutomationState: (aiId: string) =>

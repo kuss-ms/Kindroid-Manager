@@ -2,6 +2,7 @@ use async_trait::async_trait;
 use uuid::Uuid;
 
 use crate::domain::character::Character;
+use crate::domain::character_revision::{CharacterRevision, CharacterRevisionSummary};
 use crate::domain::chat_automation::{
     AutoJournalEntry, AutoJournalRun, ChatAutomationState, StableMessageCursor, SummaryCandidate,
 };
@@ -207,4 +208,28 @@ pub trait Repository: Send + Sync {
         ai_id: &str,
         limit: u32,
     ) -> Result<Vec<AutoJournalEntry>, StorageError>;
+
+    /// Capture a pre-save snapshot of `character_id`'s persona fields,
+    /// notes, and current journal entries. Prunes to the most recent 50
+    /// rows for that character. Returns `StorageError::NotFound` if the
+    /// character row no longer exists (callers log and swallow).
+    async fn snapshot_character(&self, character_id: Uuid) -> Result<(), StorageError>;
+
+    async fn list_character_revisions(
+        &self,
+        character_id: Uuid,
+    ) -> Result<Vec<CharacterRevisionSummary>, StorageError>;
+
+    async fn get_character_revision(&self, id: Uuid) -> Result<CharacterRevision, StorageError>;
+
+    /// Restore `revision_id` for `character_id`. The SQL filter
+    /// (`id = ? AND character_id = ?`) collapses "unknown revision id"
+    /// and "revision belongs to a different character" into a single
+    /// `StorageError::NotFound`. Returns the updated `Character` row
+    /// (with `cover_image` and `created_at` preserved).
+    async fn restore_character_revision(
+        &self,
+        character_id: Uuid,
+        revision_id: Uuid,
+    ) -> Result<Character, StorageError>;
 }

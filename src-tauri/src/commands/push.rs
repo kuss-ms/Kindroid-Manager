@@ -793,6 +793,29 @@ mod tests {
             }
             Ok(())
         }
+        async fn snapshot_character(&self, _: Uuid) -> Result<(), StorageError> {
+            Ok(())
+        }
+        async fn list_character_revisions(
+            &self,
+            _: Uuid,
+        ) -> Result<Vec<crate::domain::character_revision::CharacterRevisionSummary>, StorageError>
+        {
+            Ok(Vec::new())
+        }
+        async fn get_character_revision(
+            &self,
+            _: Uuid,
+        ) -> Result<crate::domain::character_revision::CharacterRevision, StorageError> {
+            Err(StorageError::NotFound)
+        }
+        async fn restore_character_revision(
+            &self,
+            _: Uuid,
+            _: Uuid,
+        ) -> Result<Character, StorageError> {
+            Err(StorageError::NotFound)
+        }
     }
 
     struct FakeClient {

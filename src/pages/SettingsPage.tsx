@@ -477,7 +477,7 @@ export function SettingsPage() {
       <div className="card">
         <h3>About</h3>
         <p className="muted" style={{ fontSize: 12 }}>
-          Kindroid Manager v0.3.0
+          Kindroid Manager v0.4.0
         </p>
       </div>
       <ConfirmDialog

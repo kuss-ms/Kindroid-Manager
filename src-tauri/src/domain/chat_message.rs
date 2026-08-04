@@ -7,8 +7,9 @@ pub struct ChatMessage {
     pub id: Uuid,
     pub ai_id: String,
     pub kindroid_msg_id: String,
+    /// Speaker returned by Kindroid (`"ai"` or `"user"`). The human
+    /// name lives in `display_name`.
     pub sender: String,
-    pub sender_type: String,
     pub display_name: Option<String>,
     pub timestamp: i64,
     pub message: String,

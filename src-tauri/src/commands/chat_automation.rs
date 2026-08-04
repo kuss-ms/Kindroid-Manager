@@ -936,11 +936,11 @@ fn format_messages(messages: &[ChatMessage]) -> String {
     messages
         .iter()
         .map(|m| {
-            let speaker = match m.sender_type.as_str() {
-                "ai" | "AI" | "assistant" => "ai",
-                "u" | "U" | "user" | "USER" | "human" => "user",
-                other => other,
-            };
+            // Kindroid's `sender` field is already `"ai"` or `"user"`
+            // (see https://kindroid.ai/docs/article/api-documentation/);
+            // we only trim it because some upstream rows have leading/
+            // trailing whitespace.
+            let speaker = m.sender.trim();
             let name_attr = m
                 .display_name
                 .as_deref()
@@ -1468,13 +1468,16 @@ mod tests {
 
     #[test]
     fn format_messages_emits_speaker_and_display_name() {
+        // The `sender` field on a synced message is always one of
+        // `"ai"` or `"user"` (see Kindroid's API docs); `display_name`
+        // is the human-readable name. The tag must surface both so the
+        // model extractor can tell who is talking without guessing.
         let messages = vec![
             ChatMessage {
                 id: Uuid::new_v4(),
                 ai_id: "a".into(),
                 kindroid_msg_id: "k1".into(),
                 sender: "user".into(),
-                sender_type: "user".into(),
                 display_name: Some("Cires".into()),
                 timestamp: 1,
                 message: "hi".into(),
@@ -1492,7 +1495,6 @@ mod tests {
                 ai_id: "a".into(),
                 kindroid_msg_id: "k2".into(),
                 sender: "ai".into(),
-                sender_type: "ai".into(),
                 display_name: None,
                 timestamp: 2,
                 message: "hello".into(),
@@ -1505,17 +1507,14 @@ mod tests {
                 fetched_at: chrono::Utc::now(),
                 favourite: false,
             },
-            // The legacy single-letter sender_type must still be readable
-            // (older Kindroid payloads use "u" instead of "user").
             ChatMessage {
                 id: Uuid::new_v4(),
                 ai_id: "a".into(),
                 kindroid_msg_id: "k3".into(),
-                sender: "u".into(),
-                sender_type: "u".into(),
-                display_name: None,
+                sender: "ai".into(),
+                display_name: Some("  Laura  ".into()),
                 timestamp: 3,
-                message: "legacy".into(),
+                message: "trim me".into(),
                 image_urls: vec![],
                 image_description: None,
                 video_description: None,
@@ -1536,8 +1535,8 @@ mod tests {
             "AI message without display_name should omit the name attr, got: {out}"
         );
         assert!(
-            out.contains("speaker=\"user\" timestamp=\"3\""),
-            "legacy sender_type 'u' should be normalized to 'user', got: {out}"
+            out.contains("speaker=\"ai\" name=\"Laura\" timestamp=\"3\""),
+            "whitespace around display_name should be trimmed, got: {out}"
         );
     }
 

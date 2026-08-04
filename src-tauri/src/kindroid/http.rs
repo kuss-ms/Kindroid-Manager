@@ -645,7 +645,6 @@ mod tests {
                             {
                                 "id": "m1",
                                 "sender": "user",
-                                "sender_type": "user",
                                 "display_name": "Alice",
                                 "timestamp": 1_700_000_000_000i64,
                                 "message": "hello there",
@@ -655,7 +654,6 @@ mod tests {
                             {
                                 "id": "m2",
                                 "sender": "ai",
-                                "sender_type": "ai",
                                 "display_name": null,
                                 "timestamp": 1_700_000_001_000i64,
                                 "message": null
@@ -698,8 +696,7 @@ mod tests {
         for i in 0..5 {
             msgs.push(json!({
                 "id": format!("m{i}"),
-                "sender": "u",
-                "sender_type": "u",
+                "sender": "user",
                 "timestamp": i as i64,
                 "message": "x"
             }));
@@ -734,15 +731,13 @@ mod tests {
             "messages": [
                 {
                     "id": "m1",
-                    "sender": "u",
-                    "sender_type": "u",
+                    "sender": "user",
                     "timestamp": 1_700_000_000_000i64,
                     "message": "x"
                 },
                 {
                     "id": "m2",
-                    "sender": "u",
-                    "sender_type": "u",
+                    "sender": "user",
                     "timestamp": 1_700_000_001_000i64,
                     "message": "y"
                 }
@@ -785,8 +780,7 @@ mod tests {
             "messages": [
                 {
                     "id": "m1",
-                    "sender": "u",
-                    "sender_type": "u",
+                    "sender": "user",
                     "timestamp": 1_700_000_000_000i64,
                     "message": "x"
                 }

@@ -78,8 +78,10 @@ pub struct ChatMessagesPage {
 #[serde(default)]
 pub struct RawChatMessage {
     pub id: String,
+    /// The speaker. Kindroid only returns `"ai"` or `"user"` here (see
+    /// https://kindroid.ai/docs/article/api-documentation/); the human
+    /// name lives in `display_name`.
     pub sender: String,
-    pub sender_type: String,
     pub display_name: Option<String>,
     pub timestamp: i64,
     pub message: Option<String>,

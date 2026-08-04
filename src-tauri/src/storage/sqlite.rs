@@ -142,6 +142,10 @@ fn discover_migrations() -> Result<Vec<(u32, String)>, String> {
             "0011_drop_automation_responses.sql",
             include_str!("migrations/0011_drop_automation_responses.sql"),
         ),
+        (
+            "0012_drop_sender_type.sql",
+            include_str!("migrations/0012_drop_sender_type.sql"),
+        ),
     ];
     let mut out = Vec::new();
     for (name, body) in bodies {
@@ -633,10 +637,10 @@ impl Repository for SqliteRepository {
             let n = tx
                 .execute(
                     "INSERT INTO chat_messages
-                       (id, ai_id, kindroid_msg_id, sender, sender_type, display_name,
+                       (id, ai_id, kindroid_msg_id, sender, display_name,
                         timestamp, message, image_urls, image_description, video_description,
                         internet_response, link_url, link_description, fetched_at, favourite)
-                     VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,?12,?13,?14,?15,?16)
+                     VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,?12,?13,?14,?15)
                      ON CONFLICT(ai_id, kindroid_msg_id) DO UPDATE SET
                        display_name      = excluded.display_name,
                        message           = excluded.message,
@@ -659,7 +663,6 @@ impl Repository for SqliteRepository {
                         ai_id,
                         m.kindroid_msg_id,
                         m.sender,
-                        m.sender_type,
                         m.display_name,
                         m.timestamp,
                         m.message,
@@ -697,7 +700,7 @@ impl Repository for SqliteRepository {
         };
         let sql = match before_ts {
             Some(_) => format!(
-                "SELECT id, ai_id, kindroid_msg_id, sender, sender_type, display_name,
+                "SELECT id, ai_id, kindroid_msg_id, sender, display_name,
                         timestamp, message, image_urls, image_description, video_description,
                         internet_response, link_url, link_description, fetched_at, favourite
                  FROM chat_messages
@@ -705,7 +708,7 @@ impl Repository for SqliteRepository {
                  ORDER BY timestamp DESC LIMIT ?3"
             ),
             None => format!(
-                "SELECT id, ai_id, kindroid_msg_id, sender, sender_type, display_name,
+                "SELECT id, ai_id, kindroid_msg_id, sender, display_name,
                         timestamp, message, image_urls, image_description, video_description,
                         internet_response, link_url, link_description, fetched_at, favourite
                  FROM chat_messages
@@ -745,7 +748,7 @@ impl Repository for SqliteRepository {
             ""
         };
         let sql = format!(
-            "SELECT cm.id, cm.ai_id, cm.kindroid_msg_id, cm.sender, cm.sender_type,
+            "SELECT cm.id, cm.ai_id, cm.kindroid_msg_id, cm.sender,
                     cm.display_name, cm.timestamp, cm.message, cm.image_urls,
                     cm.image_description, cm.video_description, cm.internet_response,
                     cm.link_url, cm.link_description, cm.fetched_at, cm.favourite
@@ -933,7 +936,7 @@ impl Repository for SqliteRepository {
                 ORDER BY timestamp DESC, kindroid_msg_id DESC
                 LIMIT 1 OFFSET ?4
               )
-              SELECT m.id, m.ai_id, m.kindroid_msg_id, m.sender, m.sender_type, m.display_name, m.timestamp,
+              SELECT m.id, m.ai_id, m.kindroid_msg_id, m.sender, m.display_name, m.timestamp,
                      m.message, m.image_urls, m.image_description, m.video_description, m.internet_response,
                      m.link_url, m.link_description, m.fetched_at, m.favourite
               FROM chat_messages m CROSS JOIN boundary b
@@ -1395,26 +1398,25 @@ fn row_to_push_log(row: &rusqlite::Row<'_>) -> rusqlite::Result<PushLogEntry> {
 
 fn row_to_chat_message(row: &rusqlite::Row<'_>) -> rusqlite::Result<ChatMessage> {
     let id_s: String = row.get(0)?;
-    let image_urls_s: String = row.get(8)?;
-    let fetched_s: String = row.get(14)?;
-    let fav: i32 = row.get(15)?;
+    let image_urls_s: String = row.get(7)?;
+    let fetched_s: String = row.get(13)?;
+    let fav: i32 = row.get(14)?;
     Ok(ChatMessage {
         id: Uuid::parse_str(&id_s).map_err(|e| id_err(0, e))?,
         ai_id: row.get(1)?,
         kindroid_msg_id: row.get(2)?,
         sender: row.get(3)?,
-        sender_type: row.get(4)?,
-        display_name: row.get(5)?,
-        timestamp: row.get(6)?,
-        message: row.get(7)?,
-        image_urls: serde_json::from_str(&image_urls_s).map_err(|e| id_err(8, e))?,
-        image_description: row.get(9)?,
-        video_description: row.get(10)?,
-        internet_response: row.get(11)?,
-        link_url: row.get(12)?,
-        link_description: row.get(13)?,
+        display_name: row.get(4)?,
+        timestamp: row.get(5)?,
+        message: row.get(6)?,
+        image_urls: serde_json::from_str(&image_urls_s).map_err(|e| id_err(7, e))?,
+        image_description: row.get(8)?,
+        video_description: row.get(9)?,
+        internet_response: row.get(10)?,
+        link_url: row.get(11)?,
+        link_description: row.get(12)?,
         fetched_at: DateTime::parse_from_rfc3339(&fetched_s)
-            .map_err(|e| id_err(14, e))?
+            .map_err(|e| id_err(13, e))?
             .with_timezone(&Utc),
         favourite: fav != 0,
     })
@@ -1787,7 +1789,6 @@ mod tests {
             ai_id: ai_id.into(),
             kindroid_msg_id: kindroid_msg_id.into(),
             sender: "user".into(),
-            sender_type: "user".into(),
             display_name: None,
             timestamp: ts,
             message: text.into(),
@@ -1937,8 +1938,8 @@ mod tests {
         // Unchanged fields survive.
         assert_eq!(list[0].image_urls, vec!["https://x/a.png".to_string()]);
         assert_eq!(list[0].link_url.as_deref(), Some("https://example.com"));
-        // Sender / sender_type / timestamp are part of the message
-        // identity, so they were never updatable.
+        // Sender / timestamp are part of the message identity, so they
+        // were never updatable.
         assert_eq!(list[0].sender, "user");
         assert_eq!(list[0].timestamp, 100);
     }

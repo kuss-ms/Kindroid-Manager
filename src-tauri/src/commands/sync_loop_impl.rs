@@ -587,7 +587,6 @@ impl From<crate::kindroid::RawChatMessage> for ChatMessage {
             ai_id: String::new(),
             kindroid_msg_id: m.id,
             sender: m.sender,
-            sender_type: m.sender_type,
             display_name: m.display_name,
             timestamp: m.timestamp,
             message: m.message.unwrap_or_default(),

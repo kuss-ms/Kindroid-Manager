@@ -1001,7 +1001,7 @@ function MessageDetailDialog({
           </div>
         </div>
         <div className="muted" style={{ fontSize: 12, marginTop: 4 }}>
-          {when} · {message.sender_type}
+          {when} · {message.sender}
         </div>
 
         <div style={{ whiteSpace: 'pre-wrap', marginTop: 16, lineHeight: 1.5 }}>

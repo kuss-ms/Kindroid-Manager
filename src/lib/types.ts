@@ -139,7 +139,6 @@ export interface ChatMessage {
   ai_id: string;
   kindroid_msg_id: string;
   sender: string;
-  sender_type: string;
   display_name: string | null;
   timestamp: number;
   message: string;

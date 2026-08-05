@@ -44,7 +44,8 @@ backend can be added later without touching the UI.
 
 ## Screenshot
 
-_(TODO)_
+<img width="899" height="336" alt="image" src="https://github.com/user-attachments/assets/c714ebc3-5edb-48d3-aef6-48749aac29d1" />
+
 
 ## Install
 

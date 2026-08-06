@@ -69,3 +69,6 @@ These are integration / smoke checks that the automated Rust + Vitest suite cann
 60. `/push?characterId=X` from character whose default is T → dropdown shows T. Same page with `?targetId=U` (Re-push link) → dropdown shows U.
 61. Editor dropdown lists only AI targets; group targets absent.
 62. On Push page, manually clear the dropdown → trigger any character refetch → dropdown stays cleared (does not snap back to the default).
+63. Editor → character with `default_target_id` set + populated `ai_directive`. Click the per-field "Push" button next to "Response directive". Confirm Kindroid updates, success toast names the target, push-history gains an entry, and the default-target label is unchanged (since `ai_name` was not pushed).
+64. Same editor, click the per-field "Push" button next to "Name" → confirm the target's local label on the Targets page syncs to the new `ai_name`.
+65. Editor → character with no default target. Confirm all 8 per-field "Push" buttons are disabled with the "Set a default push target" tooltip. Pick a default → buttons enable.

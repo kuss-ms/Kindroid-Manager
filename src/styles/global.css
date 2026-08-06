@@ -478,6 +478,15 @@ select {
   flex-direction: column;
   gap: 6px;
 }
+.form-row-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+}
+.form-row-action {
+  flex-shrink: 0;
+}
 .form-row label,
 .form-label {
   font-weight: 500;

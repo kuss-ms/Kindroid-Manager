@@ -1,8 +1,8 @@
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
-import { render, screen, waitFor } from '@testing-library/react';
+import { fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { describe, expect, it, vi } from 'vitest';
 import { MemoryRouter, Route, Routes } from 'react-router-dom';
-import { CharacterEditorPage } from './CharacterEditorPage';
+import { CharacterEditorPage, PushFieldButton } from './CharacterEditorPage';
 import type { Character, Target } from '../lib/types';
 
 vi.mock('../lib/api', () => ({
@@ -20,6 +20,7 @@ vi.mock('../lib/api', () => ({
     saveJournalEntry: vi.fn(),
     deleteJournalEntry: vi.fn(),
     listCharacterRevisions: vi.fn(),
+    pushToTarget: vi.fn(),
   },
   errorMessage: (e: unknown) => (e instanceof Error ? e.message : String(e)),
   isAndroid: () => false,
@@ -119,3 +120,67 @@ describe('CharacterEditorPage default-target select', () => {
     expect(optionValues).toContain(aiId);
     expect(optionValues).not.toContain(groupId);
   });});
+
+describe('PushFieldButton', () => {
+  it('is enabled and invokes onPush when value + target are set', async () => {
+    const onPush = vi.fn();
+    render(
+      <PushFieldButton
+        field="ai_name"
+        value="Aria"
+        defaultTargetLabel="Aria"
+        busy={false}
+        onPush={onPush}
+      />,
+    );
+    const btn = screen.getByTestId('push-field-ai_name');
+    expect(btn).not.toBeDisabled();
+    fireEvent.click(btn);
+    expect(onPush).toHaveBeenCalledTimes(1);
+  });
+
+  it('is disabled with a helpful tooltip when the field is empty', () => {
+    render(
+      <PushFieldButton
+        field="ai_name"
+        value=""
+        defaultTargetLabel="Aria"
+        busy={false}
+        onPush={() => {}}
+      />,
+    );
+    const btn = screen.getByTestId('push-field-ai_name');
+    expect(btn).toBeDisabled();
+    expect(btn.getAttribute('title')).toMatch(/empty/);
+  });
+
+  it('is disabled with the default-target tooltip when no target is set', () => {
+    render(
+      <PushFieldButton
+        field="ai_name"
+        value="Aria"
+        defaultTargetLabel={null}
+        busy={false}
+        onPush={() => {}}
+      />,
+    );
+    const btn = screen.getByTestId('push-field-ai_name');
+    expect(btn).toBeDisabled();
+    expect(btn.getAttribute('title')).toMatch(/default push target/);
+  });
+
+  it('is disabled while busy, regardless of other props', () => {
+    const onPush = vi.fn();
+    render(
+      <PushFieldButton
+        field="ai_name"
+        value="Aria"
+        defaultTargetLabel="Aria"
+        busy={true}
+        onPush={onPush}
+      />,
+    );
+    const btn = screen.getByTestId('push-field-ai_name');
+    expect(btn).toBeDisabled();
+  });
+});

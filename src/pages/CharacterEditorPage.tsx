@@ -9,8 +9,8 @@ import { toast } from '../components/Toaster';
 import { ConfirmDialog } from '../components/ConfirmDialog';
 import { JournalEntryForm } from '../components/JournalEntryForm';
 import { RowActions, type RowAction } from '../components/RowActions';
-import { FIELD_SOFT_LIMITS, GENDER_OPTIONS } from '../lib/types';
-import type { JournalEntry, JournalEntryInput, Uuid } from '../lib/types';
+import { FIELD_SOFT_LIMITS, GENDER_OPTIONS, PERSONA_FIELD_LABELS } from '../lib/types';
+import type { JournalEntry, JournalEntryInput, PersonaField, Uuid } from '../lib/types';
 
 const MAX_NOTE = 5000;
 
@@ -213,6 +213,57 @@ export function CharacterEditorPage() {
     save.mutate({ ...v, default_target_id: v.default_target_id || null, id });
   });
 
+  const defaultTargetLabel = (): string | null => {
+    const dtid = character.data?.default_target_id;
+    if (!dtid) return null;
+    return aiTargets.find((t) => t.id === dtid)?.label ?? null;
+  };
+
+  const saveAndGet = (): Promise<CharacterFormValues | null> =>
+    new Promise((resolve) => {
+      handleSubmit(
+        async (v) => {
+          try {
+            await save.mutateAsync({ ...v, default_target_id: v.default_target_id || null, id });
+            resolve(v);
+          } catch {
+            resolve(null);
+          }
+        },
+        () => resolve(null),
+      )();
+    });
+
+  const pushField = useMutation({
+    mutationFn: async (field: PersonaField) => {
+      if (!id || !character.data?.default_target_id) {
+        throw new Error('No default push target');
+      }
+      const saved = await saveAndGet();
+      if (!saved) throw new Error('Save failed');
+      return api.pushToTarget({ character_id: id, target_id: character.data.default_target_id, fields: [field] });
+    },
+    onSuccess: (_res, field) => {
+      const label = PERSONA_FIELD_LABELS[field];
+      const target = defaultTargetLabel() ?? 'target';
+      toast('success', `Pushed ${label} to ${target}`);
+      queryClient.invalidateQueries({ queryKey: ['push-history'] });
+      queryClient.invalidateQueries({ queryKey: ['targets'] });
+    },
+    onError: (e) => toast('error', errorMessage(e)),
+  });
+
+  const pushAction = (field: PersonaField): React.ReactNode =>
+    id && character.data ? (
+      <PushFieldButton
+        field={field}
+        value={watch(field) as string | null | undefined}
+        defaultTargetLabel={defaultTargetLabel()}
+        busy={pushField.isPending || save.isPending}
+        onPush={() => pushField.mutate(field)}
+      />
+    ) : null;
+
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
       if ((e.ctrlKey || e.metaKey) && e.key === 's') {
@@ -319,10 +370,18 @@ export function CharacterEditorPage() {
         </Field>
 
         <h3 style={{ marginTop: 8 }}>Kindroid</h3>
-        <Field label="Name" hint="What the AI calls itself. Sent to Kindroid as ai_name.">
+        <Field
+          label="Name"
+          hint="What the AI calls itself. Sent to Kindroid as ai_name."
+          action={pushAction('ai_name')}
+        >
           <input className="input" {...register('ai_name')} />
         </Field>
-        <Field label="Gender" hint="Sent to Kindroid as ai_gender.">
+        <Field
+          label="Gender"
+          hint="Sent to Kindroid as ai_gender."
+          action={pushAction('ai_gender')}
+        >
           <select className="select" {...register('ai_gender')}>
             {GENDER_OPTIONS.map((opt) => (
               <option key={opt.value} value={opt.value}>
@@ -344,6 +403,7 @@ export function CharacterEditorPage() {
           rows={6}
           name="ai_backstory"
           soft={FIELD_SOFT_LIMITS.ai_backstory}
+          action={pushAction('ai_backstory')}
           control={control}
         />
         <TextArea
@@ -352,12 +412,14 @@ export function CharacterEditorPage() {
           reg={register('ai_memory')}
           soft={FIELD_SOFT_LIMITS.ai_memory}
           value={watch('ai_memory') ?? ''}
+          action={pushAction('ai_memory')}
         />
         <TextAreaWithCounter
           label="Response directive"
           rows={3}
           name="ai_directive"
           soft={FIELD_SOFT_LIMITS.ai_directive}
+          action={pushAction('ai_directive')}
           control={control}
         />
         <TextAreaWithCounter
@@ -365,6 +427,7 @@ export function CharacterEditorPage() {
           rows={2}
           name="ai_example_message"
           soft={FIELD_SOFT_LIMITS.ai_example_message}
+          action={pushAction('ai_example_message')}
           control={control}
         />
         <TextAreaWithCounter
@@ -372,6 +435,7 @@ export function CharacterEditorPage() {
           rows={4}
           name="ai_additional_context"
           soft={FIELD_SOFT_LIMITS.ai_additional_context}
+          action={pushAction('ai_additional_context')}
           control={control}
         />
         <TextArea
@@ -380,6 +444,7 @@ export function CharacterEditorPage() {
           reg={register('current_scene')}
           soft={FIELD_SOFT_LIMITS.current_scene}
           value={watch('current_scene') ?? ''}
+          action={pushAction('current_scene')}
         />
 
         <h3 style={{ marginTop: 8 }}>Greeting</h3>
@@ -456,21 +521,26 @@ function Field({
   hint,
   required,
   error,
+  action,
   children,
 }: {
   label: string;
   hint?: string;
   required?: boolean;
   error?: string;
+  action?: React.ReactNode;
   children: React.ReactNode;
 }) {
   return (
     <div className="form-row">
-      <label className="form-label">
-        {label}
-        {required && <span style={{ color: 'var(--danger)' }}> *</span>}
-        {hint && <span className="form-hint">{hint}</span>}
-      </label>
+      <div className="form-row-header">
+        <label className="form-label">
+          {label}
+          {required && <span style={{ color: 'var(--danger)' }}> *</span>}
+          {hint && <span className="form-hint">{hint}</span>}
+        </label>
+        {action && <div className="form-row-action">{action}</div>}
+      </div>
       {children}
       {error && <span className="form-error">{error}</span>}
     </div>
@@ -484,6 +554,7 @@ function TextArea({
   hint,
   soft,
   value,
+  action,
 }: {
   label: string;
   rows: number;
@@ -494,9 +565,10 @@ function TextArea({
   // (was `undefined` before, which made the counter always read 0 —
   // see audit M14).
   value?: string;
+  action?: React.ReactNode;
 }) {
   return (
-    <Field label={label} hint={hint}>
+    <Field label={label} hint={hint} action={action}>
       <textarea className="textarea" {...reg} rows={rows} />
       <SoftCounter value={value} soft={soft} />
     </Field>
@@ -510,6 +582,7 @@ function TextAreaWithCounter({
   control,
   soft,
   hint,
+  action,
 }: {
   label: string;
   rows: number;
@@ -517,9 +590,10 @@ function TextAreaWithCounter({
   control: ReturnType<typeof useForm<CharacterFormValues>>['control'];
   soft?: number;
   hint?: string;
+  action?: React.ReactNode;
 }) {
   return (
-    <Field label={label} hint={hint}>
+    <Field label={label} hint={hint} action={action}>
       <Controller
         control={control}
         name={name}
@@ -556,6 +630,42 @@ function SoftCounter({ value, soft }: { value: string | undefined; soft: number 
     <div className={`soft-counter ${warn ? 'warn' : ''}`}>
       {len} / {soft}
     </div>
+  );
+}
+
+export function PushFieldButton({
+  field,
+  value,
+  defaultTargetLabel,
+  busy,
+  onPush,
+}: {
+  field: PersonaField;
+  value: string | null | undefined;
+  defaultTargetLabel: string | null;
+  busy: boolean;
+  onPush: () => void;
+}) {
+  const empty = value == null || value === '';
+  const noTarget = defaultTargetLabel == null;
+  const disabled = empty || noTarget || busy;
+  let title = `Push ${PERSONA_FIELD_LABELS[field]} to ${defaultTargetLabel ?? 'default target'}`;
+  if (busy) title = 'Busy…';
+  else if (noTarget) title = 'Set a default push target to enable push.';
+  else if (empty) title = 'Field is empty.';
+
+  return (
+    <button
+      type="button"
+      className="btn btn-sm"
+      disabled={disabled}
+      title={title}
+      aria-label={`Push ${PERSONA_FIELD_LABELS[field]}`}
+      data-testid={`push-field-${field}`}
+      onClick={onPush}
+    >
+      Push
+    </button>
   );
 }
 

@@ -108,7 +108,7 @@ src-tauri/src/
 - Journal entries are local CRUD (`character_journal_entries` child table, `ON DELETE CASCADE` from `characters`; deleting a character removes its journal rows automatically) and are also embedded in the share image payload as `PartialCharacter.journal_entries`. On import the persona fields, cover image, and journal entries (entry text + keyphrases) are recreated under a new character id with fresh `JournalEntry.id`/`created_at`/`updated_at`. The new `/journal-create` endpoint is called per selected entry from the Push page, sequentially after a successful `/update-info` and before any `/chat-break` call; per-entry failures do not abort the push and each becomes a `JournalEntryStep` in the `PushResult.journal_entries` vector. Validation (length + keyphrase count) runs up-front so an invalid entry never triggers a network call, and is also re-run on share-image import so a hand-crafted code with an over-length entry is rejected. `PushLogEntry.journal_entry_ids` stores the ids of the entries that were actually sent (used by the Re-push button to pre-select them); the field is `#[serde(default)]` so old log rows deserialize as `None`. `notes` is still local-only (see `notes_are_not_in_share_code`).
 - Push as new Kin uses `POST /create-new-ai` with `ai_name`, `ai_gender`, `ai_backstory`, `custom_avatar_description`, `custom_greeting`; then a follow-up `POST /update-info` (always called, with at least `ai_id`) for the remaining persona fields; then `POST /journal-create` for each entry. The new `ai_id` is registered as a local target. `custom_avatar_description` is sent on create-new-ai only. The endpoint's plain-text body is the new `ai_id`; it is trimmed and an empty response is treated as `AppError::Invalid`.
 
-## Manual end-to-end checklist (matches the README)
+## Manual end-to-end checklist
 
 1. Launch with no token → first-run banner appears.
 2. Settings → paste a bogus token → **Test** → "Invalid or missing API key". Replace with a real token → "OK". Clear token → banner reappears.
@@ -163,6 +163,16 @@ src-tauri/src/
 50. Delete an AI target that has chat history → all rows cascade (existing behaviour).
 51. Delete a group target with chat history → same cascade.
 52. Add an AI and a Group with the same `id` string → both rows coexist; sync state and chat_messages are scoped to (id, kind).
+53. Character with no default → editor shows "— none —".
+54. Pick an AI target → save → reopen → still selected.
+55. Push page entry (no URL `targetId`) → dropdown pre-selected with the character's default.
+56. "Push as new Kin" on character with no default → reopen editor → default now points at the just-created target.
+57. Repeat 56 on a character that ALREADY has a default → default unchanged.
+58. Delete a referenced target → Targets row had "Default for N character(s)" caption before; affected character editor now shows "— none —".
+59. Duplicate a character with a default → duplicate's editor shows the same default.
+60. `/push?characterId=X` from character whose default is T → dropdown shows T. Same page with `?targetId=U` (Re-push link) → dropdown shows U.
+61. Editor dropdown lists only AI targets; group targets absent.
+62. On Push page, manually clear the dropdown → trigger any character refetch → dropdown stays cleared (does not snap back to the default).
 
 ## Troubleshooting
 

@@ -4,6 +4,7 @@ use uuid::Uuid;
 
 use crate::domain::character::Character;
 use crate::domain::character_revision::{CharacterRevision, CharacterRevisionSummary};
+use crate::domain::target::TargetKind;
 use crate::error::AppError;
 use crate::storage::{Repository, StorageError};
 
@@ -29,6 +30,8 @@ pub struct CharacterFields {
     pub greeting: Option<String>,
     pub notes: Option<String>,
     pub ai_avatar_description: Option<String>,
+    #[serde(default)]
+    pub default_target_id: Option<Uuid>,
 }
 
 fn empty_to_none(s: Option<String>) -> Option<String> {
@@ -55,6 +58,7 @@ fn normalize(fields: CharacterFields) -> CharacterFields {
         greeting: empty_to_none(fields.greeting),
         notes: fields.notes,
         ai_avatar_description: empty_to_none(fields.ai_avatar_description),
+        default_target_id: fields.default_target_id,
     }
 }
 
@@ -96,6 +100,34 @@ pub async fn save_character(
     } else {
         None
     };
+    // Resolve the default target. The form may submit a fresh id, omit
+    // the field entirely (partial edit → preserve the previously-saved
+    // default), or pass `None`. Group targets are rejected because they
+    // cannot be push targets.
+    let default_target_id = match fields.default_target_id {
+        Some(id) => match repo.get_target(id).await {
+            Ok(t) => {
+                if t.kind != TargetKind::Ai {
+                    return Err(AppError::invalid("default target must be an AI target"));
+                }
+                Some(id)
+            }
+            Err(StorageError::NotFound) => {
+                return Err(AppError::invalid("default target does not exist"));
+            }
+            Err(e) => return Err(AppError::database(e.to_string())),
+        },
+        None => {
+            if input.id.is_some() {
+                repo.get_character(new_id)
+                    .await
+                    .ok()
+                    .and_then(|c| c.default_target_id)
+            } else {
+                None
+            }
+        }
+    };
     let character = Character {
         id: new_id,
         name: name.to_string(),
@@ -113,6 +145,7 @@ pub async fn save_character(
         notes: fields.notes,
         ai_avatar_description: fields.ai_avatar_description,
         cover_image,
+        default_target_id,
         created_at: Utc::now(),
         updated_at: Utc::now(),
     };
@@ -193,6 +226,7 @@ pub async fn restore_character_revision(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::domain::target::Target;
     use crate::storage::sqlite::SqliteRepository;
     use std::sync::Arc;
 
@@ -361,6 +395,7 @@ mod tests {
             notes: None,
             ai_avatar_description: None,
             cover_image: None,
+            default_target_id: None,
             created_at: Utc::now(),
             updated_at: Utc::now(),
         }
@@ -748,5 +783,139 @@ mod tests {
         assert!(matches!(err, StorageError::NotFound));
         // The call site (revisions::snapshot_before) does not propagate.
         crate::commands::revisions::snapshot_before(&repo, bogus).await;
+    }
+
+    async fn seed_ai_target(repo: &Arc<dyn Repository>, ai_id: &str, label: &str) -> Target {
+        repo.upsert_target(Target {
+            id: Uuid::new_v4(),
+            ai_id: ai_id.into(),
+            kind: TargetKind::Ai,
+            label: label.into(),
+            created_at: Utc::now(),
+        })
+        .await
+        .unwrap()
+    }
+
+    async fn seed_group_target(repo: &Arc<dyn Repository>, ai_id: &str, label: &str) -> Target {
+        repo.upsert_target(Target {
+            id: Uuid::new_v4(),
+            ai_id: ai_id.into(),
+            kind: TargetKind::Group,
+            label: label.into(),
+            created_at: Utc::now(),
+        })
+        .await
+        .unwrap()
+    }
+
+    #[tokio::test]
+    async fn save_character_rejects_unknown_default_target_id() {
+        let repo = in_memory_repo();
+        let bogus = Uuid::new_v4();
+        let err = save_character(
+            repo.clone(),
+            CharacterInput {
+                id: None,
+                name: "Test".into(),
+                fields: CharacterFields {
+                    default_target_id: Some(bogus),
+                    ..Default::default()
+                },
+            },
+        )
+        .await
+        .unwrap_err();
+        assert!(
+            matches!(err, AppError::Invalid { .. }),
+            "unknown default target must surface as AppError::Invalid, got {err:?}"
+        );
+    }
+
+    #[tokio::test]
+    async fn save_character_rejects_group_target_as_default() {
+        let repo = in_memory_repo();
+        let group = seed_group_target(&repo, "grp_1", "Group").await;
+        let err = save_character(
+            repo.clone(),
+            CharacterInput {
+                id: None,
+                name: "Test".into(),
+                fields: CharacterFields {
+                    default_target_id: Some(group.id),
+                    ..Default::default()
+                },
+            },
+        )
+        .await
+        .unwrap_err();
+        assert!(
+            matches!(err, AppError::Invalid { .. }),
+            "group target as default must surface as AppError::Invalid, got {err:?}"
+        );
+    }
+
+    #[tokio::test]
+    async fn save_character_accepts_ai_target_as_default() {
+        let repo = in_memory_repo();
+        let t = seed_ai_target(&repo, "ai_1", "T").await;
+        let saved = save_character(
+            repo.clone(),
+            CharacterInput {
+                id: None,
+                name: "Test".into(),
+                fields: CharacterFields {
+                    default_target_id: Some(t.id),
+                    ..Default::default()
+                },
+            },
+        )
+        .await
+        .unwrap();
+        assert_eq!(saved.default_target_id, Some(t.id));
+        let read_back = repo.get_character(saved.id).await.unwrap();
+        assert_eq!(read_back.default_target_id, Some(t.id));
+    }
+
+    #[tokio::test]
+    async fn duplicate_inherits_default_target_id() {
+        let repo = in_memory_repo();
+        let t = seed_ai_target(&repo, "ai_1", "T").await;
+        let original = seed_character(&repo, "Original").await;
+        // Set the original's default.
+        let mut with_default = original.clone();
+        with_default.default_target_id = Some(t.id);
+        repo.upsert_character(with_default).await.unwrap();
+
+        let dup = duplicate_character(repo.clone(), original.id).await.unwrap();
+        assert_eq!(dup.default_target_id, Some(t.id));
+    }
+
+    #[tokio::test]
+    async fn save_character_without_default_target_id_preserves_existing_default() {
+        let repo = in_memory_repo();
+        let t = seed_ai_target(&repo, "ai_1", "T").await;
+        let c = seed_character(&repo, "C").await;
+        let cid = c.id;
+        // Seed a default on the character.
+        let mut with_default = c.clone();
+        with_default.default_target_id = Some(t.id);
+        repo.upsert_character(with_default).await.unwrap();
+
+        // Save with default_target_id omitted (None) — simulates a partial
+        // edit. The fallback must preserve the previously-saved default.
+        let saved = save_character(
+            repo.clone(),
+            CharacterInput {
+                id: Some(cid),
+                name: "Renamed".into(),
+                fields: CharacterFields::default(),
+            },
+        )
+        .await
+        .unwrap();
+        assert_eq!(saved.default_target_id, Some(t.id));
+        let read_back = repo.get_character(cid).await.unwrap();
+        assert_eq!(read_back.default_target_id, Some(t.id));
     }
 }

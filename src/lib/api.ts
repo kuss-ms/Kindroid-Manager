@@ -45,6 +45,7 @@ export interface CharacterInput {
   notes?: string | null;
   ai_avatar_description?: string | null;
   cover_image?: string | null;
+  default_target_id?: Uuid | null;
 }
 
 export interface TargetInput {

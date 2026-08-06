@@ -104,6 +104,7 @@ mod tests {
                 notes: None,
                 ai_avatar_description: None,
                 cover_image: None,
+                default_target_id: None,
                 created_at: Utc::now(),
                 updated_at: Utc::now(),
             },

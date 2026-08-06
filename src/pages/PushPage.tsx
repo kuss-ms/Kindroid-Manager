@@ -1,5 +1,5 @@
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
-import { useEffect, useMemo, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import { useNavigate, useSearchParams } from 'react-router-dom';
 import { api, errorMessage } from '../lib/api';
 import { ConfirmDialog } from '../components/ConfirmDialog';
@@ -81,6 +81,25 @@ export function PushPage() {
   useEffect(() => {
     setGreeting(character.data?.greeting ?? '');
   }, [character.data?.greeting]);
+
+  // One-shot auto-select of the character's default push target. The
+  // ref tracks the character id we've already applied for so a
+  // subsequent character-query refetch (after a manual clear or pick)
+  // does not snap the dropdown back to the default.
+  const defaultAppliedFor = useRef<string | null>(null);
+  useEffect(() => {
+    if (!character.data || !targets.data) return;
+    if (params.get('targetId')) return;
+    if (defaultAppliedFor.current === character.data.id) return;
+    const defaultId = character.data.default_target_id;
+    if (!defaultId) return;
+    const target = targets.data.find(
+      (t) => t.id === defaultId && t.kind === 'ai',
+    );
+    if (!target) return;
+    defaultAppliedFor.current = character.data.id;
+    setTargetId(target.id);
+  }, [character.data, targets.data, params]);
   const push = useMutation<PushResult, unknown, void>({
     mutationFn: () => {
       if (!character.data || !target.data) throw new Error('pick character & target');

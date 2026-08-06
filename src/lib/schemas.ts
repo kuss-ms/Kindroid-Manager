@@ -16,6 +16,10 @@ export const characterInputSchema = z.object({
   greeting: optionalString,
   notes: z.string().optional(),
   ai_avatar_description: optionalString,
+  default_target_id: z
+    .union([z.string().uuid(), z.literal(''), z.null()])
+    .optional()
+    .nullable(),
 });
 
 export type CharacterFormValues = z.infer<typeof characterInputSchema>;

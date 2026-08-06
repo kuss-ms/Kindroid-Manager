@@ -164,6 +164,10 @@ fn discover_migrations() -> Result<Vec<(u32, String)>, String> {
             "0014_target_kind.sql",
             include_str!("migrations/0014_target_kind.sql"),
         ),
+        (
+            "0015_character_default_target.sql",
+            include_str!("migrations/0015_character_default_target.sql"),
+        ),
     ];
     let mut out = Vec::new();
     for (name, body) in bodies {
@@ -211,7 +215,7 @@ impl Repository for SqliteRepository {
                 "SELECT id, name, ai_name, ai_gender, ai_backstory, ai_memory, ai_directive,
                         ai_example_message, ai_additional_context, current_scene, user_name,
                         user_gender, greeting, notes, ai_avatar_description, cover_image,
-                        created_at, updated_at
+                        default_target_id, created_at, updated_at
                  FROM characters ORDER BY updated_at DESC",
             )
             .map_err(|e| StorageError::Database(e.to_string()))?;
@@ -228,7 +232,7 @@ impl Repository for SqliteRepository {
             "SELECT id, name, ai_name, ai_gender, ai_backstory, ai_memory, ai_directive,
                     ai_example_message, ai_additional_context, current_scene, user_name,
                     user_gender, greeting, notes, ai_avatar_description, cover_image,
-                    created_at, updated_at
+                    default_target_id, created_at, updated_at
              FROM characters WHERE id = ?1",
             params![id.to_string()],
             row_to_character,
@@ -260,8 +264,8 @@ impl Repository for SqliteRepository {
              (id, name, ai_name, ai_gender, ai_backstory, ai_memory, ai_directive,
               ai_example_message, ai_additional_context, current_scene, user_name,
               user_gender, greeting, notes, ai_avatar_description, cover_image,
-              created_at, updated_at)
-             VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,?12,?13,?14,?15,?16,?17,?18)
+              default_target_id, created_at, updated_at)
+             VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,?12,?13,?14,?15,?16,?17,?18,?19)
              ON CONFLICT(id) DO UPDATE SET
                name=excluded.name, ai_name=excluded.ai_name, ai_gender=excluded.ai_gender,
                ai_backstory=excluded.ai_backstory, ai_memory=excluded.ai_memory,
@@ -271,6 +275,7 @@ impl Repository for SqliteRepository {
                user_gender=excluded.user_gender, greeting=excluded.greeting,
                notes=excluded.notes, ai_avatar_description=excluded.ai_avatar_description,
                cover_image=excluded.cover_image,
+               default_target_id=excluded.default_target_id,
                updated_at=excluded.updated_at",
             params![
                 c.id.to_string(),
@@ -289,6 +294,7 @@ impl Repository for SqliteRepository {
                 c.notes,
                 c.ai_avatar_description,
                 c.cover_image,
+                c.default_target_id.map(|u| u.to_string()),
                 c.created_at.to_rfc3339(),
                 c.updated_at.to_rfc3339(),
             ],
@@ -1531,7 +1537,7 @@ impl Repository for SqliteRepository {
                     "SELECT id, name, ai_name, ai_gender, ai_backstory, ai_memory, ai_directive,
                             ai_example_message, ai_additional_context, current_scene, user_name,
                             user_gender, greeting, notes, ai_avatar_description, cover_image,
-                            created_at, updated_at
+                            default_target_id, created_at, updated_at
                      FROM characters WHERE id = ?1",
                     params![character_id.to_string()],
                     row_to_character,
@@ -1686,8 +1692,9 @@ fn row_to_snapshot_fields(row: &rusqlite::Row<'_>) -> rusqlite::Result<Character
 
 fn row_to_character(row: &rusqlite::Row<'_>) -> rusqlite::Result<Character> {
     let id_s: String = row.get(0)?;
-    let created_s: String = row.get(16)?;
-    let updated_s: String = row.get(17)?;
+    let default_target_id_s: Option<String> = row.get(16)?;
+    let created_s: String = row.get(17)?;
+    let updated_s: String = row.get(18)?;
     Ok(Character {
         id: Uuid::parse_str(&id_s).map_err(|e| id_err(0, e))?,
         name: row.get(1)?,
@@ -1705,11 +1712,15 @@ fn row_to_character(row: &rusqlite::Row<'_>) -> rusqlite::Result<Character> {
         notes: row.get(13)?,
         ai_avatar_description: row.get(14)?,
         cover_image: row.get(15)?,
+        default_target_id: default_target_id_s
+            .as_deref()
+            .filter(|s| !s.is_empty())
+            .and_then(|s| Uuid::parse_str(s).ok()),
         created_at: DateTime::parse_from_rfc3339(&created_s)
-            .map_err(|e| id_err(16, e))?
+            .map_err(|e| id_err(17, e))?
             .with_timezone(&Utc),
         updated_at: DateTime::parse_from_rfc3339(&updated_s)
-            .map_err(|e| id_err(17, e))?
+            .map_err(|e| id_err(18, e))?
             .with_timezone(&Utc),
     })
 }
@@ -1880,6 +1891,7 @@ mod tests {
             notes: None,
             ai_avatar_description: None,
             cover_image: None,
+            default_target_id: None,
             created_at: Utc::now(),
             updated_at: Utc::now(),
         }
@@ -2058,6 +2070,55 @@ mod tests {
         assert!(
             indexes.iter().any(|n| n.contains("autoindex_targets")),
             "targets should have a composite UNIQUE index, got {indexes:?}"
+        );
+    }
+
+    #[test]
+    fn migration_0015_adds_default_target_id_column_with_fk() {
+        let mut conn = Connection::open_in_memory().expect("open in-memory");
+        conn.execute_batch("PRAGMA foreign_keys=ON;").unwrap();
+        run_migrations(&mut conn).unwrap();
+
+        let cols: Vec<String> = conn
+            .prepare("SELECT name FROM pragma_table_info('characters')")
+            .unwrap()
+            .query_map([], |r| r.get(0))
+            .unwrap()
+            .filter_map(|r| r.ok())
+            .collect();
+        assert!(
+            cols.iter().any(|c| c == "default_target_id"),
+            "characters should gain a `default_target_id` column, got {cols:?}"
+        );
+
+        // Foreign-key info: default_target_id → targets(id) with ON DELETE SET NULL.
+        // pragma_foreign_key_list columns: id, seq, table, from, to, on_update, on_delete, match
+        let fk_table: Option<String> = conn
+            .query_row(
+                "SELECT [table] FROM pragma_foreign_key_list('characters')
+                 WHERE [from] = 'default_target_id'",
+                [],
+                |r| r.get(0),
+            )
+            .ok();
+        assert_eq!(
+            fk_table.as_deref(),
+            Some("targets"),
+            "characters.default_target_id should FK to targets"
+        );
+
+        let fk_action: Option<String> = conn
+            .query_row(
+                "SELECT on_delete FROM pragma_foreign_key_list('characters')
+                 WHERE [table] = 'targets' AND [from] = 'default_target_id'",
+                [],
+                |r| r.get(0),
+            )
+            .ok();
+        assert_eq!(
+            fk_action.as_deref(),
+            Some("SET NULL"),
+            "default_target_id FK must be ON DELETE SET NULL"
         );
     }
 

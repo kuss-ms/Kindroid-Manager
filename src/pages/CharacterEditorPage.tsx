@@ -1,6 +1,6 @@
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { useNavigate, useParams } from 'react-router-dom';
-import { useEffect, useRef, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import { Controller, useForm, type UseFormRegisterReturn } from 'react-hook-form';
 import { zodResolver } from '@hookform/resolvers/zod';
 import { api, errorMessage, isAndroid } from '../lib/api';
@@ -28,6 +28,16 @@ export function CharacterEditorPage() {
     queryFn: () => (id ? api.getCharacter(id) : Promise.resolve(null)),
     enabled: !!id,
   });
+
+  const targets = useQuery({
+    queryKey: ['targets'],
+    queryFn: () => api.listTargets(),
+  });
+
+  const aiTargets = useMemo(
+    () => (targets.data ?? []).filter((t) => t.kind === 'ai'),
+    [targets.data],
+  );
 
   const save = useMutation({
     mutationFn: (values: CharacterFormValues & { id?: Uuid }) =>
@@ -175,6 +185,7 @@ export function CharacterEditorPage() {
       greeting: undefined,
       notes: undefined,
       ai_avatar_description: undefined,
+      default_target_id: undefined,
     },
   });
 
@@ -193,12 +204,13 @@ export function CharacterEditorPage() {
         greeting: character.data.greeting ?? undefined,
         notes: character.data.notes ?? undefined,
         ai_avatar_description: character.data.ai_avatar_description ?? undefined,
+        default_target_id: character.data.default_target_id ?? undefined,
       });
     }
   }, [character.data, reset]);
 
   const onSubmit = handleSubmit((v) => {
-    save.mutate({ ...v, id });
+    save.mutate({ ...v, default_target_id: v.default_target_id || null, id });
   });
 
   useEffect(() => {
@@ -384,6 +396,38 @@ export function CharacterEditorPage() {
           <textarea className="textarea" {...register('notes')} rows={3} maxLength={MAX_NOTE} />
         </Field>
       </form>
+
+      <div className="card">
+        <Field
+          label="Default push target"
+          hint="Pre-selected on the Push page. Group targets can't be the default because they can't be pushed to."
+        >
+          <Controller
+            name="default_target_id"
+            control={control}
+            render={({ field }) => (
+              <select
+                className="select"
+                data-testid="default-target-select"
+                value={
+                  field.value && aiTargets.some((t) => t.id === field.value)
+                    ? field.value
+                    : ''
+                }
+                onChange={(e) => field.onChange(e.target.value)}
+                style={{ marginTop: 8 }}
+              >
+                <option value="">— none —</option>
+                {aiTargets.map((t) => (
+                  <option key={t.id} value={t.id}>
+                    {t.label} — {t.ai_id}
+                  </option>
+                ))}
+              </select>
+            )}
+          />
+        </Field>
+      </div>
 
       {id ? (
         <JournalEditor characterId={id} />

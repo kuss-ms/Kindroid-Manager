@@ -26,6 +26,13 @@ pub struct Character {
     /// Path to the cover image relative to the data dir (e.g. `images/{id}.png`).
     #[serde(default)]
     pub cover_image: Option<String>,
+    /// Local-only pointer to one of this character's AI targets. Auto-prefills
+    /// the target dropdown on the Push page. Group targets can never be the
+    /// default (they can't be pushed to). Survives target deletion via FK
+    /// `ON DELETE SET NULL`; intentionally excluded from snapshots and the
+    /// share-code wire format.
+    #[serde(default)]
+    pub default_target_id: Option<Uuid>,
     pub created_at: DateTime<Utc>,
     pub updated_at: DateTime<Utc>,
 }

@@ -1,5 +1,5 @@
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
-import { useState } from 'react';
+import { useMemo, useState } from 'react';
 import { useForm } from 'react-hook-form';
 import { zodResolver } from '@hookform/resolvers/zod';
 import { api, errorMessage, type TargetInput } from '../lib/api';
@@ -14,6 +14,19 @@ export function TargetsPage() {
     queryKey: ['targets'],
     queryFn: api.listTargets,
   });
+  const characters = useQuery<Awaited<ReturnType<typeof api.listCharacters>>>({
+    queryKey: ['characters'],
+    queryFn: api.listCharacters,
+  });
+  const defaultCountByTarget = useMemo(() => {
+    const m = new Map<string, number>();
+    for (const c of characters.data ?? []) {
+      if (c.default_target_id) {
+        m.set(c.default_target_id, (m.get(c.default_target_id) ?? 0) + 1);
+      }
+    }
+    return m;
+  }, [characters.data]);
   const [editing, setEditing] = useState<TargetInput | null>(null);
   const [deleting, setDeleting] = useState<string | null>(null);
   const save = useMutation<Awaited<ReturnType<typeof api.saveTarget>>, unknown, TargetInput>({
@@ -83,6 +96,14 @@ export function TargetsPage() {
                     )}
                   </div>
                   <div className="list-item-sub mono">{t.ai_id}</div>
+                  {(() => {
+                    const count = defaultCountByTarget.get(t.id) ?? 0;
+                    return count > 0 ? (
+                      <div className="muted" style={{ fontSize: 11, marginTop: 4 }}>
+                        Default for {count} character{count === 1 ? '' : 's'}
+                      </div>
+                    ) : null;
+                  })()}
                 </div>
                 <div className="list-item-actions">
                   <button className="btn btn-sm" onClick={() => setEditing({ ...t })}>

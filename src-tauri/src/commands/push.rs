@@ -208,6 +208,18 @@ pub async fn do_create_new_kin(
             created_at: Utc::now(),
         })
         .await?;
+    // If the source character had no default target yet, auto-set the
+    // newly-created target as its default. Reload the character so any
+    // concurrent editor edits win. Swallow NotFound (the character was
+    // deleted between the initial fetch and this re-fetch — the push
+    // already succeeded). Other errors propagate. This side-effect is
+    // intentionally NOT snapshotted: it's bookkeeping, not a user edit.
+    if let Ok(mut current) = repo.get_character(character.id).await {
+        if current.default_target_id.is_none() {
+            current.default_target_id = Some(target.id);
+            let _ = repo.upsert_character(current).await;
+        }
+    }
     let journal_entry_ids = if journal_entries.is_empty() {
         None
     } else {
@@ -1027,6 +1039,7 @@ mod tests {
                 notes: None,
                 ai_avatar_description: None,
                 cover_image: None,
+                default_target_id: None,
                 created_at: Utc::now(),
                 updated_at: Utc::now(),
             },
@@ -1686,5 +1699,107 @@ mod tests {
         let err = do_push(&repo, &client, req).await.unwrap_err();
         assert!(matches!(err, AppError::Invalid { .. }));
         assert!(client.journal_calls().is_empty());
+    }
+
+    #[tokio::test]
+    async fn create_new_kin_sets_default_target_when_none() {
+        set_token();
+        let (mut c, t) = fixtures();
+        c.default_target_id = None;
+        let repo = FakeRepo::new(c.clone(), t);
+        let client = FakeClient::ok_both();
+        let result = do_create_new_kin(&repo, &client, CreateNewKinRequest { character_id: c.id })
+            .await
+            .unwrap();
+        assert!(result.create_new_ai.ok);
+        let stored = repo.get_character(c.id).await.unwrap();
+        assert_eq!(
+            stored.default_target_id,
+            Some(result.target.id),
+            "newly-created target id must be stored as default"
+        );
+        assert_eq!(result.target.ai_id, "ai_NEW_OK");
+    }
+
+    #[tokio::test]
+    async fn create_new_kin_does_not_overwrite_existing_default() {
+        set_token();
+        let (mut c, existing_t) = fixtures();
+        let other = Target {
+            id: Uuid::new_v4(),
+            ai_id: "ai_OTHER".into(),
+            kind: TargetKind::Ai,
+            label: "Other".into(),
+            created_at: Utc::now(),
+        };
+        c.default_target_id = Some(other.id);
+        let repo = FakeRepo::new(c.clone(), existing_t);
+        repo.upsert_target(other.clone()).await.unwrap();
+        let client = FakeClient::ok_both();
+        let result = do_create_new_kin(&repo, &client, CreateNewKinRequest { character_id: c.id })
+            .await
+            .unwrap();
+        assert!(result.create_new_ai.ok);
+        let stored = repo.get_character(c.id).await.unwrap();
+        assert_eq!(
+            stored.default_target_id,
+            Some(other.id),
+            "existing default must not be replaced"
+        );
+        assert_ne!(result.target.id, other.id);
+    }
+
+    #[tokio::test]
+    async fn create_new_kin_does_not_set_default_when_create_step_fails() {
+        set_token();
+        let (mut c, t) = fixtures();
+        c.default_target_id = None;
+        let repo = FakeRepo::new(c.clone(), t);
+        let client = FakeClient::ok_both();
+        *client.create_new_ai.lock().unwrap() = Some(Err(KindroidError::BadRequest {
+            status: 400,
+            body: "rejected".into(),
+        }));
+        let result = do_create_new_kin(&repo, &client, CreateNewKinRequest { character_id: c.id })
+            .await
+            .unwrap();
+        assert!(!result.create_new_ai.ok);
+        let stored = repo.get_character(c.id).await.unwrap();
+        assert!(
+            stored.default_target_id.is_none(),
+            "failed create-new-ai must not auto-set default"
+        );
+    }
+
+    #[tokio::test]
+    async fn create_new_kin_default_survives_journal_partial_failure() {
+        set_token();
+        let (c, t) = fixtures();
+        let repo = FakeRepo::new(c.clone(), t);
+        repo.set_journal(vec![
+            make_entry(c.id, "je-1", "First", &[]),
+            make_entry(c.id, "je-2", "Second", &[]),
+        ]);
+        let client = FakeClient::ok_both();
+        client.push_journal_result(Ok(HttpResponse {
+            status: 200,
+            ok: true,
+            body: "ok".into(),
+        }));
+        client.push_journal_result(Err(KindroidError::Server {
+            status: 500,
+            body: "boom".into(),
+        }));
+        let result = do_create_new_kin(&repo, &client, CreateNewKinRequest { character_id: c.id })
+            .await
+            .unwrap();
+        assert!(result.create_new_ai.ok);
+        assert_eq!(result.journal_entries.len(), 2);
+        let stored = repo.get_character(c.id).await.unwrap();
+        assert_eq!(
+            stored.default_target_id,
+            Some(result.target.id),
+            "default must still be set after journal partial failure"
+        );
     }
 }

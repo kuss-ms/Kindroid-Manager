@@ -210,6 +210,7 @@ mod tests {
             notes: None,
             ai_avatar_description: Some("long auburn hair, green eyes".into()),
             cover_image: None,
+            default_target_id: None,
             created_at: Utc::now(),
             updated_at: Utc::now(),
         }

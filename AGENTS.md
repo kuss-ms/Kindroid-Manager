@@ -154,6 +154,15 @@ src-tauri/src/
 41. Set global automation instructions, then set a target override → prompts use override first, global second, and hard-coded defaults when both are empty; restore and clear each override.
 42. Configure an authless AI endpoint and an authenticated endpoint → automation sends an explicit empty AI bearer for the former and the stored bearer for the latter; no token appears in logs.
 43. Delete a target with automation enabled → automation state, pending runs, and generated audit entries are removed by cascade.
+44. Add a group target on the Targets page → row shows `Group chat` badge.
+45. Edit the target → kind radio is disabled.
+46. Push page → the group target does NOT appear in the dropdown.
+47. Chat History → select the group target → Sync fetches; messages list populates.
+48. Pin a message → row reflects favourite; Kindroid web UI shows the pin.
+49. On a group target, the `Automation…` button is disabled.
+50. Delete an AI target that has chat history → all rows cascade (existing behaviour).
+51. Delete a group target with chat history → same cascade.
+52. Add an AI and a Group with the same `id` string → both rows coexist; sync state and chat_messages are scoped to (id, kind).
 
 ## Troubleshooting
 

@@ -9,7 +9,9 @@ import type {
   ChatSyncState,
   SyncStatusKind,
   Target,
+  TargetKind,
 } from '../lib/types';
+import { TARGET_KIND_LABEL } from '../lib/types';
 import { ConfirmDialog } from '../components/ConfirmDialog';
 import { AutomationPanel } from '../components/AutomationPanel';
 import { toast } from '../components/Toaster';
@@ -17,8 +19,14 @@ import { toast } from '../components/Toaster';
 const PAGE_SIZE = 50;
 const SEARCH_LIMIT = 200;
 
+interface ActiveSyncInfo {
+  ai_id: string;
+  kind: TargetKind;
+}
+
 interface LiveProgress {
   ai_id: string;
+  kind: TargetKind;
   total: number;
   requests: number;
   last_batch_size: number;
@@ -73,7 +81,7 @@ export function ChatHistoryPage() {
     queryKey: ['targets'],
     queryFn: api.listTargets,
   });
-  const current = useQuery<string | null>({
+  const current = useQuery<ActiveSyncInfo | null>({
     queryKey: ['current-sync'],
     queryFn: api.getCurrentSync,
     refetchInterval: 5000,
@@ -81,16 +89,45 @@ export function ChatHistoryPage() {
 
   const targetsList = useMemo(() => targets.data ?? [], [targets.data]);
   const urlAiId = params.get('ai_id');
-  const selectedAiId = useMemo(() => {
+  const urlKind = params.get('kind') as TargetKind | null;
+  // `selectedKey` is the (ai_id, kind) pair that uniquely identifies a
+  // target — Kindroid lets an AI and a Group share the same identifier
+  // string, so keying the UI on `ai_id` alone would conflate them.
+  const selectedKey = useMemo<{ ai_id: string; kind: TargetKind } | null>(() => {
     if (!targets.isLoading && targetsList.length === 0) return null;
-    if (urlAiId && targetsList.some((t) => t.ai_id === urlAiId)) return urlAiId;
+    if (
+      urlAiId &&
+      urlKind &&
+      targetsList.some(
+        (t) => t.ai_id === urlAiId && t.kind === urlKind,
+      )
+    ) {
+      return { ai_id: urlAiId, kind: urlKind };
+    }
     return null;
-  }, [urlAiId, targetsList, targets.isLoading]);
+  }, [urlAiId, urlKind, targetsList, targets.isLoading]);
+  const selectedAiId = selectedKey?.ai_id ?? null;
+  const selectedKind: TargetKind | null = selectedKey?.kind ?? null;
+  const selectedTarget = useMemo(
+    () =>
+      selectedKey
+        ? targetsList.find(
+            (t) => t.ai_id === selectedKey.ai_id && t.kind === selectedKey.kind,
+          ) ?? null
+        : null,
+    [targetsList, selectedKey],
+  );
+  const isGroup = selectedKind === 'group';
 
-  function setSelectedAiId(aiId: string) {
+  function setSelectedTarget(ai_id: string, kind: TargetKind) {
     const next = new URLSearchParams(params);
-    if (aiId) next.set('ai_id', aiId);
-    else next.delete('ai_id');
+    if (ai_id) {
+      next.set('ai_id', ai_id);
+      next.set('kind', kind);
+    } else {
+      next.delete('ai_id');
+      next.delete('kind');
+    }
     setParams(next, { replace: true });
   }
 
@@ -135,25 +172,36 @@ export function ChatHistoryPage() {
 
   // Sync state (5 s polling even when navigated away).
   const syncState = useQuery<ChatSyncState | null>({
-    queryKey: ['chat-sync-state', selectedAiId],
-    queryFn: () => (selectedAiId ? api.getChatSyncState(selectedAiId) : Promise.resolve(null)),
-    enabled: !!selectedAiId,
+    queryKey: ['chat-sync-state', selectedAiId, selectedKind],
+    queryFn: () =>
+      selectedAiId && selectedKind
+        ? api.getChatSyncState(selectedAiId, selectedKind)
+        : Promise.resolve(null),
+    enabled: !!selectedAiId && !!selectedKind,
     refetchInterval: 5000,
   });
   const messageCount = useQuery<number | null>({
-    queryKey: ['chat-message-count', selectedAiId],
-    queryFn: () => (selectedAiId ? api.chatMessageCount(selectedAiId) : Promise.resolve(null)),
-    enabled: !!selectedAiId,
+    queryKey: ['chat-message-count', selectedAiId, selectedKind],
+    queryFn: () =>
+      selectedAiId && selectedKind
+        ? api.chatMessageCount(selectedAiId, selectedKind)
+        : Promise.resolve(null),
+    enabled: !!selectedAiId && !!selectedKind,
     refetchInterval: 5000,
   });
 
   // Lightweight view of automation state so the page can surface a
   // status badge on the Automation… button without opening the modal.
+  // Group targets can't have automation, so skip the query entirely
+  // for them — the backend would reject, and React Query would log the
+  // error in devtools even when the response is ignored.
   const automationBadge = useQuery<ChatAutomationDto | null>({
-    queryKey: ['chat-automation', selectedAiId],
+    queryKey: ['chat-automation', selectedAiId, selectedKind],
     queryFn: () =>
-      selectedAiId ? api.getChatAutomationState(selectedAiId) : Promise.resolve(null),
-    enabled: !!selectedAiId,
+      selectedAiId && selectedKind === 'ai'
+        ? api.getChatAutomationState(selectedAiId)
+        : Promise.resolve(null),
+    enabled: !!selectedAiId && selectedKind === 'ai',
     refetchInterval: 5000,
   });
   const automationHasError =
@@ -168,28 +216,35 @@ export function ChatHistoryPage() {
 
   // Page of messages (browse mode).
   const browsePage = useQuery<ChatMessage[]>({
-    queryKey: ['chat-messages', selectedAiId, browseCursor, favouritesOnly],
+    queryKey: ['chat-messages', selectedAiId, selectedKind, browseCursor, favouritesOnly],
     queryFn: () => {
-      if (!selectedAiId) return Promise.resolve([]);
-      return api.listChatMessages(selectedAiId, browseCursor, PAGE_SIZE, favouritesOnly);
+      if (!selectedAiId || !selectedKind) return Promise.resolve([]);
+      return api.listChatMessages(
+        selectedAiId,
+        selectedKind,
+        browseCursor,
+        PAGE_SIZE,
+        favouritesOnly,
+      );
     },
-    enabled: !!selectedAiId && !isSearching,
+    enabled: !!selectedAiId && !!selectedKind && !isSearching,
   });
 
   // Search results.
   const searchPage = useQuery<ChatMessage[]>({
-    queryKey: ['chat-search', selectedAiId, trimmedQuery, searchOffset, favouritesOnly],
+    queryKey: ['chat-search', selectedAiId, selectedKind, trimmedQuery, searchOffset, favouritesOnly],
     queryFn: () => {
-      if (!selectedAiId || !trimmedQuery) return Promise.resolve([]);
+      if (!selectedAiId || !selectedKind || !trimmedQuery) return Promise.resolve([]);
       return api.searchChat(
         selectedAiId,
+        selectedKind,
         escapeFtsQuery(trimmedQuery),
         PAGE_SIZE,
         searchOffset,
         favouritesOnly,
       );
     },
-    enabled: !!selectedAiId && isSearching,
+    enabled: !!selectedAiId && !!selectedKind && isSearching,
   });
 
   // Subscribe to backend events. The progress event carries the
@@ -201,6 +256,7 @@ export function ChatHistoryPage() {
     unlistens.push(
       listen<{
         ai_id: string;
+        kind: TargetKind;
         total: number;
         last_timestamp: number;
         full_sync_done: boolean;
@@ -212,7 +268,9 @@ export function ChatHistoryPage() {
         last_deleted_count: number;
       }>('chat-sync-progress', (event) => {
         const p = event.payload;
-        if (selectedAiId && p.ai_id !== selectedAiId) return;
+        if (selectedAiId && selectedKind) {
+          if (p.ai_id !== selectedAiId || p.kind !== selectedKind) return;
+        }
         setLiveProgress({ ...p, received_at: Date.now() });
         queryClient.invalidateQueries({ queryKey: ['chat-sync-state'] });
         queryClient.invalidateQueries({ queryKey: ['chat-message-count'] });
@@ -228,15 +286,19 @@ export function ChatHistoryPage() {
     unlistens.push(
       listen<{
         ai_id: string;
+        kind: TargetKind;
         total: number;
         status_kind: SyncStatusKind;
         status_message: string | null;
         requests: number;
       }>('chat-sync-complete', (event) => {
         const p = event.payload;
-        if (selectedAiId && p.ai_id !== selectedAiId) return;
+        if (selectedAiId && selectedKind) {
+          if (p.ai_id !== selectedAiId || p.kind !== selectedKind) return;
+        }
         setLiveProgress({
           ai_id: p.ai_id,
+          kind: p.kind,
           total: p.total,
           last_timestamp: 0,
           full_sync_done: true,
@@ -259,14 +321,15 @@ export function ChatHistoryPage() {
     return () => {
       unlistens.forEach((p) => p.then((u) => u()).catch(() => {}));
     };
-  }, [queryClient, selectedAiId]);
+  }, [queryClient, selectedAiId, selectedKind]);
 
   async function onSync() {
-    if (!selectedAiId) return;
+    if (!selectedAiId || !selectedKind) return;
     try {
-      await api.startChatSync(selectedAiId);
+      await api.startChatSync(selectedAiId, selectedKind);
       setLiveProgress({
         ai_id: selectedAiId,
+        kind: selectedKind,
         total: syncState.data?.total ?? 0,
         last_timestamp: 0,
         full_sync_done: false,
@@ -304,10 +367,10 @@ export function ChatHistoryPage() {
   // stays focused on the chat itself.
   const [automationOpen, setAutomationOpen] = useState(false);
   async function onResetConfirm() {
-    if (!selectedAiId) return;
+    if (!selectedAiId || !selectedKind) return;
     setResetting(true);
     try {
-      const deleted = await api.resetChatHistory(selectedAiId);
+      const deleted = await api.resetChatHistory(selectedAiId, selectedKind);
       // Wipe the live progress hint so the UI doesn't show a stale
       // request count from the previous run.
       setLiveProgress(null);
@@ -337,25 +400,30 @@ export function ChatHistoryPage() {
     boolean,
     unknown,
     { kindroidMsgId: string; prevFavourite: boolean },
-    { aiId: string; kindroidMsgId: string; prevFavourite: boolean }
+    { aiId: string; kind: TargetKind; kindroidMsgId: string; prevFavourite: boolean }
   >({
     mutationFn: ({ kindroidMsgId }) => {
       const aiId = selectedAiId;
-      if (!aiId) throw new Error('no target selected');
-      return api.setChatMessageFavourite(aiId, kindroidMsgId);
+      const kind = selectedKind;
+      if (!aiId || !kind) throw new Error('no target selected');
+      return api.setChatMessageFavourite(aiId, kind, kindroidMsgId);
     },
     onMutate: ({ kindroidMsgId, prevFavourite }) => {
-      if (!selectedAiId) return { aiId: '', kindroidMsgId, prevFavourite };
+      if (!selectedAiId || !selectedKind) {
+        return { aiId: '', kind: 'ai' as TargetKind, kindroidMsgId, prevFavourite };
+      }
       setPendingFavourites((prev) => {
         const next = new Set(prev);
         next.add(kindroidMsgId);
         return next;
       });
+      const aiId = selectedAiId;
+      const kind = selectedKind;
       // Optimistically flip the favourite on every cached page for this
-      // message. React Query keys include favouritesOnly + browseOffset,
-      // so we patch every variant via setQueriesData.
+      // message. React Query keys include favouritesOnly + browseOffset +
+      // kind, so we patch every variant via setQueriesData.
       queryClient.setQueriesData<ChatMessage[]>(
-        { queryKey: ['chat-messages', selectedAiId] },
+        { queryKey: ['chat-messages', aiId] },
         (old) =>
           old
             ? old.map((m) =>
@@ -364,7 +432,7 @@ export function ChatHistoryPage() {
             : old,
       );
       queryClient.setQueriesData<ChatMessage[]>(
-        { queryKey: ['chat-search', selectedAiId] },
+        { queryKey: ['chat-search', aiId] },
         (old) =>
           old
             ? old.map((m) =>
@@ -376,18 +444,18 @@ export function ChatHistoryPage() {
       // disappears from the filtered list immediately.
       if (favouritesOnly && prevFavourite) {
         queryClient.setQueriesData<ChatMessage[]>(
-          { queryKey: ['chat-messages', selectedAiId] },
+          { queryKey: ['chat-messages', aiId] },
           (old) => (old ? old.filter((m) => m.kindroid_msg_id !== kindroidMsgId) : old),
         );
         queryClient.setQueriesData<ChatMessage[]>(
-          { queryKey: ['chat-search', selectedAiId] },
+          { queryKey: ['chat-search', aiId] },
           (old) => (old ? old.filter((m) => m.kindroid_msg_id !== kindroidMsgId) : old),
         );
       }
-      return { aiId: selectedAiId, kindroidMsgId, prevFavourite };
+      return { aiId, kind, kindroidMsgId, prevFavourite };
     },
     onSuccess: (canonical, { kindroidMsgId }) => {
-      if (!selectedAiId) return;
+      if (!selectedAiId || !selectedKind) return;
       // Reconcile every cache to the server's authoritative value. If the
       // filter is on and the server cleared the pin, drop the row.
       const aiId = selectedAiId;
@@ -462,9 +530,9 @@ export function ChatHistoryPage() {
   }
 
   // Targets loaded but the user hasn't picked one yet (or the URL had a
-  // stale ai_id). Show a helpful empty state instead of rendering the
+  // stale ai_id/kind). Show a helpful empty state instead of rendering the
   // full chat-history UI with no data.
-  if (!selectedAiId) {
+  if (!selectedAiId || !selectedKind) {
     return (
       <div className="page">
         <div className="page-header">
@@ -486,12 +554,18 @@ export function ChatHistoryPage() {
             id="target-select"
             className="select"
             value=""
-            onChange={(e) => setSelectedAiId(e.target.value)}
+            onChange={(e) => {
+              const value = e.target.value;
+              // Find the matching target so we can carry both ai_id
+              // and kind into the URL.
+              const match = targetsList.find((t) => t.id === value);
+              if (match) setSelectedTarget(match.ai_id, match.kind);
+            }}
           >
             <option value="">— select a target —</option>
             {targetsList.map((t) => (
-              <option key={t.id} value={t.ai_id}>
-                {t.label} ({t.ai_id})
+              <option key={t.id} value={t.id}>
+                {t.label} ({t.ai_id}) — {TARGET_KIND_LABEL[t.kind]}
               </option>
             ))}
           </select>
@@ -506,19 +580,29 @@ export function ChatHistoryPage() {
   const statusKind: SyncStatusKind = liveProgress?.status_kind ?? state?.status_kind ?? 'idle';
   const total = liveProgress?.total ?? state?.total ?? messageCount.data ?? 0;
 
+  // `activeSyncMatches` is true when the registry's currently-running
+  // sync is exactly this (ai_id, kind). A sync for a different kind on
+  // the same ai_id is treated as "another sync in progress" — group +
+  // AI share the singleton slot.
+  const activeSyncMatches =
+    currentSyncing !== null &&
+    currentSyncing !== undefined &&
+    currentSyncing.ai_id === selectedAiId &&
+    currentSyncing.kind === selectedKind;
+
   // Build the progress indicator subtitle. During a sync we combine the
   // request count + last-batch timestamp so the user can see whether the
   // backfill is making progress.
   function progressSubtitle(): string {
-    if (selectedAiId && currentSyncing === selectedAiId && liveProgress) {
+    if (activeSyncMatches && liveProgress) {
       const reqPart = liveProgress.requests > 0 ? `Request #${liveProgress.requests}` : 'Starting…';
       const cursorPart = liveProgress.last_timestamp
         ? `Last message: ${tsToLocal(liveProgress.last_timestamp)}`
         : 'Awaiting first page…';
       return `Syncing… · ${reqPart} · ${cursorPart}`;
     }
-    if (currentSyncing && currentSyncing !== selectedAiId) {
-      return `Sync in progress for ${currentSyncing}`;
+    if (currentSyncing && !activeSyncMatches) {
+      return `Sync in progress for ${currentSyncing.ai_id} (${TARGET_KIND_LABEL[currentSyncing.kind]})`;
     }
     if (state == null) return 'Last synced: never';
     if (statusKind === 'backoff') {
@@ -539,7 +623,7 @@ export function ChatHistoryPage() {
   let body: string | null = null;
   let syncDisabledReason: string | null = null;
 
-  if (selectedAiId && currentSyncing === selectedAiId) {
+  if (activeSyncMatches) {
     showCancel = true;
     const lastDel = liveProgress?.last_deleted_count ?? 0;
     const lastBatch = liveProgress?.last_batch_size ?? 0;
@@ -550,7 +634,7 @@ export function ChatHistoryPage() {
     } else {
       body = `Last updated: ${localTime(state?.last_synced_at) || '—'}`;
     }
-  } else if (selectedAiId && currentSyncing && currentSyncing !== selectedAiId) {
+  } else if (currentSyncing && !activeSyncMatches) {
     syncDisabledReason = `Cancel it before syncing this one.`;
     body = `Cancel it from its target page before syncing this one.`;
   } else if (state == null) {
@@ -567,7 +651,9 @@ export function ChatHistoryPage() {
     body = 'Sync stopped. Cursor preserved — click Sync to resume.';
   } else if (state.full_sync_done && total === 0) {
     showSync = true;
-    body = 'No messages on Kindroid for this AI.';
+    body = isGroup
+      ? 'No messages on Kindroid for this group.'
+      : 'No messages on Kindroid for this AI.';
   } else {
     showSync = true;
   }
@@ -592,13 +678,17 @@ export function ChatHistoryPage() {
         <select
           id="target-select"
           className="select"
-          value={selectedAiId ?? ''}
-          onChange={(e) => setSelectedAiId(e.target.value)}
+          value={selectedTarget?.id ?? ''}
+          onChange={(e) => {
+            const value = e.target.value;
+            const match = targetsList.find((t) => t.id === value);
+            if (match) setSelectedTarget(match.ai_id, match.kind);
+          }}
         >
           <option value="">— select a target —</option>
           {targetsList.map((t) => (
-            <option key={t.id} value={t.ai_id}>
-              {t.label} ({t.ai_id})
+            <option key={t.id} value={t.id}>
+              {t.label} ({t.ai_id}) — {TARGET_KIND_LABEL[t.kind]}
             </option>
           ))}
         </select>
@@ -624,19 +714,20 @@ export function ChatHistoryPage() {
         <button
           className="btn"
           onClick={() => setAutomationOpen(true)}
-          disabled={!selectedAiId}
+          disabled={isGroup}
           title={
-            selectedAiId
-              ? automationHasError
+            isGroup
+              ? 'Automation is not available for group chats.'
+              : automationHasError
                 ? 'Automation recorded an error — open to clear or reset.'
                 : automationIsActive
                   ? 'Auto-journal or auto-summary is enabled for this target.'
                   : 'Configure auto-journal and auto-summary for this target.'
-              : 'Select a target to configure automation.'
           }
+          data-testid="automation-button"
         >
           Automation…
-          {selectedAiId && automationHasError && (
+          {!isGroup && automationHasError && (
             <span
               className="badge badge-danger"
               style={{ marginLeft: 6 }}
@@ -645,7 +736,7 @@ export function ChatHistoryPage() {
               error
             </span>
           )}
-          {selectedAiId && automationIsActive && !automationHasError && (
+          {!isGroup && automationIsActive && !automationHasError && (
             <span
               className="badge badge-success"
               style={{ marginLeft: 6 }}
@@ -658,9 +749,9 @@ export function ChatHistoryPage() {
         <button
           className="btn btn-danger"
           onClick={() => setResetOpen(true)}
-          disabled={resetting || (selectedAiId != null && currentSyncing === selectedAiId)}
+          disabled={resetting || activeSyncMatches}
           title={
-            selectedAiId != null && currentSyncing === selectedAiId
+            activeSyncMatches
               ? 'Cancel the sync before resetting.'
               : 'Delete all locally-cached chat history for this target.'
           }
@@ -815,6 +906,7 @@ export function ChatHistoryPage() {
             </p>
             <AutomationPanel
               aiId={selectedAiId}
+              kind={selectedKind}
               automationInProgress={!!selectedAiId && !!state && state.status_kind === 'running'}
             />
           </div>

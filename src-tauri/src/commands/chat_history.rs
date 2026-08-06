@@ -2,29 +2,32 @@ use std::sync::Arc;
 
 use crate::commands::push::{DEFAULT_BASE_URL, SETTING_BASE_URL_PUBLIC as SETTING_BASE_URL};
 use crate::domain::chat_message::{ChatMessage, ChatSyncState, SyncStatusKind};
+use crate::domain::target::TargetKind;
 use crate::error::AppError;
 use crate::kindroid::{KindroidClient, ToggleMessagePinRequest};
 use crate::security::secrets::{SecretStoreError, Secrets, API_TOKEN_KEY};
 use crate::storage::Repository;
 
 use super::sync_loop::escape_fts_query;
-use super::sync_registry::SyncRegistry;
+use super::sync_registry::{ActiveSync, SyncRegistry};
 
 pub async fn list_chat_messages(
     repo: Arc<dyn Repository>,
     ai_id: String,
+    kind: TargetKind,
     before_ts: Option<i64>,
     limit: u32,
     favourites_only: bool,
 ) -> Result<Vec<ChatMessage>, AppError> {
     Ok(repo
-        .list_chat_messages(&ai_id, before_ts, limit, favourites_only)
+        .list_chat_messages(&ai_id, kind, before_ts, limit, favourites_only)
         .await?)
 }
 
 pub async fn search_chat(
     repo: Arc<dyn Repository>,
     ai_id: String,
+    kind: TargetKind,
     query: String,
     limit: u32,
     offset: u32,
@@ -35,7 +38,7 @@ pub async fn search_chat(
         return Ok(Vec::new());
     }
     Ok(repo
-        .search_chat(&ai_id, &escaped, limit, offset, favourites_only)
+        .search_chat(&ai_id, kind, &escaped, limit, offset, favourites_only)
         .await?)
 }
 
@@ -45,6 +48,7 @@ pub async fn toggle_chat_message_favourite(
     repo: Arc<dyn Repository>,
     client: Arc<dyn KindroidClient>,
     ai_id: String,
+    kind: TargetKind,
     kindroid_msg_id: String,
 ) -> Result<bool, AppError> {
     let trimmed_ai = ai_id.trim();
@@ -66,6 +70,7 @@ pub async fn toggle_chat_message_favourite(
             &base_url,
             ToggleMessagePinRequest {
                 ai_id: trimmed_ai.to_string(),
+                kind,
                 message_id: trimmed_msg.to_string(),
             },
         )
@@ -74,7 +79,7 @@ pub async fn toggle_chat_message_favourite(
     // in the opposite direction to what the user clicked (e.g. another
     // client toggled the same message in parallel).
     let canonical = repo
-        .set_chat_message_favourite(trimmed_ai, trimmed_msg, resp.is_pinned)
+        .set_chat_message_favourite(trimmed_ai, kind, trimmed_msg, resp.is_pinned)
         .await?;
     Ok(canonical)
 }
@@ -83,16 +88,21 @@ fn map_secret_err(e: SecretStoreError) -> AppError {
     AppError::from(e)
 }
 
-pub async fn chat_message_count(repo: Arc<dyn Repository>, ai_id: String) -> Result<u64, AppError> {
-    Ok(repo.chat_message_count(&ai_id).await?)
+pub async fn chat_message_count(
+    repo: Arc<dyn Repository>,
+    ai_id: String,
+    kind: TargetKind,
+) -> Result<u64, AppError> {
+    Ok(repo.chat_message_count(&ai_id, kind).await?)
 }
 
 pub async fn get_chat_sync_state(
     repo: Arc<dyn Repository>,
     registry: Arc<SyncRegistry>,
     ai_id: String,
+    kind: TargetKind,
 ) -> Result<Option<ChatSyncState>, AppError> {
-    let Some(mut state) = repo.get_chat_sync_state(&ai_id).await? else {
+    let Some(mut state) = repo.get_chat_sync_state(&ai_id, kind).await? else {
         return Ok(None);
     };
 
@@ -102,7 +112,13 @@ pub async fn get_chat_sync_state(
             state.status_kind,
             SyncStatusKind::Running | SyncStatusKind::Backoff
         );
-    if current.as_deref() != Some(ai_id.as_str()) && state_is_active {
+    if current.as_ref()
+        != Some(&ActiveSync {
+            ai_id: ai_id.clone(),
+            kind,
+        })
+        && state_is_active
+    {
         state.is_syncing = false;
         state.status_kind = SyncStatusKind::Idle;
         state.backoff_until = None;
@@ -113,7 +129,7 @@ pub async fn get_chat_sync_state(
     Ok(Some(state))
 }
 
-pub async fn get_current_sync(registry: Arc<SyncRegistry>) -> Result<Option<String>, AppError> {
+pub async fn get_current_sync(registry: Arc<SyncRegistry>) -> Result<Option<ActiveSync>, AppError> {
     Ok(registry.current().await)
 }
 
@@ -122,17 +138,18 @@ pub async fn cancel_chat_sync(registry: Arc<SyncRegistry>) -> Result<(), AppErro
     Ok(())
 }
 
-/// Wipe all locally-cached chat history and sync state for `ai_id`.
+/// Wipe all locally-cached chat history and sync state for `(ai_id, kind)`.
 /// The next sync will start from scratch.
 pub async fn reset_chat_history(
     repo: Arc<dyn Repository>,
     ai_id: String,
+    kind: TargetKind,
 ) -> Result<usize, AppError> {
     let trimmed = ai_id.trim();
     if trimmed.is_empty() {
         return Err(AppError::invalid("ai_id is required"));
     }
-    Ok(repo.reset_chat_history(trimmed).await?)
+    Ok(repo.reset_chat_history(trimmed, kind).await?)
 }
 
 /// Validate inputs and spawn the background sync loop. The actual loop
@@ -145,17 +162,20 @@ pub async fn start_chat_sync(
     ai_client: Arc<dyn crate::kindroid::ai::AiClient>,
     registry: Arc<SyncRegistry>,
     ai_id: String,
+    kind: TargetKind,
     app: tauri::AppHandle,
 ) -> Result<(), AppError> {
     let trimmed = ai_id.trim();
     if trimmed.is_empty() {
         return Err(AppError::invalid("ai_id is required"));
     }
-    // Ensure the target exists.
-    let targets = repo.list_targets().await?;
-    if !targets.iter().any(|t| t.ai_id == trimmed) {
+    // Ensure the target exists for this kind. Group targets cannot be
+    // synced here either — the frontend never offers the Sync button on
+    // them, but the backend still rejects to defend against direct
+    // Tauri invokes.
+    if repo.get_target_by_kind(trimmed, kind).await?.is_none() {
         return Err(AppError::invalid(format!(
-            "target with ai_id '{trimmed}' not found"
+            "target with id '{trimmed}' (kind={kind:?}) not found"
         )));
     }
     // Ensure a token is configured.
@@ -163,10 +183,13 @@ pub async fn start_chat_sync(
         return Err(AppError::TokenMissing);
     }
 
-    let handle = match registry.start(trimmed).await {
+    let handle = match registry.start(trimmed, kind).await {
         Ok(h) => h,
         Err(current) => {
-            return Err(AppError::SyncConflict { ai_id: current });
+            return Err(AppError::SyncConflict {
+                ai_id: current.ai_id,
+                target_kind: current.kind,
+            });
         }
     };
 
@@ -182,6 +205,7 @@ pub async fn start_chat_sync(
             ai_client_c,
             reg_c,
             ai,
+            kind,
             handle.cancel_rx,
             app,
         )
@@ -204,6 +228,7 @@ mod tests {
         let t = Target {
             id: Uuid::new_v4(),
             ai_id: ai_id.into(),
+            kind: TargetKind::Ai,
             label: "test".into(),
             created_at: Utc::now(),
         };
@@ -218,6 +243,7 @@ mod tests {
         let registry = Arc::new(SyncRegistry::new());
         repo.upsert_chat_sync_state(&ChatSyncState {
             ai_id: "ai_stale".into(),
+            kind: TargetKind::Ai,
             last_synced_at: Utc::now(),
             last_timestamp: 0,
             full_sync_done: false,
@@ -230,16 +256,25 @@ mod tests {
         .await
         .unwrap();
 
-        let got = super::get_chat_sync_state(repo.clone(), registry.clone(), "ai_stale".into())
-            .await
-            .unwrap()
-            .unwrap();
+        let got = super::get_chat_sync_state(
+            repo.clone(),
+            registry.clone(),
+            "ai_stale".into(),
+            TargetKind::Ai,
+        )
+        .await
+        .unwrap()
+        .unwrap();
         assert!(!got.is_syncing);
         assert_eq!(got.status_kind, SyncStatusKind::Idle);
         assert!(got.status_message.is_none());
         assert!(got.backoff_until.is_none());
 
-        let persisted = repo.get_chat_sync_state("ai_stale").await.unwrap().unwrap();
+        let persisted = repo
+            .get_chat_sync_state("ai_stale", TargetKind::Ai)
+            .await
+            .unwrap()
+            .unwrap();
         assert!(!persisted.is_syncing);
         assert_eq!(persisted.status_kind, SyncStatusKind::Idle);
     }
@@ -251,6 +286,7 @@ mod tests {
         let registry = Arc::new(SyncRegistry::new());
         repo.upsert_chat_sync_state(&ChatSyncState {
             ai_id: "ai_active".into(),
+            kind: TargetKind::Ai,
             last_synced_at: Utc::now(),
             last_timestamp: 0,
             full_sync_done: false,
@@ -263,11 +299,16 @@ mod tests {
         .await
         .unwrap();
 
-        let h = registry.start("ai_active").await.unwrap();
-        let got = super::get_chat_sync_state(repo.clone(), registry.clone(), "ai_active".into())
-            .await
-            .unwrap()
-            .unwrap();
+        let h = registry.start("ai_active", TargetKind::Ai).await.unwrap();
+        let got = super::get_chat_sync_state(
+            repo.clone(),
+            registry.clone(),
+            "ai_active".into(),
+            TargetKind::Ai,
+        )
+        .await
+        .unwrap()
+        .unwrap();
         assert!(got.is_syncing);
         assert_eq!(got.status_kind, SyncStatusKind::Running);
         drop(h);

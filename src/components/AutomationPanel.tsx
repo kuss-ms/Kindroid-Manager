@@ -5,12 +5,14 @@ import {
   BOOTSTRAP_MODE_LABELS,
   SUMMARY_BACKEND_LABELS,
   SUMMARY_BACKEND_LIMIT,
+  TARGET_KIND_LABEL,
   type AutoJournalEntry,
   type AutoJournalEntryStatus,
   type ChatAutomationDto,
   type SetChatAutomationSettingsInput,
   type SummaryBackend,
   type SummaryBootstrapMode,
+  type TargetKind,
 } from '../lib/types';
 import { chatAutomationSettingsSchema } from '../lib/schemas';
 import { ConfirmDialog } from '../components/ConfirmDialog';
@@ -25,6 +27,7 @@ const MAX_INSTRUCTIONS_CHARS = 4000;
 
 interface AutomationPanelProps {
   aiId: string | null;
+  kind: TargetKind;
   automationInProgress: boolean;
 }
 
@@ -77,6 +80,7 @@ function charCount(s: string | null | undefined): number {
 
 export function AutomationPanel({
   aiId,
+  kind,
   automationInProgress: fallbackInProgress,
 }: AutomationPanelProps) {
   const queryClient = useQueryClient();
@@ -275,6 +279,23 @@ export function AutomationPanel({
         >
           Retry
         </button>
+      </div>
+    );
+  }
+  // Group chats don't have automation — the backend rejects every
+  // automation call, so the panel would just be a wall of errors.
+  // Render a plain notice instead. This sits after the hooks + error
+  // branches so the React rules-of-hooks lint is satisfied.
+  if (kind === 'group') {
+    return (
+      <div
+        className="card muted"
+        style={{ marginTop: 12 }}
+        role="status"
+        data-testid="automation-group-notice"
+      >
+        Automation isn&apos;t available for {TARGET_KIND_LABEL.group.toLowerCase()}{' '}
+        targets.
       </div>
     );
   }

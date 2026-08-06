@@ -19,7 +19,7 @@ use crate::domain::chat_automation::{
 use crate::domain::chat_message::{ChatMessage, ChatSyncState, SyncStatusKind};
 use crate::domain::journal_entry::JournalEntry;
 use crate::domain::push_log::PushLogEntry;
-use crate::domain::target::Target;
+use crate::domain::target::{Target, TargetKind};
 use crate::storage::{Repository, StorageError};
 
 pub struct SqliteRepository {
@@ -80,19 +80,26 @@ fn run_migrations(conn: &mut Connection) -> Result<(), StorageError> {
         .query_row("PRAGMA user_version", [], |r| r.get(0))
         .map_err(|e| StorageError::Database(e.to_string()))?;
     let migrations = discover_migrations().map_err(StorageError::Database)?;
-    let tx = conn
-        .transaction()
+    // Migration 0014 needs to rebuild several tables with composite
+    // foreign keys, so it disables FK enforcement around the rebuild
+    // (per the SQLite docs, `PRAGMA foreign_keys` is a no-op inside an
+    // active transaction, so the rebuild tables can't run inside the
+    // single-tx wrapper below). Disable FK enforcement on this
+    // connection for the whole migration run, then re-enable at the end.
+    // `unchecked_transaction` does not produce a transaction that
+    // blocks pragma changes.
+    conn.execute_batch("PRAGMA foreign_keys = OFF;")
         .map_err(|e| StorageError::Database(e.to_string()))?;
     for (version, body) in migrations.iter() {
         if *version as i64 > current {
-            tx.execute_batch(body)
+            conn.execute_batch(body)
                 .map_err(|e| StorageError::Database(format!("migration {version}: {e}")))?;
         }
     }
     let target = migrations.last().map(|(v, _)| *v).unwrap_or(0);
-    tx.execute(&format!("PRAGMA user_version = {target}"), [])
+    conn.execute(&format!("PRAGMA user_version = {target}"), [])
         .map_err(|e| StorageError::Database(e.to_string()))?;
-    tx.commit()
+    conn.execute_batch("PRAGMA foreign_keys = ON;")
         .map_err(|e| StorageError::Database(e.to_string()))?;
     Ok(())
 }
@@ -152,6 +159,10 @@ fn discover_migrations() -> Result<Vec<(u32, String)>, String> {
         (
             "0013_character_revisions.sql",
             include_str!("migrations/0013_character_revisions.sql"),
+        ),
+        (
+            "0014_target_kind.sql",
+            include_str!("migrations/0014_target_kind.sql"),
         ),
     ];
     let mut out = Vec::new();
@@ -305,7 +316,7 @@ impl Repository for SqliteRepository {
     async fn list_targets(&self) -> Result<Vec<Target>, StorageError> {
         let conn = lock(&self.conn).await;
         let mut stmt = conn
-            .prepare("SELECT id, ai_id, label, created_at FROM targets ORDER BY label ASC")
+            .prepare("SELECT id, ai_id, kind, label, created_at FROM targets ORDER BY label ASC")
             .map_err(|e| StorageError::Database(e.to_string()))?;
         let rows = stmt
             .query_map([], row_to_target)
@@ -317,7 +328,7 @@ impl Repository for SqliteRepository {
     async fn get_target(&self, id: Uuid) -> Result<Target, StorageError> {
         let conn = lock(&self.conn).await;
         conn.query_row(
-            "SELECT id, ai_id, label, created_at FROM targets WHERE id = ?1",
+            "SELECT id, ai_id, kind, label, created_at FROM targets WHERE id = ?1",
             params![id.to_string()],
             row_to_target,
         )
@@ -326,26 +337,42 @@ impl Repository for SqliteRepository {
         .ok_or(StorageError::NotFound)
     }
 
+    async fn get_target_by_kind(
+        &self,
+        ai_id: &str,
+        kind: TargetKind,
+    ) -> Result<Option<Target>, StorageError> {
+        let conn = lock(&self.conn).await;
+        conn.query_row(
+            "SELECT id, ai_id, kind, label, created_at FROM targets WHERE ai_id = ?1 AND kind = ?2",
+            params![ai_id, kind.as_str()],
+            row_to_target,
+        )
+        .optional()
+        .map_err(|e| StorageError::Database(e.to_string()))
+    }
+
     async fn upsert_target(&self, mut t: Target) -> Result<Target, StorageError> {
         let conn = lock(&self.conn).await;
-        // If a row with the same ai_id exists, merge into it.
-        let existing_id: Option<String> = conn
+        // If a row with the same (ai_id, kind) exists, merge into it.
+        let existing: Option<(String, String)> = conn
             .query_row(
-                "SELECT id FROM targets WHERE ai_id = ?1",
+                "SELECT id, kind FROM targets WHERE ai_id = ?1",
                 params![t.ai_id],
-                |r| r.get(0),
+                |r| Ok((r.get::<_, String>(0)?, r.get::<_, String>(1)?)),
             )
             .optional()
             .map_err(|e| StorageError::Database(e.to_string()))?;
-        if let Some(prev) = existing_id {
-            let prev = Uuid::parse_str(&prev).map_err(|e| StorageError::Database(e.to_string()))?;
+        if let Some((prev_id_s, prev_kind_s)) = existing {
+            let prev_kind = TargetKind::parse(&prev_kind_s);
+            if prev_kind != t.kind {
+                return Err(StorageError::Invalid(
+                    "target kind cannot be changed".to_string(),
+                ));
+            }
+            let prev =
+                Uuid::parse_str(&prev_id_s).map_err(|e| StorageError::Database(e.to_string()))?;
             if prev != t.id {
-                // Update the existing row in place; drop the candidate id.
-                conn.execute(
-                    "UPDATE targets SET label = ?1 WHERE id = ?2",
-                    params![t.label, prev.to_string()],
-                )
-                .map_err(|e| StorageError::Database(e.to_string()))?;
                 t.id = prev;
             }
             let updated = t.clone();
@@ -358,11 +385,12 @@ impl Repository for SqliteRepository {
         }
         t.created_at = now();
         conn.execute(
-            "INSERT INTO targets (id, ai_id, label, created_at) VALUES (?1,?2,?3,?4)
-             ON CONFLICT(id) DO UPDATE SET ai_id=excluded.ai_id, label=excluded.label",
+            "INSERT INTO targets (id, ai_id, kind, label, created_at) VALUES (?1,?2,?3,?4,?5)
+             ON CONFLICT(id) DO UPDATE SET ai_id=excluded.ai_id, kind=excluded.kind, label=excluded.label",
             params![
                 t.id.to_string(),
                 t.ai_id,
+                t.kind.as_str(),
                 t.label,
                 t.created_at.to_rfc3339()
             ],
@@ -373,11 +401,42 @@ impl Repository for SqliteRepository {
 
     async fn delete_target(&self, id: Uuid) -> Result<(), StorageError> {
         let conn = lock(&self.conn).await;
+        // Look up the target before deleting so we can clear the
+        // (target-less) automation rows. Migration 0014 dropped the
+        // FK CASCADE on the automation tables (the parent column is
+        // no longer UNIQUE on its own), so the application is
+        // responsible for cleanup. Group targets never carry
+        // automation rows so the cleanup is harmless for them.
+        let ai_id: Option<String> = conn
+            .query_row(
+                "SELECT ai_id FROM targets WHERE id = ?1",
+                params![id.to_string()],
+                |r| r.get(0),
+            )
+            .optional()
+            .map_err(|e| StorageError::Database(e.to_string()))?;
         let n = conn
             .execute("DELETE FROM targets WHERE id = ?1", params![id.to_string()])
             .map_err(|e| StorageError::Database(e.to_string()))?;
         if n == 0 {
             return Err(StorageError::NotFound);
+        }
+        if let Some(ai_id) = ai_id {
+            conn.execute(
+                "DELETE FROM auto_journal_entries WHERE ai_id = ?1",
+                params![ai_id],
+            )
+            .map_err(|e| StorageError::Database(e.to_string()))?;
+            conn.execute(
+                "DELETE FROM auto_journal_runs WHERE ai_id = ?1",
+                params![ai_id],
+            )
+            .map_err(|e| StorageError::Database(e.to_string()))?;
+            conn.execute(
+                "DELETE FROM chat_automation_state WHERE ai_id = ?1",
+                params![ai_id],
+            )
+            .map_err(|e| StorageError::Database(e.to_string()))?;
         }
         Ok(())
     }
@@ -617,6 +676,7 @@ impl Repository for SqliteRepository {
     async fn upsert_chat_messages(
         &self,
         ai_id: &str,
+        kind: TargetKind,
         msgs: &[ChatMessage],
     ) -> Result<usize, StorageError> {
         if msgs.is_empty() {
@@ -644,11 +704,11 @@ impl Repository for SqliteRepository {
             let n = tx
                 .execute(
                     "INSERT INTO chat_messages
-                       (id, ai_id, kindroid_msg_id, sender, display_name,
+                       (id, ai_id, kind, kindroid_msg_id, sender, display_name,
                         timestamp, message, image_urls, image_description, video_description,
                         internet_response, link_url, link_description, fetched_at, favourite)
-                     VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,?12,?13,?14,?15)
-                     ON CONFLICT(ai_id, kindroid_msg_id) DO UPDATE SET
+                     VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,?12,?13,?14,?15,?16)
+                     ON CONFLICT(ai_id, kind, kindroid_msg_id) DO UPDATE SET
                        display_name      = excluded.display_name,
                        message           = excluded.message,
                        image_urls        = excluded.image_urls,
@@ -668,6 +728,7 @@ impl Repository for SqliteRepository {
                     params![
                         m.id.to_string(),
                         ai_id,
+                        kind.as_str(),
                         m.kindroid_msg_id,
                         m.sender,
                         m.display_name,
@@ -694,6 +755,7 @@ impl Repository for SqliteRepository {
     async fn list_chat_messages(
         &self,
         ai_id: &str,
+        kind: TargetKind,
         before_ts: Option<i64>,
         limit: u32,
         favourites_only: bool,
@@ -707,20 +769,20 @@ impl Repository for SqliteRepository {
         };
         let sql = match before_ts {
             Some(_) => format!(
-                "SELECT id, ai_id, kindroid_msg_id, sender, display_name,
+                "SELECT id, ai_id, kind, kindroid_msg_id, sender, display_name,
                         timestamp, message, image_urls, image_description, video_description,
                         internet_response, link_url, link_description, fetched_at, favourite
                  FROM chat_messages
-                 WHERE ai_id = ?1 AND timestamp < ?2{fav_filter}
-                 ORDER BY timestamp DESC LIMIT ?3"
+                 WHERE ai_id = ?1 AND kind = ?2 AND timestamp < ?3{fav_filter}
+                 ORDER BY timestamp DESC LIMIT ?4"
             ),
             None => format!(
-                "SELECT id, ai_id, kindroid_msg_id, sender, display_name,
+                "SELECT id, ai_id, kind, kindroid_msg_id, sender, display_name,
                         timestamp, message, image_urls, image_description, video_description,
                         internet_response, link_url, link_description, fetched_at, favourite
                  FROM chat_messages
-                 WHERE ai_id = ?1{fav_filter}
-                 ORDER BY timestamp DESC LIMIT ?2"
+                 WHERE ai_id = ?1 AND kind = ?2{fav_filter}
+                 ORDER BY timestamp DESC LIMIT ?3"
             ),
         };
         let mut stmt = conn
@@ -728,10 +790,13 @@ impl Repository for SqliteRepository {
             .map_err(|e| StorageError::Database(e.to_string()))?;
         let rows = match before_ts {
             Some(ts) => stmt
-                .query_map(params![ai_id, ts, limit], row_to_chat_message)
+                .query_map(
+                    params![ai_id, kind.as_str(), ts, limit],
+                    row_to_chat_message,
+                )
                 .map_err(|e| StorageError::Database(e.to_string()))?,
             None => stmt
-                .query_map(params![ai_id, limit], row_to_chat_message)
+                .query_map(params![ai_id, kind.as_str(), limit], row_to_chat_message)
                 .map_err(|e| StorageError::Database(e.to_string()))?,
         };
         rows.map(|r| r.map_err(|e| StorageError::Database(e.to_string())))
@@ -741,6 +806,7 @@ impl Repository for SqliteRepository {
     async fn search_chat(
         &self,
         ai_id: &str,
+        kind: TargetKind,
         query: &str,
         limit: u32,
         offset: u32,
@@ -755,21 +821,24 @@ impl Repository for SqliteRepository {
             ""
         };
         let sql = format!(
-            "SELECT cm.id, cm.ai_id, cm.kindroid_msg_id, cm.sender,
+            "SELECT cm.id, cm.ai_id, cm.kind, cm.kindroid_msg_id, cm.sender,
                     cm.display_name, cm.timestamp, cm.message, cm.image_urls,
                     cm.image_description, cm.video_description, cm.internet_response,
                     cm.link_url, cm.link_description, cm.fetched_at, cm.favourite
              FROM chat_messages_fts
              JOIN chat_messages cm ON cm.rowid = chat_messages_fts.rowid
-             WHERE chat_messages_fts MATCH ?1 AND cm.ai_id = ?2{fav_filter}
+             WHERE chat_messages_fts MATCH ?1 AND cm.ai_id = ?2 AND cm.kind = ?3{fav_filter}
              ORDER BY rank
-             LIMIT ?3 OFFSET ?4"
+             LIMIT ?4 OFFSET ?5"
         );
         let mut stmt = conn
             .prepare(&sql)
             .map_err(|e| StorageError::Database(e.to_string()))?;
         let rows = stmt
-            .query_map(params![query, ai_id, limit, offset], row_to_chat_message)
+            .query_map(
+                params![query, ai_id, kind.as_str(), limit, offset],
+                row_to_chat_message,
+            )
             .map_err(|e| StorageError::Database(e.to_string()))?;
         rows.map(|r| r.map_err(|e| StorageError::Database(e.to_string())))
             .collect()
@@ -778,21 +847,22 @@ impl Repository for SqliteRepository {
     async fn set_chat_message_favourite(
         &self,
         ai_id: &str,
+        kind: TargetKind,
         kindroid_msg_id: &str,
         favourite: bool,
     ) -> Result<bool, StorageError> {
         let conn = lock(&self.conn).await;
         conn.execute(
             "UPDATE chat_messages SET favourite = ?1
-             WHERE ai_id = ?2 AND kindroid_msg_id = ?3",
-            params![favourite as i32, ai_id, kindroid_msg_id],
+             WHERE ai_id = ?2 AND kind = ?3 AND kindroid_msg_id = ?4",
+            params![favourite as i32, ai_id, kind.as_str(), kindroid_msg_id],
         )
         .map_err(|e| StorageError::Database(e.to_string()))?;
         let current: Option<i32> = conn
             .query_row(
                 "SELECT favourite FROM chat_messages
-                 WHERE ai_id = ?1 AND kindroid_msg_id = ?2",
-                params![ai_id, kindroid_msg_id],
+                 WHERE ai_id = ?1 AND kind = ?2 AND kindroid_msg_id = ?3",
+                params![ai_id, kind.as_str(), kindroid_msg_id],
                 |r| r.get(0),
             )
             .optional()
@@ -800,12 +870,12 @@ impl Repository for SqliteRepository {
         Ok(current.unwrap_or(0) != 0)
     }
 
-    async fn chat_message_count(&self, ai_id: &str) -> Result<u64, StorageError> {
+    async fn chat_message_count(&self, ai_id: &str, kind: TargetKind) -> Result<u64, StorageError> {
         let conn = lock(&self.conn).await;
         let n: i64 = conn
             .query_row(
-                "SELECT COUNT(*) FROM chat_messages WHERE ai_id = ?1",
-                params![ai_id],
+                "SELECT COUNT(*) FROM chat_messages WHERE ai_id = ?1 AND kind = ?2",
+                params![ai_id, kind.as_str()],
                 |r| r.get(0),
             )
             .map_err(|e| StorageError::Database(e.to_string()))?;
@@ -815,13 +885,14 @@ impl Repository for SqliteRepository {
     async fn get_chat_sync_state(
         &self,
         ai_id: &str,
+        kind: TargetKind,
     ) -> Result<Option<ChatSyncState>, StorageError> {
         let conn = lock(&self.conn).await;
         conn.query_row(
-            "SELECT ai_id, last_synced_at, last_timestamp, full_sync_done, is_syncing,
+            "SELECT ai_id, kind, last_synced_at, last_timestamp, full_sync_done, is_syncing,
                     status_kind, status_message, backoff_until, total
-             FROM chat_sync_state WHERE ai_id = ?1",
-            params![ai_id],
+             FROM chat_sync_state WHERE ai_id = ?1 AND kind = ?2",
+            params![ai_id, kind.as_str()],
             row_to_chat_sync_state,
         )
         .optional()
@@ -832,10 +903,10 @@ impl Repository for SqliteRepository {
         let conn = lock(&self.conn).await;
         conn.execute(
             "INSERT INTO chat_sync_state
-               (ai_id, last_synced_at, last_timestamp, full_sync_done, is_syncing,
+               (ai_id, kind, last_synced_at, last_timestamp, full_sync_done, is_syncing,
                 status_kind, status_message, backoff_until, total)
-             VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9)
-             ON CONFLICT(ai_id) DO UPDATE SET
+             VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9,?10)
+             ON CONFLICT(ai_id, kind) DO UPDATE SET
                last_synced_at=excluded.last_synced_at,
                last_timestamp=excluded.last_timestamp,
                full_sync_done=excluded.full_sync_done,
@@ -846,6 +917,7 @@ impl Repository for SqliteRepository {
                total=excluded.total",
             params![
                 state.ai_id,
+                state.kind.as_str(),
                 state.last_synced_at.to_rfc3339(),
                 state.last_timestamp,
                 state.full_sync_done as i32,
@@ -860,7 +932,11 @@ impl Repository for SqliteRepository {
         Ok(())
     }
 
-    async fn reset_chat_history(&self, ai_id: &str) -> Result<usize, StorageError> {
+    async fn reset_chat_history(
+        &self,
+        ai_id: &str,
+        kind: TargetKind,
+    ) -> Result<usize, StorageError> {
         let conn = lock(&self.conn).await;
         let tx = conn
             .unchecked_transaction()
@@ -868,11 +944,14 @@ impl Repository for SqliteRepository {
         // Delete messages first. The `chat_messages_ad` trigger on
         // `chat_messages` removes the matching FTS5 rows automatically.
         let deleted = tx
-            .execute("DELETE FROM chat_messages WHERE ai_id = ?1", params![ai_id])
+            .execute(
+                "DELETE FROM chat_messages WHERE ai_id = ?1 AND kind = ?2",
+                params![ai_id, kind.as_str()],
+            )
             .map_err(|e| StorageError::Database(e.to_string()))?;
         tx.execute(
-            "DELETE FROM chat_sync_state WHERE ai_id = ?1",
-            params![ai_id],
+            "DELETE FROM chat_sync_state WHERE ai_id = ?1 AND kind = ?2",
+            params![ai_id, kind.as_str()],
         )
         .map_err(|e| StorageError::Database(e.to_string()))?;
         tx.commit()
@@ -883,6 +962,7 @@ impl Repository for SqliteRepository {
     async fn delete_missing_chat_messages(
         &self,
         ai_id: &str,
+        kind: TargetKind,
         start_after: i64,
         last_timestamp_inclusive: i64,
         keep_ids: &[&str],
@@ -893,17 +973,18 @@ impl Repository for SqliteRepository {
         }
         let conn = lock(&self.conn).await;
         let mut sql = String::from(
-            "DELETE FROM chat_messages WHERE ai_id = ?1 AND timestamp > ?2 AND timestamp <= ?3",
+            "DELETE FROM chat_messages WHERE ai_id = ?1 AND kind = ?2 AND timestamp > ?3 AND timestamp <= ?4",
         );
         if !keep_ids.is_empty() {
             sql.push_str(" AND kindroid_msg_id NOT IN (");
             let placeholders: Vec<String> =
-                (4..=keep_ids.len() + 3).map(|i| format!("?{i}")).collect();
+                (5..=keep_ids.len() + 4).map(|i| format!("?{i}")).collect();
             sql.push_str(&placeholders.join(","));
             sql.push(')');
         }
+        let kind_str = kind.as_str();
         let mut params: Vec<&dyn rusqlite::ToSql> =
-            vec![&ai_id, &start_after, &last_timestamp_inclusive];
+            vec![&ai_id, &kind_str, &start_after, &last_timestamp_inclusive];
         params.extend(keep_ids.iter().map(|s| s as &dyn rusqlite::ToSql));
         let n = conn
             .execute(&sql, params.as_slice())
@@ -914,6 +995,7 @@ impl Repository for SqliteRepository {
     async fn list_stable_chat_messages(
         &self,
         ai_id: &str,
+        kind: TargetKind,
         after_cursor: Option<&StableMessageCursor>,
         limit: u32,
         exclude_newest_n: u32,
@@ -925,8 +1007,8 @@ impl Repository for SqliteRepository {
         if let Some(cursor) = after_cursor {
             let exists: Option<i64> = conn
                 .query_row(
-                    "SELECT 1 FROM chat_messages WHERE ai_id = ?1 AND timestamp = ?2 AND kindroid_msg_id = ?3",
-                    params![ai_id, cursor.timestamp, cursor.kindroid_msg_id],
+                    "SELECT 1 FROM chat_messages WHERE ai_id = ?1 AND kind = ?2 AND timestamp = ?3 AND kindroid_msg_id = ?4",
+                    params![ai_id, kind.as_str(), cursor.timestamp, cursor.kindroid_msg_id],
                     |row| row.get(0),
                 )
                 .optional()
@@ -939,23 +1021,24 @@ impl Repository for SqliteRepository {
             .prepare(
              "WITH boundary AS (
                 SELECT timestamp, kindroid_msg_id FROM chat_messages
-                WHERE ai_id = ?1
+                WHERE ai_id = ?1 AND kind = ?2
                 ORDER BY timestamp DESC, kindroid_msg_id DESC
-                LIMIT 1 OFFSET ?4
+                LIMIT 1 OFFSET ?5
               )
-              SELECT m.id, m.ai_id, m.kindroid_msg_id, m.sender, m.display_name, m.timestamp,
+              SELECT m.id, m.ai_id, m.kind, m.kindroid_msg_id, m.sender, m.display_name, m.timestamp,
                      m.message, m.image_urls, m.image_description, m.video_description, m.internet_response,
                      m.link_url, m.link_description, m.fetched_at, m.favourite
               FROM chat_messages m CROSS JOIN boundary b
-              WHERE m.ai_id = ?1 AND (m.timestamp > ?2 OR (m.timestamp = ?2 AND m.kindroid_msg_id > ?3))
+              WHERE m.ai_id = ?1 AND m.kind = ?2 AND (m.timestamp > ?3 OR (m.timestamp = ?3 AND m.kindroid_msg_id > ?4))
                 AND (m.timestamp < b.timestamp OR (m.timestamp = b.timestamp AND m.kindroid_msg_id <= b.kindroid_msg_id))
-              ORDER BY m.timestamp ASC, m.kindroid_msg_id ASC LIMIT ?5",
+              ORDER BY m.timestamp ASC, m.kindroid_msg_id ASC LIMIT ?6",
             )
             .map_err(|e| StorageError::Database(e.to_string()))?;
         let rows = stmt
             .query_map(
                 params![
                     ai_id,
+                    kind.as_str(),
                     ts,
                     id,
                     exclude_newest_n as i64,
@@ -971,13 +1054,14 @@ impl Repository for SqliteRepository {
     async fn latest_stable_cursor(
         &self,
         ai_id: &str,
+        kind: TargetKind,
         exclude_newest_n: u32,
     ) -> Result<Option<StableMessageCursor>, StorageError> {
         let conn = lock(&self.conn).await;
         conn.query_row(
-            "SELECT timestamp, kindroid_msg_id FROM chat_messages WHERE ai_id = ?1
-             ORDER BY timestamp DESC, kindroid_msg_id DESC LIMIT 1 OFFSET ?2",
-            params![ai_id, exclude_newest_n as i64],
+            "SELECT timestamp, kindroid_msg_id FROM chat_messages WHERE ai_id = ?1 AND kind = ?2
+             ORDER BY timestamp DESC, kindroid_msg_id DESC LIMIT 1 OFFSET ?3",
+            params![ai_id, kind.as_str(), exclude_newest_n as i64],
             |r| {
                 Ok(StableMessageCursor {
                     timestamp: r.get(0)?,
@@ -1632,13 +1716,15 @@ fn row_to_character(row: &rusqlite::Row<'_>) -> rusqlite::Result<Character> {
 
 fn row_to_target(row: &rusqlite::Row<'_>) -> rusqlite::Result<Target> {
     let id_s: String = row.get(0)?;
-    let created_s: String = row.get(3)?;
+    let kind_s: String = row.get(2)?;
+    let created_s: String = row.get(4)?;
     Ok(Target {
         id: Uuid::parse_str(&id_s).map_err(|e| id_err(0, e))?,
         ai_id: row.get(1)?,
-        label: row.get(2)?,
+        kind: TargetKind::parse(&kind_s),
+        label: row.get(3)?,
         created_at: DateTime::parse_from_rfc3339(&created_s)
-            .map_err(|e| id_err(3, e))?
+            .map_err(|e| id_err(4, e))?
             .with_timezone(&Utc),
     })
 }
@@ -1684,25 +1770,27 @@ fn row_to_push_log(row: &rusqlite::Row<'_>) -> rusqlite::Result<PushLogEntry> {
 
 fn row_to_chat_message(row: &rusqlite::Row<'_>) -> rusqlite::Result<ChatMessage> {
     let id_s: String = row.get(0)?;
-    let image_urls_s: String = row.get(7)?;
-    let fetched_s: String = row.get(13)?;
-    let fav: i32 = row.get(14)?;
+    let kind_s: String = row.get(2)?;
+    let image_urls_s: String = row.get(8)?;
+    let fetched_s: String = row.get(14)?;
+    let fav: i32 = row.get(15)?;
     Ok(ChatMessage {
         id: Uuid::parse_str(&id_s).map_err(|e| id_err(0, e))?,
         ai_id: row.get(1)?,
-        kindroid_msg_id: row.get(2)?,
-        sender: row.get(3)?,
-        display_name: row.get(4)?,
-        timestamp: row.get(5)?,
-        message: row.get(6)?,
-        image_urls: serde_json::from_str(&image_urls_s).map_err(|e| id_err(7, e))?,
-        image_description: row.get(8)?,
-        video_description: row.get(9)?,
-        internet_response: row.get(10)?,
-        link_url: row.get(11)?,
-        link_description: row.get(12)?,
+        kind: TargetKind::parse(&kind_s),
+        kindroid_msg_id: row.get(3)?,
+        sender: row.get(4)?,
+        display_name: row.get(5)?,
+        timestamp: row.get(6)?,
+        message: row.get(7)?,
+        image_urls: serde_json::from_str(&image_urls_s).map_err(|e| id_err(8, e))?,
+        image_description: row.get(9)?,
+        video_description: row.get(10)?,
+        internet_response: row.get(11)?,
+        link_url: row.get(12)?,
+        link_description: row.get(13)?,
         fetched_at: DateTime::parse_from_rfc3339(&fetched_s)
-            .map_err(|e| id_err(13, e))?
+            .map_err(|e| id_err(14, e))?
             .with_timezone(&Utc),
         favourite: fav != 0,
     })
@@ -1736,18 +1824,20 @@ fn row_to_journal_entry(row: &rusqlite::Row<'_>) -> rusqlite::Result<JournalEntr
 
 fn row_to_chat_sync_state(row: &rusqlite::Row<'_>) -> rusqlite::Result<ChatSyncState> {
     let ai_id: String = row.get(0)?;
-    let last_synced_s: String = row.get(1)?;
-    let last_timestamp: i64 = row.get(2)?;
-    let full_done: i32 = row.get(3)?;
-    let is_syncing: i32 = row.get(4)?;
-    let status_kind_s: String = row.get(5)?;
-    let status_message: Option<String> = row.get(6)?;
-    let backoff_s: Option<String> = row.get(7)?;
-    let total: i64 = row.get(8)?;
+    let kind_s: String = row.get(1)?;
+    let last_synced_s: String = row.get(2)?;
+    let last_timestamp: i64 = row.get(3)?;
+    let full_done: i32 = row.get(4)?;
+    let is_syncing: i32 = row.get(5)?;
+    let status_kind_s: String = row.get(6)?;
+    let status_message: Option<String> = row.get(7)?;
+    let backoff_s: Option<String> = row.get(8)?;
+    let total: i64 = row.get(9)?;
     Ok(ChatSyncState {
         ai_id,
+        kind: TargetKind::parse(&kind_s),
         last_synced_at: DateTime::parse_from_rfc3339(&last_synced_s)
-            .map_err(|e| id_err(1, e))?
+            .map_err(|e| id_err(2, e))?
             .with_timezone(&Utc),
         last_timestamp,
         full_sync_done: full_done != 0,
@@ -1757,7 +1847,7 @@ fn row_to_chat_sync_state(row: &rusqlite::Row<'_>) -> rusqlite::Result<ChatSyncS
         backoff_until: match backoff_s {
             Some(s) => Some(
                 DateTime::parse_from_rfc3339(&s)
-                    .map_err(|e| id_err(7, e))?
+                    .map_err(|e| id_err(8, e))?
                     .with_timezone(&Utc),
             ),
             None => None,
@@ -1799,6 +1889,7 @@ mod tests {
         Target {
             id: Uuid::new_v4(),
             ai_id: ai_id.into(),
+            kind: TargetKind::Ai,
             label: label.into(),
             created_at: Utc::now(),
         }
@@ -1832,6 +1923,7 @@ mod tests {
         let t2 = Target {
             id: Uuid::new_v4(),
             ai_id: "ai_123".into(),
+            kind: TargetKind::Ai,
             label: "Renamed".into(),
             created_at: Utc::now(),
         };
@@ -1927,30 +2019,45 @@ mod tests {
     }
 
     #[test]
-    fn migration_0009_persists_create_new_ai_columns() {
-        // The legacy simulate-and-rerun pattern from the 0008 test: confirm
-        // 0009's recreate-table migration lands the new columns on a DB
-        // that started at v8 and is rolled back.
+    fn migration_0014_lands_kind_columns_and_composite_fks() {
+        // Regression test for the v14 target-kind migration: confirm
+        // every rebuilt table gains the new `kind` column with default
+        // `'ai'`, the composite FK on `(ai_id, kind)` resolves, and the
+        // unique constraint on `targets` is now `(ai_id, kind)` (so an
+        // AI and a Group can share the same Kindroid id string).
         let mut conn = Connection::open_in_memory().expect("open in-memory");
         conn.execute_batch("PRAGMA foreign_keys=ON;").unwrap();
-        conn.execute_batch("PRAGMA user_version = 0;").unwrap();
         run_migrations(&mut conn).unwrap();
-        conn.execute_batch("PRAGMA user_version = 8;").unwrap();
-        run_migrations(&mut conn).unwrap();
-        let cols: Vec<String> = conn
-            .prepare("SELECT name FROM pragma_table_info('push_log')")
+
+        for table in ["chat_messages", "chat_sync_state"] {
+            let cols: Vec<String> = conn
+                .prepare(&format!("SELECT name FROM pragma_table_info('{table}')"))
+                .unwrap()
+                .query_map([], |r| r.get(0))
+                .unwrap()
+                .filter_map(|r| r.ok())
+                .collect();
+            assert!(
+                cols.iter().any(|c| c == "kind"),
+                "{table} should gain a `kind` column, got {cols:?}"
+            );
+        }
+
+        // `targets` should now have a UNIQUE(ai_id, kind) constraint.
+        let indexes: Vec<String> = conn
+            .prepare(
+                "SELECT name FROM sqlite_master
+                 WHERE type = 'index' AND tbl_name = 'targets'",
+            )
             .unwrap()
             .query_map([], |r| r.get(0))
             .unwrap()
             .filter_map(|r| r.ok())
             .collect();
+        // SQLite names the implicit UNIQUE index `sqlite_autoindex_targets_1`.
         assert!(
-            cols.iter().any(|c| c == "create_new_ai_status"),
-            "0009 should add create_new_ai_status, columns: {cols:?}"
-        );
-        assert!(
-            cols.iter().any(|c| c == "create_new_ai_body"),
-            "0009 should add create_new_ai_body, columns: {cols:?}"
+            indexes.iter().any(|n| n.contains("autoindex_targets")),
+            "targets should have a composite UNIQUE index, got {indexes:?}"
         );
     }
 
@@ -2028,7 +2135,6 @@ mod tests {
         // degrades to a full table scan as the table grows.
         let mut conn = Connection::open_in_memory().expect("open in-memory");
         conn.execute_batch("PRAGMA foreign_keys=ON;").unwrap();
-        conn.execute_batch("PRAGMA user_version = 0;").unwrap();
         run_migrations(&mut conn).unwrap();
         let mut stmt = conn
             .prepare(
@@ -2073,6 +2179,7 @@ mod tests {
         ChatMessage {
             id: Uuid::new_v4(),
             ai_id: ai_id.into(),
+            kind: TargetKind::Ai,
             kindroid_msg_id: kindroid_msg_id.into(),
             sender: "user".into(),
             display_name: None,
@@ -2111,15 +2218,20 @@ mod tests {
         let m1 = chat_msg("ai_x", "k1", 100, "hello");
         let m2 = chat_msg("ai_x", "k2", 200, "world");
         let inserted = repo
-            .upsert_chat_messages("ai_x", &[m1.clone(), m2.clone()])
+            .upsert_chat_messages("ai_x", TargetKind::Ai, &[m1.clone(), m2.clone()])
             .await
             .unwrap();
         assert_eq!(inserted, 2);
-        assert_eq!(repo.chat_message_count("ai_x").await.unwrap(), 2);
+        assert_eq!(
+            repo.chat_message_count("ai_x", TargetKind::Ai)
+                .await
+                .unwrap(),
+            2
+        );
 
         // Listing is DESC by timestamp.
         let list = repo
-            .list_chat_messages("ai_x", None, 50, false)
+            .list_chat_messages("ai_x", TargetKind::Ai, None, 50, false)
             .await
             .unwrap();
         assert_eq!(list.len(), 2);
@@ -2128,7 +2240,7 @@ mod tests {
 
         // Pagination with before_ts.
         let older = repo
-            .list_chat_messages("ai_x", Some(200), 50, false)
+            .list_chat_messages("ai_x", TargetKind::Ai, Some(200), 50, false)
             .await
             .unwrap();
         assert_eq!(older.len(), 1);
@@ -2143,7 +2255,7 @@ mod tests {
 
         let m1 = chat_msg("ai_x", "k1", 100, "first");
         let inserted = repo
-            .upsert_chat_messages("ai_x", std::slice::from_ref(&m1))
+            .upsert_chat_messages("ai_x", TargetKind::Ai, std::slice::from_ref(&m1))
             .await
             .unwrap();
         assert_eq!(inserted, 1);
@@ -2153,13 +2265,13 @@ mod tests {
         // report 1 (insert + actual update = 1 touch).
         let m1_edited = chat_msg("ai_x", "k1", 100, "different text");
         let touched = repo
-            .upsert_chat_messages("ai_x", std::slice::from_ref(&m1_edited))
+            .upsert_chat_messages("ai_x", TargetKind::Ai, std::slice::from_ref(&m1_edited))
             .await
             .unwrap();
         assert_eq!(touched, 1);
 
         let list = repo
-            .list_chat_messages("ai_x", None, 50, false)
+            .list_chat_messages("ai_x", TargetKind::Ai, None, 50, false)
             .await
             .unwrap();
         assert_eq!(list.len(), 1, "still one row");
@@ -2179,7 +2291,7 @@ mod tests {
 
         let m1 = chat_msg("ai_x", "k1", 100, "stable");
         let touched = repo
-            .upsert_chat_messages("ai_x", std::slice::from_ref(&m1))
+            .upsert_chat_messages("ai_x", TargetKind::Ai, std::slice::from_ref(&m1))
             .await
             .unwrap();
         assert_eq!(touched, 1);
@@ -2188,7 +2300,7 @@ mod tests {
         // skip the update entirely (no-op upsert).
         let m1_again = chat_msg("ai_x", "k1", 100, "stable");
         let touched_again = repo
-            .upsert_chat_messages("ai_x", std::slice::from_ref(&m1_again))
+            .upsert_chat_messages("ai_x", TargetKind::Ai, std::slice::from_ref(&m1_again))
             .await
             .unwrap();
         assert_eq!(touched_again, 0, "no-op upsert should not be counted");
@@ -2203,7 +2315,7 @@ mod tests {
         let mut m1 = chat_msg("ai_x", "k1", 100, "old body");
         m1.image_urls = vec!["https://x/a.png".into()];
         m1.link_url = Some("https://example.com".into());
-        repo.upsert_chat_messages("ai_x", std::slice::from_ref(&m1))
+        repo.upsert_chat_messages("ai_x", TargetKind::Ai, std::slice::from_ref(&m1))
             .await
             .unwrap();
 
@@ -2211,13 +2323,13 @@ mod tests {
         let mut m1_edited = m1.clone();
         m1_edited.message = "new body".into();
         let touched = repo
-            .upsert_chat_messages("ai_x", std::slice::from_ref(&m1_edited))
+            .upsert_chat_messages("ai_x", TargetKind::Ai, std::slice::from_ref(&m1_edited))
             .await
             .unwrap();
         assert_eq!(touched, 1, "single field change should still be detected");
 
         let list = repo
-            .list_chat_messages("ai_x", None, 50, false)
+            .list_chat_messages("ai_x", TargetKind::Ai, None, 50, false)
             .await
             .unwrap();
         assert_eq!(list[0].message, "new body");
@@ -2238,7 +2350,7 @@ mod tests {
 
         let m1 = chat_msg("ai_x", "k1", 100, "old");
         let m2 = chat_msg("ai_x", "k2", 200, "another");
-        repo.upsert_chat_messages("ai_x", &[m1.clone(), m2.clone()])
+        repo.upsert_chat_messages("ai_x", TargetKind::Ai, &[m1.clone(), m2.clone()])
             .await
             .unwrap();
 
@@ -2247,12 +2359,12 @@ mod tests {
         // newest of the returned set is `m2`'s timestamp (200).
         let mut m1_edited = m1.clone();
         m1_edited.message = "edited".into();
-        repo.upsert_chat_messages("ai_x", &[m1_edited])
+        repo.upsert_chat_messages("ai_x", TargetKind::Ai, &[m1_edited])
             .await
             .unwrap();
 
         let list = repo
-            .list_chat_messages("ai_x", None, 50, false)
+            .list_chat_messages("ai_x", TargetKind::Ai, None, 50, false)
             .await
             .unwrap();
         assert_eq!(list.len(), 2);
@@ -2277,9 +2389,13 @@ mod tests {
         let m1 = chat_msg("ai_x", "k1", 100, "a");
         let m2 = chat_msg("ai_x", "k2", 200, "b");
         let m3 = chat_msg("ai_x", "k3", 300, "c");
-        repo.upsert_chat_messages("ai_x", &[m1.clone(), m2.clone(), m3.clone()])
-            .await
-            .unwrap();
+        repo.upsert_chat_messages(
+            "ai_x",
+            TargetKind::Ai,
+            &[m1.clone(), m2.clone(), m3.clone()],
+        )
+        .await
+        .unwrap();
 
         // Range (100, 300]: k2 (ts 200) is in the range but not in
         // keep_ids; k1 (ts 100) is at the start_after boundary and
@@ -2287,13 +2403,13 @@ mod tests {
         // included but in keep_ids.
         let keep: Vec<&str> = vec!["k3"];
         let deleted = repo
-            .delete_missing_chat_messages("ai_x", 100, 300, &keep)
+            .delete_missing_chat_messages("ai_x", TargetKind::Ai, 100, 300, &keep)
             .await
             .unwrap();
         assert_eq!(deleted, 1, "only k2 should be deleted");
 
         let list = repo
-            .list_chat_messages("ai_x", None, 50, false)
+            .list_chat_messages("ai_x", TargetKind::Ai, None, 50, false)
             .await
             .unwrap();
         assert_eq!(list.len(), 2);
@@ -2312,20 +2428,24 @@ mod tests {
         let m1 = chat_msg("ai_x", "k1", 100, "a");
         let m2 = chat_msg("ai_x", "k2", 200, "b");
         let m3 = chat_msg("ai_x", "k3", 300, "c");
-        repo.upsert_chat_messages("ai_x", &[m1.clone(), m2.clone(), m3.clone()])
-            .await
-            .unwrap();
+        repo.upsert_chat_messages(
+            "ai_x",
+            TargetKind::Ai,
+            &[m1.clone(), m2.clone(), m3.clone()],
+        )
+        .await
+        .unwrap();
 
         // Empty keep_ids (e.g. the API returned an empty page on the
         // final has_more = false poll) — delete every row in (100, 300].
         let deleted = repo
-            .delete_missing_chat_messages("ai_x", 100, 300, &[])
+            .delete_missing_chat_messages("ai_x", TargetKind::Ai, 100, 300, &[])
             .await
             .unwrap();
         assert_eq!(deleted, 2);
 
         let list = repo
-            .list_chat_messages("ai_x", None, 50, false)
+            .list_chat_messages("ai_x", TargetKind::Ai, None, 50, false)
             .await
             .unwrap();
         assert_eq!(list.len(), 1, "k1 (ts 100) is at the start_after boundary");
@@ -2338,16 +2458,21 @@ mod tests {
         let t = target("T", "ai_x");
         repo.upsert_target(t).await.unwrap();
         let m1 = chat_msg("ai_x", "k1", 100, "a");
-        repo.upsert_chat_messages("ai_x", std::slice::from_ref(&m1))
+        repo.upsert_chat_messages("ai_x", TargetKind::Ai, std::slice::from_ref(&m1))
             .await
             .unwrap();
 
         let deleted = repo
-            .delete_missing_chat_messages("ai_x", 200, 200, &["k1"])
+            .delete_missing_chat_messages("ai_x", TargetKind::Ai, 200, 200, &["k1"])
             .await
             .unwrap();
         assert_eq!(deleted, 0);
-        assert_eq!(repo.chat_message_count("ai_x").await.unwrap(), 1);
+        assert_eq!(
+            repo.chat_message_count("ai_x", TargetKind::Ai)
+                .await
+                .unwrap(),
+            1
+        );
     }
 
     #[tokio::test]
@@ -2358,21 +2483,39 @@ mod tests {
         repo.upsert_target(t_x).await.unwrap();
         repo.upsert_target(t_y).await.unwrap();
 
-        repo.upsert_chat_messages("ai_x", &[chat_msg("ai_x", "x1", 100, "x-msg")])
-            .await
-            .unwrap();
-        repo.upsert_chat_messages("ai_y", &[chat_msg("ai_y", "y1", 100, "y-msg")])
-            .await
-            .unwrap();
+        repo.upsert_chat_messages(
+            "ai_x",
+            TargetKind::Ai,
+            &[chat_msg("ai_x", "x1", 100, "x-msg")],
+        )
+        .await
+        .unwrap();
+        repo.upsert_chat_messages(
+            "ai_y",
+            TargetKind::Ai,
+            &[chat_msg("ai_y", "y1", 100, "y-msg")],
+        )
+        .await
+        .unwrap();
 
         // Delete against ai_x — ai_y's row must survive.
         let deleted = repo
-            .delete_missing_chat_messages("ai_x", 50, 200, &[])
+            .delete_missing_chat_messages("ai_x", TargetKind::Ai, 50, 200, &[])
             .await
             .unwrap();
         assert_eq!(deleted, 1);
-        assert_eq!(repo.chat_message_count("ai_x").await.unwrap(), 0);
-        assert_eq!(repo.chat_message_count("ai_y").await.unwrap(), 1);
+        assert_eq!(
+            repo.chat_message_count("ai_x", TargetKind::Ai)
+                .await
+                .unwrap(),
+            0
+        );
+        assert_eq!(
+            repo.chat_message_count("ai_y", TargetKind::Ai)
+                .await
+                .unwrap(),
+            1
+        );
     }
 
     #[tokio::test]
@@ -2383,11 +2526,13 @@ mod tests {
 
         let m1 = chat_msg("ai_x", "k1", 100, "searchable-text");
         let m2 = chat_msg("ai_x", "k2", 200, "another-text");
-        repo.upsert_chat_messages("ai_x", &[m1, m2]).await.unwrap();
+        repo.upsert_chat_messages("ai_x", TargetKind::Ai, &[m1, m2])
+            .await
+            .unwrap();
 
         // Before deletion the FTS5 index has both messages.
         let hits = repo
-            .search_chat("ai_x", "\"searchable\"*", 50, 0, false)
+            .search_chat("ai_x", TargetKind::Ai, "\"searchable\"*", 50, 0, false)
             .await
             .unwrap();
         assert_eq!(hits.len(), 1);
@@ -2395,13 +2540,13 @@ mod tests {
         // Delete k1 — the FTS5 index entry must go too (via the
         // chat_messages_ad trigger).
         let deleted = repo
-            .delete_missing_chat_messages("ai_x", 50, 200, &["k2"])
+            .delete_missing_chat_messages("ai_x", TargetKind::Ai, 50, 200, &["k2"])
             .await
             .unwrap();
         assert_eq!(deleted, 1);
 
         let hits = repo
-            .search_chat("ai_x", "\"searchable\"*", 50, 0, false)
+            .search_chat("ai_x", TargetKind::Ai, "\"searchable\"*", 50, 0, false)
             .await
             .unwrap();
         assert!(
@@ -2421,11 +2566,16 @@ mod tests {
             chat_msg("ai_x", "k2", 200, "she runs fast"),
             chat_msg("ai_x", "k3", 300, "completely unrelated"),
         ];
-        repo.upsert_chat_messages("ai_x", &msgs).await.unwrap();
+        repo.upsert_chat_messages("ai_x", TargetKind::Ai, &msgs)
+            .await
+            .unwrap();
 
         // Porter stemmer turns "running"/"runs" into "run".
         let q = "\"run\"*";
-        let hits = repo.search_chat("ai_x", q, 50, 0, false).await.unwrap();
+        let hits = repo
+            .search_chat("ai_x", TargetKind::Ai, q, 50, 0, false)
+            .await
+            .unwrap();
         assert!(
             hits.len() >= 2,
             "expected at least 2 hits, got {}",
@@ -2433,7 +2583,10 @@ mod tests {
         );
 
         let q2 = "\"unrelated\"*";
-        let hits2 = repo.search_chat("ai_x", q2, 50, 0, false).await.unwrap();
+        let hits2 = repo
+            .search_chat("ai_x", TargetKind::Ai, q2, 50, 0, false)
+            .await
+            .unwrap();
         assert_eq!(hits2.len(), 1);
     }
 
@@ -2443,14 +2596,32 @@ mod tests {
         let t = target("T", "ai_x");
         let tid = t.id;
         repo.upsert_target(t).await.unwrap();
-        repo.upsert_chat_messages("ai_x", &[chat_msg("ai_x", "k1", 100, "hello")])
-            .await
-            .unwrap();
-        assert_eq!(repo.chat_message_count("ai_x").await.unwrap(), 1);
+        repo.upsert_chat_messages(
+            "ai_x",
+            TargetKind::Ai,
+            &[chat_msg("ai_x", "k1", 100, "hello")],
+        )
+        .await
+        .unwrap();
+        assert_eq!(
+            repo.chat_message_count("ai_x", TargetKind::Ai)
+                .await
+                .unwrap(),
+            1
+        );
 
         repo.delete_target(tid).await.unwrap();
-        assert_eq!(repo.chat_message_count("ai_x").await.unwrap(), 0);
-        assert!(repo.get_chat_sync_state("ai_x").await.unwrap().is_none());
+        assert_eq!(
+            repo.chat_message_count("ai_x", TargetKind::Ai)
+                .await
+                .unwrap(),
+            0
+        );
+        assert!(repo
+            .get_chat_sync_state("ai_x", TargetKind::Ai)
+            .await
+            .unwrap()
+            .is_none());
     }
 
     #[tokio::test]
@@ -2461,6 +2632,7 @@ mod tests {
 
         let state = ChatSyncState {
             ai_id: "ai_x".into(),
+            kind: TargetKind::Ai,
             last_synced_at: Utc::now(),
             last_timestamp: 12345,
             full_sync_done: true,
@@ -2471,7 +2643,11 @@ mod tests {
             total: 42,
         };
         repo.upsert_chat_sync_state(&state).await.unwrap();
-        let got = repo.get_chat_sync_state("ai_x").await.unwrap().unwrap();
+        let got = repo
+            .get_chat_sync_state("ai_x", TargetKind::Ai)
+            .await
+            .unwrap()
+            .unwrap();
         assert_eq!(got.ai_id, "ai_x");
         assert_eq!(got.last_timestamp, 12345);
         assert!(got.full_sync_done);
@@ -2487,7 +2663,11 @@ mod tests {
             ..state.clone()
         };
         repo.upsert_chat_sync_state(&updated).await.unwrap();
-        let got2 = repo.get_chat_sync_state("ai_x").await.unwrap().unwrap();
+        let got2 = repo
+            .get_chat_sync_state("ai_x", TargetKind::Ai)
+            .await
+            .unwrap()
+            .unwrap();
         assert_eq!(got2.total, 99);
         assert_eq!(got2.status_kind, SyncStatusKind::Idle);
     }
@@ -2503,24 +2683,28 @@ mod tests {
         // Seed messages for both targets. Seed a sync state for ai_x only.
         repo.upsert_chat_messages(
             "ai_x",
+            TargetKind::Ai,
             std::slice::from_ref(&chat_msg("ai_x", "x1", 100, "hello")),
         )
         .await
         .unwrap();
         repo.upsert_chat_messages(
             "ai_x",
+            TargetKind::Ai,
             std::slice::from_ref(&chat_msg("ai_x", "x2", 200, "world")),
         )
         .await
         .unwrap();
         repo.upsert_chat_messages(
             "ai_y",
+            TargetKind::Ai,
             std::slice::from_ref(&chat_msg("ai_y", "y1", 100, "unrelated")),
         )
         .await
         .unwrap();
         repo.upsert_chat_sync_state(&ChatSyncState {
             ai_id: "ai_x".into(),
+            kind: TargetKind::Ai,
             last_synced_at: Utc::now(),
             last_timestamp: 200,
             full_sync_done: true,
@@ -2533,33 +2717,63 @@ mod tests {
         .await
         .unwrap();
 
-        assert_eq!(repo.chat_message_count("ai_x").await.unwrap(), 2);
-        assert_eq!(repo.chat_message_count("ai_y").await.unwrap(), 1);
+        assert_eq!(
+            repo.chat_message_count("ai_x", TargetKind::Ai)
+                .await
+                .unwrap(),
+            2
+        );
+        assert_eq!(
+            repo.chat_message_count("ai_y", TargetKind::Ai)
+                .await
+                .unwrap(),
+            1
+        );
 
-        let deleted = repo.reset_chat_history("ai_x").await.unwrap();
+        let deleted = repo
+            .reset_chat_history("ai_x", TargetKind::Ai)
+            .await
+            .unwrap();
         assert_eq!(deleted, 2, "two messages for ai_x were deleted");
 
         // ai_x is fully wiped.
-        assert_eq!(repo.chat_message_count("ai_x").await.unwrap(), 0);
-        assert!(repo.get_chat_sync_state("ai_x").await.unwrap().is_none());
+        assert_eq!(
+            repo.chat_message_count("ai_x", TargetKind::Ai)
+                .await
+                .unwrap(),
+            0
+        );
+        assert!(repo
+            .get_chat_sync_state("ai_x", TargetKind::Ai)
+            .await
+            .unwrap()
+            .is_none());
 
         // FTS5 index was also wiped (the trigger fires on DELETE).
         let fts_hits = repo
-            .search_chat("ai_x", "\"hello\"*", 50, 0, false)
+            .search_chat("ai_x", TargetKind::Ai, "\"hello\"*", 50, 0, false)
             .await
             .unwrap();
         assert!(fts_hits.is_empty(), "FTS5 entries for ai_x should be gone");
 
         // ai_y is untouched.
-        assert_eq!(repo.chat_message_count("ai_y").await.unwrap(), 1);
+        assert_eq!(
+            repo.chat_message_count("ai_y", TargetKind::Ai)
+                .await
+                .unwrap(),
+            1
+        );
         let y_hits = repo
-            .search_chat("ai_y", "\"unrelated\"*", 50, 0, false)
+            .search_chat("ai_y", TargetKind::Ai, "\"unrelated\"*", 50, 0, false)
             .await
             .unwrap();
         assert_eq!(y_hits.len(), 1);
 
         // Idempotent: calling reset again is a no-op.
-        let deleted_again = repo.reset_chat_history("ai_x").await.unwrap();
+        let deleted_again = repo
+            .reset_chat_history("ai_x", TargetKind::Ai)
+            .await
+            .unwrap();
         assert_eq!(deleted_again, 0);
     }
 
@@ -2571,31 +2785,31 @@ mod tests {
 
         let mut m1 = chat_msg("ai_x", "k1", 100, "fav-target");
         m1.favourite = true;
-        repo.upsert_chat_messages("ai_x", std::slice::from_ref(&m1))
+        repo.upsert_chat_messages("ai_x", TargetKind::Ai, std::slice::from_ref(&m1))
             .await
             .unwrap();
 
         let list = repo
-            .list_chat_messages("ai_x", None, 50, false)
+            .list_chat_messages("ai_x", TargetKind::Ai, None, 50, false)
             .await
             .unwrap();
         assert!(list[0].favourite);
 
         let stored = repo
-            .set_chat_message_favourite("ai_x", "k1", false)
+            .set_chat_message_favourite("ai_x", TargetKind::Ai, "k1", false)
             .await
             .unwrap();
         assert!(!stored);
 
         let list2 = repo
-            .list_chat_messages("ai_x", None, 50, false)
+            .list_chat_messages("ai_x", TargetKind::Ai, None, 50, false)
             .await
             .unwrap();
         assert!(!list2[0].favourite);
 
         // Toggling a non-existent row leaves state untouched and returns false.
         let missing = repo
-            .set_chat_message_favourite("ai_x", "missing", true)
+            .set_chat_message_favourite("ai_x", TargetKind::Ai, "missing", true)
             .await
             .unwrap();
         assert!(!missing);
@@ -2609,7 +2823,7 @@ mod tests {
 
         let mut m1 = chat_msg("ai_x", "k1", 100, "first edition");
         m1.favourite = true;
-        repo.upsert_chat_messages("ai_x", std::slice::from_ref(&m1))
+        repo.upsert_chat_messages("ai_x", TargetKind::Ai, std::slice::from_ref(&m1))
             .await
             .unwrap();
 
@@ -2618,12 +2832,12 @@ mod tests {
             message: "second edition".into(),
             ..chat_msg("ai_x", "k1", 100, "placeholder")
         };
-        repo.upsert_chat_messages("ai_x", std::slice::from_ref(&m1_edited))
+        repo.upsert_chat_messages("ai_x", TargetKind::Ai, std::slice::from_ref(&m1_edited))
             .await
             .unwrap();
 
         let list = repo
-            .list_chat_messages("ai_x", None, 50, false)
+            .list_chat_messages("ai_x", TargetKind::Ai, None, 50, false)
             .await
             .unwrap();
         assert_eq!(list.len(), 1);
@@ -2642,6 +2856,7 @@ mod tests {
 
         repo.upsert_chat_messages(
             "ai_x",
+            TargetKind::Ai,
             &[
                 chat_msg_fav("ai_x", "k1", 100, "pinned-a", true),
                 chat_msg_fav("ai_x", "k2", 200, "unpinned", false),
@@ -2652,13 +2867,13 @@ mod tests {
         .unwrap();
 
         let unfiltered = repo
-            .list_chat_messages("ai_x", None, 50, false)
+            .list_chat_messages("ai_x", TargetKind::Ai, None, 50, false)
             .await
             .unwrap();
         assert_eq!(unfiltered.len(), 3);
 
         let only_favs = repo
-            .list_chat_messages("ai_x", None, 50, true)
+            .list_chat_messages("ai_x", TargetKind::Ai, None, 50, true)
             .await
             .unwrap();
         assert_eq!(only_favs.len(), 2);
@@ -2674,7 +2889,7 @@ mod tests {
 
         // Filter also applies to the paginated path (`before_ts`).
         let older_favs = repo
-            .list_chat_messages("ai_x", Some(300), 50, true)
+            .list_chat_messages("ai_x", TargetKind::Ai, Some(300), 50, true)
             .await
             .unwrap();
         assert_eq!(older_favs.len(), 1);
@@ -2689,6 +2904,7 @@ mod tests {
 
         repo.upsert_chat_messages(
             "ai_x",
+            TargetKind::Ai,
             &[
                 chat_msg_fav("ai_x", "k1", 100, "searchable pinned", true),
                 chat_msg_fav("ai_x", "k2", 200, "searchable plain", false),
@@ -2698,13 +2914,13 @@ mod tests {
         .unwrap();
 
         let unfiltered = repo
-            .search_chat("ai_x", "\"searchable\"*", 50, 0, false)
+            .search_chat("ai_x", TargetKind::Ai, "\"searchable\"*", 50, 0, false)
             .await
             .unwrap();
         assert_eq!(unfiltered.len(), 2);
 
         let only_favs = repo
-            .search_chat("ai_x", "\"searchable\"*", 50, 0, true)
+            .search_chat("ai_x", TargetKind::Ai, "\"searchable\"*", 50, 0, true)
             .await
             .unwrap();
         assert_eq!(only_favs.len(), 1);
@@ -2806,11 +3022,11 @@ mod tests {
         let messages = (0..13)
             .map(|i| chat_msg("ai_auto", &format!("m{i:02}"), 100, &format!("m{i}")))
             .collect::<Vec<_>>();
-        repo.upsert_chat_messages("ai_auto", &messages)
+        repo.upsert_chat_messages("ai_auto", TargetKind::Ai, &messages)
             .await
             .unwrap();
         let stable = repo
-            .list_stable_chat_messages("ai_auto", None, 100, 10)
+            .list_stable_chat_messages("ai_auto", TargetKind::Ai, None, 100, 10)
             .await
             .unwrap();
         assert_eq!(stable.len(), 3);
@@ -2821,12 +3037,12 @@ mod tests {
             kindroid_msg_id: "m00".into(),
         };
         let next = repo
-            .list_stable_chat_messages("ai_auto", Some(&after), 100, 10)
+            .list_stable_chat_messages("ai_auto", TargetKind::Ai, Some(&after), 100, 10)
             .await
             .unwrap();
         assert_eq!(next[0].kindroid_msg_id, "m01");
         assert_eq!(
-            repo.latest_stable_cursor("ai_auto", 10)
+            repo.latest_stable_cursor("ai_auto", TargetKind::Ai, 10)
                 .await
                 .unwrap()
                 .unwrap()
@@ -2923,40 +3139,15 @@ mod tests {
     fn migration_0011_drops_automation_response_columns() {
         // Regression test for the privacy cleanup: 0011 drops
         // journal_last_response / summary_last_response from
-        // chat_automation_state. We use the same "run migrations, roll
-        // back, run again" pattern as the 0008 / 0009 tests so the
-        // migration runs once against a v10 schema (where the columns
-        // are still present) and asserts the v10→v11 transition drops
-        // them. After the second run, the columns are gone.
+        // chat_automation_state. The legacy simulate-and-rerun pattern
+        // (run, rollback user_version, run) no longer works after 0014
+        // because the 0014 rebuild leaves the schema in a state where
+        // an explicit "rerun" would collide with the new structure. We
+        // instead build a fresh in-memory DB, run all migrations, and
+        // assert the post-migration schema no longer carries the
+        // response columns.
         let mut conn = Connection::open_in_memory().expect("open in-memory");
         conn.execute_batch("PRAGMA foreign_keys=ON;").unwrap();
-        conn.execute_batch("PRAGMA user_version = 0;").unwrap();
-        run_migrations(&mut conn).unwrap();
-
-        // Re-add the columns (0011 just dropped them on the first run)
-        // and roll the schema back to v10 so the second `run_migrations`
-        // applies only 0011. This isolates the drop to 0011 and proves
-        // the migration lands the schema change without help from any
-        // other migration.
-        conn.execute_batch(
-            "ALTER TABLE chat_automation_state ADD COLUMN journal_last_response TEXT;
-             ALTER TABLE chat_automation_state ADD COLUMN summary_last_response TEXT;",
-        )
-        .unwrap();
-        conn.execute_batch("PRAGMA user_version = 10;").unwrap();
-
-        let cols_before: Vec<String> = conn
-            .prepare("SELECT name FROM pragma_table_info('chat_automation_state')")
-            .unwrap()
-            .query_map([], |r| r.get(0))
-            .unwrap()
-            .filter_map(|r| r.ok())
-            .collect();
-        assert!(
-            cols_before.iter().any(|c| c == "journal_last_response"),
-            "pre-0011 schema should still have journal_last_response, columns: {cols_before:?}"
-        );
-
         run_migrations(&mut conn).unwrap();
         let cols_after: Vec<String> = conn
             .prepare("SELECT name FROM pragma_table_info('chat_automation_state')")

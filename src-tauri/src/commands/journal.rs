@@ -78,7 +78,7 @@ pub async fn delete_journal_entry(
 mod tests {
     use super::*;
     use crate::domain::character::Character;
-    use crate::domain::target::Target;
+    use crate::domain::target::{Target, TargetKind};
     use crate::storage::sqlite::SqliteRepository;
     use crate::storage::{Repository, StorageError};
     use async_trait::async_trait;
@@ -110,6 +110,7 @@ mod tests {
             Target {
                 id: Uuid::new_v4(),
                 ai_id: "ai_1".into(),
+                kind: TargetKind::Ai,
                 label: "T".into(),
                 created_at: Utc::now(),
             },
@@ -140,6 +141,13 @@ mod tests {
         }
         async fn get_target(&self, _: Uuid) -> Result<Target, StorageError> {
             Err(StorageError::NotFound)
+        }
+        async fn get_target_by_kind(
+            &self,
+            _: &str,
+            _: TargetKind,
+        ) -> Result<Option<Target>, StorageError> {
+            Ok(None)
         }
         async fn upsert_target(&self, _: Target) -> Result<Target, StorageError> {
             Err(StorageError::NotFound)
@@ -191,6 +199,7 @@ mod tests {
         async fn upsert_chat_messages(
             &self,
             _: &str,
+            _: TargetKind,
             _: &[crate::domain::chat_message::ChatMessage],
         ) -> Result<usize, StorageError> {
             Ok(0)
@@ -198,6 +207,7 @@ mod tests {
         async fn list_chat_messages(
             &self,
             _: &str,
+            _: TargetKind,
             _: Option<i64>,
             _: u32,
             _: bool,
@@ -207,6 +217,7 @@ mod tests {
         async fn search_chat(
             &self,
             _: &str,
+            _: TargetKind,
             _: &str,
             _: u32,
             _: u32,
@@ -217,17 +228,19 @@ mod tests {
         async fn set_chat_message_favourite(
             &self,
             _: &str,
+            _: TargetKind,
             _: &str,
             _: bool,
         ) -> Result<bool, StorageError> {
             Ok(false)
         }
-        async fn chat_message_count(&self, _: &str) -> Result<u64, StorageError> {
+        async fn chat_message_count(&self, _: &str, _: TargetKind) -> Result<u64, StorageError> {
             Ok(0)
         }
         async fn get_chat_sync_state(
             &self,
             _: &str,
+            _: TargetKind,
         ) -> Result<Option<crate::domain::chat_message::ChatSyncState>, StorageError> {
             Ok(None)
         }
@@ -237,12 +250,13 @@ mod tests {
         ) -> Result<(), StorageError> {
             Ok(())
         }
-        async fn reset_chat_history(&self, _: &str) -> Result<usize, StorageError> {
+        async fn reset_chat_history(&self, _: &str, _: TargetKind) -> Result<usize, StorageError> {
             Ok(0)
         }
         async fn delete_missing_chat_messages(
             &self,
             _: &str,
+            _: TargetKind,
             _: i64,
             _: i64,
             _: &[&str],
@@ -253,6 +267,7 @@ mod tests {
         async fn list_stable_chat_messages(
             &self,
             _: &str,
+            _: TargetKind,
             _: Option<&crate::domain::chat_automation::StableMessageCursor>,
             _: u32,
             _: u32,
@@ -262,6 +277,7 @@ mod tests {
         async fn latest_stable_cursor(
             &self,
             _: &str,
+            _: TargetKind,
             _: u32,
         ) -> Result<Option<crate::domain::chat_automation::StableMessageCursor>, StorageError>
         {

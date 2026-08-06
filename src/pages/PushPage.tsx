@@ -27,6 +27,20 @@ export function PushPage() {
     queryKey: ['targets'],
     queryFn: api.listTargets,
   });
+  // Push only supports AI targets — the backend also rejects, but the
+  // filter here keeps the dropdown UI honest. If the URL pinned a group
+  // target (e.g. from a stale Re-push link), we surface a clear error
+  // rather than silently breaking.
+  const aiTargets = useMemo(
+    () => (targets.data ?? []).filter((t) => t.kind === 'ai'),
+    [targets.data],
+  );
+  const initialTargetId = params.get('targetId') ?? '';
+  const pinnedTarget = useMemo(
+    () => (targets.data ?? []).find((t) => t.id === initialTargetId),
+    [targets.data, initialTargetId],
+  );
+  const pinnedGroupTarget = pinnedTarget && pinnedTarget.kind === 'group' ? pinnedTarget : null;
   const character = useQuery<Character | null>({
     queryKey: ['character', characterId],
     queryFn: () => (characterId ? api.getCharacter(characterId) : Promise.resolve(null)),
@@ -158,28 +172,31 @@ export function PushPage() {
         <div className="card">
           {' '}
           <h3>Target</h3>{' '}
-          <select
+<select
             className="select"
             value={targetId}
             onChange={(e) => setTargetId(e.target.value)}
             style={{ marginTop: 8 }}
           >
-            {' '}
-            <option value="">— pick a target —</option>{' '}
-            {(targets.data ?? []).map((t: Awaited<ReturnType<typeof api.listTargets>>[number]) => (
+            <option value="">— pick a target —</option>
+            {aiTargets.map((t: Awaited<ReturnType<typeof api.listTargets>>[number]) => (
               <option key={t.id} value={t.id}>
-                {' '}
-                {t.label} — {t.ai_id}{' '}
+                {t.label} — {t.ai_id}
               </option>
-            ))}{' '}
-          </select>{' '}
+            ))}
+          </select>
           {targetLabel && (
             <div className="muted mono" style={{ marginTop: 6, fontSize: 12 }}>
               {targetLabel}
             </div>
-          )}{' '}
-        </div>{' '}
-      </div>{' '}
+          )}
+        </div>
+      </div>
+      {pinnedGroupTarget && (
+        <div className="error" role="alert" data-testid="group-push-error">
+          This target is a group chat — push is not supported for groups.
+        </div>
+      )}
       {character.data && (
         <div className="card">
           {' '}

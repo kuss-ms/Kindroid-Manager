@@ -9,7 +9,7 @@ use crate::domain::chat_automation::{
 use crate::domain::chat_message::{ChatMessage, ChatSyncState};
 use crate::domain::journal_entry::JournalEntry;
 use crate::domain::push_log::PushLogEntry;
-use crate::domain::target::Target;
+use crate::domain::target::{Target, TargetKind};
 
 pub mod sqlite;
 
@@ -33,10 +33,22 @@ pub trait Repository: Send + Sync {
 
     async fn list_targets(&self) -> Result<Vec<Target>, StorageError>;
     async fn get_target(&self, id: Uuid) -> Result<Target, StorageError>;
-    /// Upsert by id; if a row with the same `ai_id` already exists, update
-    /// that row's `label`/`updated_at` (we have UNIQUE(ai_id)). The caller
-    /// passes the canonical id back via `id` when a merge happened — the
-    /// returned Target reflects the merged row.
+    /// Look up a target by `(ai_id, kind)` rather than its local UUID.
+    /// Returns `None` when no row matches. Used by the chat-history +
+    /// automation entry points so callers can disambiguate an AI and a
+    /// Group that happen to share the same Kindroid identifier string.
+    async fn get_target_by_kind(
+        &self,
+        ai_id: &str,
+        kind: TargetKind,
+    ) -> Result<Option<Target>, StorageError>;
+    /// Upsert by id; if a row with the same `(ai_id, kind)` already
+    /// exists, update that row's `label` (`UNIQUE(ai_id, kind)`). The
+    /// caller passes the canonical id back via `id` when a merge
+    /// happened — the returned Target reflects the merged row. Returns
+    /// `StorageError::Invalid("target kind cannot be changed")` if an
+    /// existing row with the same `ai_id` exists under a different kind
+    /// (kind is immutable after creation).
     async fn upsert_target(&self, target: Target) -> Result<Target, StorageError>;
     async fn delete_target(&self, id: Uuid) -> Result<(), StorageError>;
 
@@ -66,33 +78,37 @@ pub trait Repository: Send + Sync {
     /// Delete the cover image (if any) for `character_id`.
     async fn delete_character_image_bytes(&self, id: Uuid) -> Result<(), StorageError>;
 
-    /// Insert chat messages, ignoring duplicates by (ai_id, kindroid_msg_id).
+    /// Insert chat messages, ignoring duplicates by `(ai_id, kind, kindroid_msg_id)`.
     /// Returns the count of newly-inserted rows. The local `id`, `fetched_at`
     /// and `favourite` columns are preserved on UPDATE so user-set pin state
     /// survives subsequent syncs.
     async fn upsert_chat_messages(
         &self,
         ai_id: &str,
+        kind: TargetKind,
         msgs: &[ChatMessage],
     ) -> Result<usize, StorageError>;
 
-    /// List chat messages for `ai_id`, paginated by `before_ts` (DESC, exclusive).
-    /// When `favourites_only` is true, only messages with `favourite = 1` are returned.
+    /// List chat messages for `(ai_id, kind)`, paginated by `before_ts`
+    /// (DESC, exclusive). When `favourites_only` is true, only messages
+    /// with `favourite = 1` are returned.
     async fn list_chat_messages(
         &self,
         ai_id: &str,
+        kind: TargetKind,
         before_ts: Option<i64>,
         limit: u32,
         favourites_only: bool,
     ) -> Result<Vec<ChatMessage>, StorageError>;
 
-    /// FTS5 search within a single `ai_id`. The query is expected to be
-    /// already escaped by the caller. `favourites_only` adds a SQL predicate
-    /// to the outer join (not to the FTS MATCH clause, so Porter stemming
-    /// keeps working).
+    /// FTS5 search within a single `(ai_id, kind)`. The query is
+    /// expected to be already escaped by the caller. `favourites_only`
+    /// adds a SQL predicate to the outer join (not to the FTS MATCH
+    /// clause, so Porter stemming keeps working).
     async fn search_chat(
         &self,
         ai_id: &str,
+        kind: TargetKind,
         query: &str,
         limit: u32,
         offset: u32,
@@ -100,31 +116,37 @@ pub trait Repository: Send + Sync {
     ) -> Result<Vec<ChatMessage>, StorageError>;
 
     /// Set the local `favourite` flag for a message identified by
-    /// `(ai_id, kindroid_msg_id)`. Returns the new value, or `false` if no
-    /// matching row exists.
+    /// `(ai_id, kind, kindroid_msg_id)`. Returns the new value, or
+    /// `false` if no matching row exists.
     async fn set_chat_message_favourite(
         &self,
         ai_id: &str,
+        kind: TargetKind,
         kindroid_msg_id: &str,
         favourite: bool,
     ) -> Result<bool, StorageError>;
 
-    /// Total number of messages known locally for `ai_id`.
-    async fn chat_message_count(&self, ai_id: &str) -> Result<u64, StorageError>;
+    /// Total number of messages known locally for `(ai_id, kind)`.
+    async fn chat_message_count(&self, ai_id: &str, kind: TargetKind) -> Result<u64, StorageError>;
 
-    async fn get_chat_sync_state(&self, ai_id: &str)
-        -> Result<Option<ChatSyncState>, StorageError>;
+    async fn get_chat_sync_state(
+        &self,
+        ai_id: &str,
+        kind: TargetKind,
+    ) -> Result<Option<ChatSyncState>, StorageError>;
 
     async fn upsert_chat_sync_state(&self, state: &ChatSyncState) -> Result<(), StorageError>;
 
-    /// Wipe all locally-cached chat history for `ai_id`: every row in
-    /// `chat_messages` (the FTS5 index is updated via the existing
-    /// `chat_messages_ad` trigger) plus the `chat_sync_state` row, so the
-    /// next sync starts cleanly from a zero cursor. Returns the number of
-    /// chat_messages rows that were deleted.
-    async fn reset_chat_history(&self, ai_id: &str) -> Result<usize, StorageError>;
+    /// Wipe all locally-cached chat history and sync state for `(ai_id, kind)`.
+    /// The next sync will start cleanly from a zero cursor. Returns the
+    /// number of chat_messages rows that were deleted.
+    async fn reset_chat_history(
+        &self,
+        ai_id: &str,
+        kind: TargetKind,
+    ) -> Result<usize, StorageError>;
 
-    /// Delete chat messages for `ai_id` whose timestamp is in
+    /// Delete chat messages for `(ai_id, kind)` whose timestamp is in
     /// `(start_after, last_timestamp_inclusive]` AND whose
     /// `kindroid_msg_id` is NOT in `keep_ids`. Used after a sync response
     /// to remove messages that were deleted on the server side. The
@@ -135,6 +157,7 @@ pub trait Repository: Send + Sync {
     async fn delete_missing_chat_messages(
         &self,
         ai_id: &str,
+        kind: TargetKind,
         start_after: i64,
         last_timestamp_inclusive: i64,
         keep_ids: &[&str],
@@ -159,6 +182,7 @@ pub trait Repository: Send + Sync {
     async fn list_stable_chat_messages(
         &self,
         ai_id: &str,
+        kind: TargetKind,
         after_cursor: Option<&StableMessageCursor>,
         limit: u32,
         exclude_newest_n: u32,
@@ -166,6 +190,7 @@ pub trait Repository: Send + Sync {
     async fn latest_stable_cursor(
         &self,
         ai_id: &str,
+        kind: TargetKind,
         exclude_newest_n: u32,
     ) -> Result<Option<StableMessageCursor>, StorageError>;
     async fn get_chat_automation_state(

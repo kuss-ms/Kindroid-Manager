@@ -102,6 +102,8 @@ fn build_phrase(raw: &str, meta: &[char]) -> Option<String> {
 /// boundary plus one position just outside the edit window.
 pub const REWIND_MESSAGE_COUNT: u32 = 12;
 
+use crate::domain::target::TargetKind;
+
 /// Compute the `start_after_timestamp` for an outgoing chat-history
 /// request based on the **local DB** rather than the cursor or
 /// wall-clock time. The cursor can drift arbitrarily far past the
@@ -123,6 +125,7 @@ pub const REWIND_MESSAGE_COUNT: u32 = 12;
 pub async fn compute_local_rewind(
     repo: &dyn crate::storage::Repository,
     ai_id: &str,
+    kind: TargetKind,
     full_sync_done: bool,
     last_timestamp: i64,
 ) -> Result<Option<i64>, crate::error::AppError> {
@@ -133,7 +136,7 @@ pub async fn compute_local_rewind(
         return Ok(Some(last_timestamp));
     }
     let msgs = repo
-        .list_chat_messages(ai_id, None, REWIND_MESSAGE_COUNT, false)
+        .list_chat_messages(ai_id, kind, None, REWIND_MESSAGE_COUNT, false)
         .await?;
     if msgs.is_empty() {
         return Ok(None);

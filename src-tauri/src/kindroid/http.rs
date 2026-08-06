@@ -7,6 +7,7 @@ use super::{
     JournalCreateRequest, KindroidError, ListChatMessagesRequest, ToggleMessagePinRequest,
     ToggleMessagePinResponse, UpdateInfoRequest, REQUEST_TIMEOUT,
 };
+use crate::domain::target::TargetKind;
 
 #[async_trait]
 pub trait KindroidClient: Send + Sync {
@@ -213,9 +214,17 @@ impl KindroidClient for HttpKindroidClient {
         req: ListChatMessagesRequest,
     ) -> Result<ChatMessagesPage, KindroidError> {
         let limit = req.limit.clamp(1, 100);
+        // The Kindroid API distinguishes AI chat (`ai_id` query param)
+        // and group chat (`group_id` query param). Both endpoints use
+        // the same path; only the parameter name differs.
+        let id_param = match req.kind {
+            TargetKind::Ai => "ai_id",
+            TargetKind::Group => "group_id",
+        };
         let mut url = format!(
-            "{}/get-chat-messages?ai_id={}&limit={}",
+            "{}/get-chat-messages?{}={}&limit={}",
             base_url.trim_end_matches('/'),
+            id_param,
             urlencoding(&req.ai_id),
             limit
         );
@@ -253,8 +262,15 @@ impl KindroidClient for HttpKindroidClient {
         req: ToggleMessagePinRequest,
     ) -> Result<ToggleMessagePinResponse, KindroidError> {
         let url = format!("{}/toggle-message-pin", base_url.trim_end_matches('/'));
+        // The Kindroid API uses `ai_id` for AI chat and `group_id` for
+        // group chat — same field name in our Rust struct, different key
+        // on the wire. See the matching branch in `list_chat_messages`.
+        let id_key = match req.kind {
+            TargetKind::Ai => "ai_id",
+            TargetKind::Group => "group_id",
+        };
         let body = serde_json::json!({
-            "ai_id": req.ai_id,
+            id_key: req.ai_id,
             "message_id": req.message_id,
         });
         let resp = self.post_json(&url, token, body).await?;
@@ -672,6 +688,7 @@ mod tests {
                 &server.uri(),
                 ListChatMessagesRequest {
                     ai_id: "ai_x".into(),
+                    kind: TargetKind::Ai,
                     limit: 100,
                     start_after_timestamp: None,
                 },
@@ -714,6 +731,7 @@ mod tests {
                 &server.uri(),
                 ListChatMessagesRequest {
                     ai_id: "ai_x".into(),
+                    kind: TargetKind::Ai,
                     limit: 5,
                     start_after_timestamp: None,
                 },
@@ -761,6 +779,7 @@ mod tests {
                 &server.uri(),
                 ListChatMessagesRequest {
                     ai_id: "ai_x".into(),
+                    kind: TargetKind::Ai,
                     limit: 100,
                     start_after_timestamp: Some(0),
                 },
@@ -803,6 +822,7 @@ mod tests {
                 &server.uri(),
                 ListChatMessagesRequest {
                     ai_id: "ai_x".into(),
+                    kind: TargetKind::Ai,
                     limit: 100,
                     start_after_timestamp: None,
                 },
@@ -832,6 +852,7 @@ mod tests {
                 &server.uri(),
                 ListChatMessagesRequest {
                     ai_id: "ai_x".into(),
+                    kind: TargetKind::Ai,
                     limit: 100,
                     start_after_timestamp: None,
                 },
@@ -857,6 +878,7 @@ mod tests {
                 &server.uri(),
                 ListChatMessagesRequest {
                     ai_id: "ai_x".into(),
+                    kind: TargetKind::Ai,
                     limit: 100,
                     start_after_timestamp: None,
                 },
@@ -881,6 +903,7 @@ mod tests {
                 &server.uri(),
                 ListChatMessagesRequest {
                     ai_id: "ai_x".into(),
+                    kind: TargetKind::Ai,
                     limit: 100,
                     start_after_timestamp: None,
                 },
@@ -909,6 +932,7 @@ mod tests {
                 &server.uri(),
                 ListChatMessagesRequest {
                     ai_id: "ai_x".into(),
+                    kind: TargetKind::Ai,
                     limit: 100,
                     start_after_timestamp: None,
                 },
@@ -938,6 +962,7 @@ mod tests {
                 &server.uri(),
                 ListChatMessagesRequest {
                     ai_id: "ai_x".into(),
+                    kind: TargetKind::Ai,
                     limit: 100,
                     start_after_timestamp: None,
                 },
@@ -965,6 +990,7 @@ mod tests {
                 &server.uri(),
                 ListChatMessagesRequest {
                     ai_id: "ai_x".into(),
+                    kind: TargetKind::Ai,
                     limit: 100,
                     start_after_timestamp: None,
                 },
@@ -972,6 +998,36 @@ mod tests {
             .await
             .unwrap_err();
         assert!(matches!(err, KindroidError::Server { status: 500, .. }));
+    }
+
+    #[tokio::test]
+    async fn list_chat_messages_group_uses_group_id_param() {
+        // The Kindroid API distinguishes AI chat (`ai_id` query param)
+        // from group chat (`group_id` query param) on the same endpoint.
+        let server = MockServer::start().await;
+        Mock::given(method("GET"))
+            .and(path("/get-chat-messages"))
+            .and(query_param("group_id", "gc_1"))
+            .respond_with(
+                ResponseTemplate::new(200).set_body_string(json!({"messages": []}).to_string()),
+            )
+            .mount(&server)
+            .await;
+        let c = HttpKindroidClient::new();
+        let page = c
+            .list_chat_messages(
+                "t",
+                &server.uri(),
+                ListChatMessagesRequest {
+                    ai_id: "gc_1".into(),
+                    kind: TargetKind::Group,
+                    limit: 100,
+                    start_after_timestamp: None,
+                },
+            )
+            .await
+            .unwrap();
+        assert!(page.messages.is_empty());
     }
 
     #[tokio::test]
@@ -991,6 +1047,7 @@ mod tests {
                 &server.uri(),
                 ToggleMessagePinRequest {
                     ai_id: "ai_x".into(),
+                    kind: TargetKind::Ai,
                     message_id: "m1".into(),
                 },
             )
@@ -1017,6 +1074,7 @@ mod tests {
                 &server.uri(),
                 ToggleMessagePinRequest {
                     ai_id: "ai_x".into(),
+                    kind: TargetKind::Ai,
                     message_id: "m1".into(),
                 },
             )
@@ -1040,6 +1098,7 @@ mod tests {
                 &server.uri(),
                 ToggleMessagePinRequest {
                     ai_id: "ai_x".into(),
+                    kind: TargetKind::Ai,
                     message_id: "m1".into(),
                 },
             )
@@ -1069,6 +1128,7 @@ mod tests {
                 &server.uri(),
                 ToggleMessagePinRequest {
                     ai_id: "ai_x".into(),
+                    kind: TargetKind::Ai,
                     message_id: "m1".into(),
                 },
             )
@@ -1092,6 +1152,7 @@ mod tests {
                 &server.uri(),
                 ToggleMessagePinRequest {
                     ai_id: "ai_x".into(),
+                    kind: TargetKind::Ai,
                     message_id: "missing".into(),
                 },
             )
@@ -1115,12 +1176,42 @@ mod tests {
                 &server.uri(),
                 ToggleMessagePinRequest {
                     ai_id: "ai_x".into(),
+                    kind: TargetKind::Ai,
                     message_id: "m1".into(),
                 },
             )
             .await
             .unwrap_err();
         assert!(matches!(err, KindroidError::Server { status: 500, .. }));
+    }
+
+    #[tokio::test]
+    async fn toggle_message_pin_group_posts_group_id() {
+        // Group mode pins must post `group_id`, not `ai_id`, so the
+        // server can route the request to the right conversation.
+        let server = MockServer::start().await;
+        Mock::given(method("POST"))
+            .and(path("/toggle-message-pin"))
+            .and(header("Authorization", "Bearer t"))
+            .respond_with(
+                ResponseTemplate::new(200).set_body_string(json!({ "isPinned": true }).to_string()),
+            )
+            .mount(&server)
+            .await;
+        let c = HttpKindroidClient::new();
+        let r = c
+            .toggle_message_pin(
+                "t",
+                &server.uri(),
+                ToggleMessagePinRequest {
+                    ai_id: "gc_1".into(),
+                    kind: TargetKind::Group,
+                    message_id: "m1".into(),
+                },
+            )
+            .await
+            .unwrap();
+        assert!(r.is_pinned);
     }
 
     #[tokio::test]

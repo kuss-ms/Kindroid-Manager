@@ -21,9 +21,17 @@ export interface Character {
   updated_at: string;
 }
 
+export type TargetKind = 'ai' | 'group';
+
+export const TARGET_KIND_LABEL: Record<TargetKind, string> = {
+  ai: 'AI',
+  group: 'Group chat',
+};
+
 export interface Target {
   id: Uuid;
   ai_id: string;
+  kind: TargetKind;
   label: string;
   created_at: string;
 }
@@ -168,6 +176,7 @@ export interface AiChatCompletionResponse {
 export interface ChatMessage {
   id: Uuid;
   ai_id: string;
+  kind: TargetKind;
   kindroid_msg_id: string;
   sender: string;
   display_name: string | null;
@@ -187,6 +196,7 @@ export type SyncStatusKind = 'idle' | 'running' | 'backoff' | 'cancelled' | 'err
 
 export interface ChatSyncState {
   ai_id: string;
+  kind: TargetKind;
   last_synced_at: string;
   last_timestamp: number;
   full_sync_done: boolean;

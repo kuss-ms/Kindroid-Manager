@@ -14,6 +14,7 @@ use crate::domain::chat_automation::{
 };
 use crate::domain::chat_message::ChatMessage;
 use crate::domain::journal_entry::JournalEntry;
+use crate::domain::target::TargetKind;
 use crate::error::AppError;
 use crate::kindroid::ai::{AiClient, AiMessage, ChatCompletionRequest, ResponseFormat};
 use crate::kindroid::{JournalCreateRequest, KindroidClient, UpdateInfoRequest};
@@ -158,8 +159,7 @@ fn is_in_progress(ai_id: &str) -> bool {
 /// above) so the background sync loop and the UI polling
 /// `get_chat_automation_state` share the same view without threading
 /// state through the trait.
-type DebugResponseMap =
-    Mutex<std::collections::HashMap<String, AutomationDebugResponses>>;
+type DebugResponseMap = Mutex<std::collections::HashMap<String, AutomationDebugResponses>>;
 static DEBUG_RESPONSES: OnceLock<DebugResponseMap> = OnceLock::new();
 
 fn debug_responses() -> &'static DebugResponseMap {
@@ -175,8 +175,14 @@ struct AutomationDebugResponses {
 /// Read the SettingsPage toggle. Missing/invalid values are treated as
 /// OFF — the privacy-safe default.
 async fn debug_response_capture_enabled(repo: &dyn Repository) -> bool {
-    match repo.get_setting(SETTING_DEBUG_SHOW_AUTOMATION_RESPONSE).await {
-        Ok(Some(v)) => matches!(v.trim().to_ascii_lowercase().as_str(), "1" | "true" | "yes" | "on"),
+    match repo
+        .get_setting(SETTING_DEBUG_SHOW_AUTOMATION_RESPONSE)
+        .await
+    {
+        Ok(Some(v)) => matches!(
+            v.trim().to_ascii_lowercase().as_str(),
+            "1" | "true" | "yes" | "on"
+        ),
         _ => false,
     }
 }
@@ -417,7 +423,9 @@ async fn process_journal(
         return Ok(());
     }
     if !state.journal_initialised {
-        state.journal_cursor = repo.latest_stable_cursor(ai_id, EXCLUDE_NEWEST_N).await?;
+        state.journal_cursor = repo
+            .latest_stable_cursor(ai_id, TargetKind::Ai, EXCLUDE_NEWEST_N)
+            .await?;
         state.journal_initialised = true;
         repo.upsert_chat_automation_state(&state).await?;
         return Ok(());
@@ -438,6 +446,7 @@ async fn process_journal(
     let new_messages = repo
         .list_stable_chat_messages(
             ai_id,
+            TargetKind::Ai,
             state.journal_cursor.as_ref(),
             state.interval,
             EXCLUDE_NEWEST_N,
@@ -643,6 +652,7 @@ async fn process_summary(
         SummaryMode::Incremental => {
             repo.list_stable_chat_messages(
                 ai_id,
+                TargetKind::Ai,
                 state.summary_cursor.as_ref(),
                 state.interval,
                 EXCLUDE_NEWEST_N,
@@ -964,7 +974,13 @@ async fn collect_stable(
     let mut cursor = None;
     loop {
         let page = repo
-            .list_stable_chat_messages(ai_id, cursor.as_ref(), 500, EXCLUDE_NEWEST_N)
+            .list_stable_chat_messages(
+                ai_id,
+                TargetKind::Ai,
+                cursor.as_ref(),
+                500,
+                EXCLUDE_NEWEST_N,
+            )
             .await?;
         if page.is_empty() {
             break;
@@ -1147,11 +1163,16 @@ async fn load_state_optional(
 }
 
 async fn ensure_target(repo: &Arc<dyn Repository>, ai_id: &str) -> Result<(), AppError> {
+    // Look up by (ai_id, Ai) so a Group row with the same ai_id string
+    // doesn't accidentally satisfy the gate — automation is only
+    // available for AI chat. This is also what makes
+    // `set_chat_automation_settings` (and friends) return the same
+    // "target with ai_id '<id>' not found" message for a group target
+    // as for a missing target.
     if repo
-        .list_targets()
+        .get_target_by_kind(ai_id, TargetKind::Ai)
         .await?
-        .iter()
-        .any(|target| target.ai_id == ai_id)
+        .is_some()
     {
         Ok(())
     } else {
@@ -1337,7 +1358,10 @@ mod tests {
         let raw = r#"[{"entries":[{"entry":"Kira is a violet-eyed Succubus with wings.","keyphrases":["Kira","Succubus"]}]}]"#;
         let parsed: Sample = parse_json_response(raw, "journal").unwrap();
         assert_eq!(parsed.entries.len(), 1);
-        assert_eq!(parsed.entries[0].entry, "Kira is a violet-eyed Succubus with wings.");
+        assert_eq!(
+            parsed.entries[0].entry,
+            "Kira is a violet-eyed Succubus with wings."
+        );
         assert_eq!(parsed.entries[0].keyphrases, vec!["Kira", "Succubus"]);
     }
 
@@ -1391,7 +1415,10 @@ mod tests {
         // model pattern-matches the wrong length and produces over-long
         // entries.
         let prompt = super::journal_prompt("test instructions", &[], &[], 1, "Astra");
-        for anchor in ["Astra is a reclusive cartographer", "A coastal village trades"] {
+        for anchor in [
+            "Astra is a reclusive cartographer",
+            "A coastal village trades",
+        ] {
             let start = prompt.find(anchor).expect("example anchor present");
             let end = prompt[start..].find('"').expect("example close quote");
             let example = &prompt[start..start + end];
@@ -1476,6 +1503,7 @@ mod tests {
             ChatMessage {
                 id: Uuid::new_v4(),
                 ai_id: "a".into(),
+                kind: crate::domain::target::TargetKind::Ai,
                 kindroid_msg_id: "k1".into(),
                 sender: "user".into(),
                 display_name: Some("Cires".into()),
@@ -1493,6 +1521,7 @@ mod tests {
             ChatMessage {
                 id: Uuid::new_v4(),
                 ai_id: "a".into(),
+                kind: crate::domain::target::TargetKind::Ai,
                 kindroid_msg_id: "k2".into(),
                 sender: "ai".into(),
                 display_name: None,
@@ -1510,6 +1539,7 @@ mod tests {
             ChatMessage {
                 id: Uuid::new_v4(),
                 ai_id: "a".into(),
+                kind: crate::domain::target::TargetKind::Ai,
                 kindroid_msg_id: "k3".into(),
                 sender: "ai".into(),
                 display_name: Some("  Laura  ".into()),

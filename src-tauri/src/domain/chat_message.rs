@@ -2,10 +2,14 @@ use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
+use crate::domain::target::TargetKind;
+
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct ChatMessage {
     pub id: Uuid,
     pub ai_id: String,
+    #[serde(default)]
+    pub kind: TargetKind,
     pub kindroid_msg_id: String,
     /// Speaker returned by Kindroid (`"ai"` or `"user"`). The human
     /// name lives in `display_name`.
@@ -62,6 +66,8 @@ impl SyncStatusKind {
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct ChatSyncState {
     pub ai_id: String,
+    #[serde(default)]
+    pub kind: TargetKind,
     pub last_synced_at: DateTime<Utc>,
     pub last_timestamp: i64,
     pub full_sync_done: bool,

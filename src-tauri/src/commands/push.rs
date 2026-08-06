@@ -7,7 +7,7 @@ use crate::domain::character::Character;
 use crate::domain::chat_message::{ChatMessage, ChatSyncState};
 use crate::domain::journal_entry::JournalEntry;
 use crate::domain::push_log::{truncate_body, PushLogEntry};
-use crate::domain::target::Target;
+use crate::domain::target::{Target, TargetKind};
 use crate::error::{AppError, CreateNewKinResult, JournalEntryStep, PushResult, StepResult};
 use crate::kindroid::{
     ChatBreakRequest, CreateNewAiRequest, HttpResponse, JournalCreateRequest, KindroidClient,
@@ -203,6 +203,7 @@ pub async fn do_create_new_kin(
         .upsert_target(Target {
             id: Uuid::new_v4(),
             ai_id: new_ai_id.to_string(),
+            kind: TargetKind::Ai,
             label: character.ai_name.clone().unwrap(),
             created_at: Utc::now(),
         })
@@ -259,6 +260,7 @@ fn placeholder_target() -> Target {
     Target {
         id: Uuid::nil(),
         ai_id: String::new(),
+        kind: TargetKind::Ai,
         label: String::new(),
         created_at: Utc::now(),
     }
@@ -282,6 +284,9 @@ pub async fn do_push(
 ) -> Result<PushResult, AppError> {
     let character = repo.get_character(req.character_id).await?;
     let mut target = repo.get_target(req.target_id).await?;
+    if target.kind != TargetKind::Ai {
+        return Err(AppError::invalid("groups cannot be push targets"));
+    }
     let base_url = repo
         .get_setting(SETTING_BASE_URL)
         .await?
@@ -479,6 +484,7 @@ mod tests {
     use crate::domain::character::Character;
     use crate::domain::push_log::PushLogEntry;
     use crate::domain::target::Target;
+    use crate::domain::target::TargetKind;
     use crate::kindroid::{HttpResponse, KindroidError};
     use crate::storage::StorageError;
     use async_trait::async_trait;
@@ -541,6 +547,19 @@ mod tests {
                 .find(|t| t.id == id)
                 .cloned()
                 .ok_or(StorageError::NotFound)
+        }
+        async fn get_target_by_kind(
+            &self,
+            ai_id: &str,
+            kind: TargetKind,
+        ) -> Result<Option<Target>, StorageError> {
+            Ok(self
+                .targets
+                .lock()
+                .unwrap()
+                .iter()
+                .find(|t| t.ai_id == ai_id && t.kind == kind)
+                .cloned())
         }
         async fn upsert_target(&self, t: Target) -> Result<Target, StorageError> {
             let mut targets = self.targets.lock().unwrap();
@@ -612,6 +631,7 @@ mod tests {
         async fn upsert_chat_messages(
             &self,
             _ai_id: &str,
+            _kind: TargetKind,
             _msgs: &[ChatMessage],
         ) -> Result<usize, StorageError> {
             Ok(0)
@@ -619,6 +639,7 @@ mod tests {
         async fn list_chat_messages(
             &self,
             _ai_id: &str,
+            _kind: TargetKind,
             _before_ts: Option<i64>,
             _limit: u32,
             _favourites_only: bool,
@@ -628,6 +649,7 @@ mod tests {
         async fn search_chat(
             &self,
             _ai_id: &str,
+            _kind: TargetKind,
             _query: &str,
             _limit: u32,
             _offset: u32,
@@ -638,29 +660,40 @@ mod tests {
         async fn set_chat_message_favourite(
             &self,
             _ai_id: &str,
+            _kind: TargetKind,
             _kindroid_msg_id: &str,
             _favourite: bool,
         ) -> Result<bool, StorageError> {
             Ok(false)
         }
-        async fn chat_message_count(&self, _ai_id: &str) -> Result<u64, StorageError> {
+        async fn chat_message_count(
+            &self,
+            _ai_id: &str,
+            _kind: TargetKind,
+        ) -> Result<u64, StorageError> {
             Ok(0)
         }
         async fn get_chat_sync_state(
             &self,
             _ai_id: &str,
+            _kind: TargetKind,
         ) -> Result<Option<ChatSyncState>, StorageError> {
             Ok(None)
         }
         async fn upsert_chat_sync_state(&self, _state: &ChatSyncState) -> Result<(), StorageError> {
             Ok(())
         }
-        async fn reset_chat_history(&self, _ai_id: &str) -> Result<usize, StorageError> {
+        async fn reset_chat_history(
+            &self,
+            _ai_id: &str,
+            _kind: TargetKind,
+        ) -> Result<usize, StorageError> {
             Ok(0)
         }
         async fn delete_missing_chat_messages(
             &self,
             _ai_id: &str,
+            _kind: TargetKind,
             _start_after: i64,
             _last_timestamp_inclusive: i64,
             _keep_ids: &[&str],
@@ -671,6 +704,7 @@ mod tests {
         async fn list_stable_chat_messages(
             &self,
             _: &str,
+            _: TargetKind,
             _: Option<&crate::domain::chat_automation::StableMessageCursor>,
             _: u32,
             _: u32,
@@ -680,6 +714,7 @@ mod tests {
         async fn latest_stable_cursor(
             &self,
             _: &str,
+            _: TargetKind,
             _: u32,
         ) -> Result<Option<crate::domain::chat_automation::StableMessageCursor>, StorageError>
         {
@@ -998,6 +1033,7 @@ mod tests {
             Target {
                 id: Uuid::new_v4(),
                 ai_id: "ai_1".into(),
+                kind: TargetKind::Ai,
                 label: "T".into(),
                 created_at: Utc::now(),
             },

@@ -2,6 +2,8 @@ use serde::{Deserialize, Serialize};
 use std::time::Duration;
 use thiserror::Error;
 
+use crate::domain::target::TargetKind;
+
 pub mod http;
 
 pub mod ai;
@@ -26,9 +28,11 @@ pub struct ChatBreakRequest {
     pub wipe_cascaded: bool,
 }
 
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ToggleMessagePinRequest {
     pub ai_id: String,
+    #[serde(default)]
+    pub kind: TargetKind,
     pub message_id: String,
 }
 
@@ -55,9 +59,11 @@ pub struct HttpResponse {
     pub body: String,
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ListChatMessagesRequest {
     pub ai_id: String,
+    #[serde(default)]
+    pub kind: TargetKind,
     pub limit: u32,
     pub start_after_timestamp: Option<i64>,
 }

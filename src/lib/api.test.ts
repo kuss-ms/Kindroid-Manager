@@ -137,8 +137,8 @@ describe('errorMessage', () => {
     expect(errorMessage(wrapped('{"kind":"internal","message":"oops"}'))).toContain('oops');
   });
 
-  it('maps AppError::SyncConflict (camelCase aiId from Tauri top-level rename)', () => {
-    expect(errorMessage(wrapped('{"kind":"sync_conflict","aiId":"ai_x"}'))).toContain('ai_x');
+  it('maps AppError::SyncConflict', () => {
+    expect(errorMessage(wrapped('{"kind":"sync_conflict","ai_id":"ai_x"}'))).toContain('ai_x');
   });
 
   it('maps SecretStoreError variants (nested inside AppError::Secret)', () => {

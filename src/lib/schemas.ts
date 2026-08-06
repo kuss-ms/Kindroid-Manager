@@ -22,6 +22,7 @@ export type CharacterFormValues = z.infer<typeof characterInputSchema>;
 export const targetInputSchema = z.object({
   ai_id: z.string().trim().min(1, 'AI ID is required'),
   label: z.string().trim().min(1, 'Label is required'),
+  kind: z.enum(['ai', 'group']).default('ai'),
 });
 export type TargetFormValues = z.infer<typeof targetInputSchema>;
 export const settingsSchema = z.object({ base_url: z.string().trim().url('Must be a valid URL') });

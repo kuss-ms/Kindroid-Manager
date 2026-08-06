@@ -24,6 +24,7 @@ import type {
   AiSettingsDto,
   AiChatCompletionResponse,
   Target,
+  TargetKind,
   TestTokenResult,
   TestAiResult,
   Uuid,
@@ -50,6 +51,7 @@ export interface TargetInput {
   id?: Uuid;
   ai_id: string;
   label: string;
+  kind?: TargetKind;
 }
 
 export interface SettingsInput {
@@ -107,7 +109,7 @@ export function errorMessage(e: unknown): string {
       return `Internal error: ${stringField(inner, 'message') ?? 'unknown'}`;
     case 'sync_conflict':
       return `A sync is already running for ${
-        stringField(inner, 'aiId') ?? stringField(inner, 'ai_id') ?? 'another target'
+        stringField(inner, 'ai_id') ?? 'another target'
       }. Cancel it first.`;
     case 'secret':
       return secretMessage(inner);
@@ -289,21 +291,29 @@ export const api = {
     bearer_token: string | null;
   }) => invoke<AiChatCompletionResponse>('ai_chat_completion', { input }),
 
-  // Chat history
+  // Chat history. The Rust commands take separate `aiId` + `kind`
+  // parameters; callers always have a `Target` (or `TargetKind`) in
+  // hand when invoking these, so threading both through is deliberate
+  // — forgetting the kind would silently read the wrong chat-history
+  // partition when two targets share an ai_id string (one AI + one
+  // Group).
   listChatMessages: (
     aiId: string,
+    kind: TargetKind,
     beforeTs: number | null,
     limit: number,
     favouritesOnly: boolean,
   ) =>
     invoke<ChatMessage[]>('list_chat_messages', {
       aiId,
+      kind,
       beforeTs,
       limit,
       favouritesOnly,
     }),
   searchChat: (
     aiId: string,
+    kind: TargetKind,
     query: string,
     limit: number,
     offset: number,
@@ -311,19 +321,25 @@ export const api = {
   ) =>
     invoke<ChatMessage[]>('search_chat', {
       aiId,
+      kind,
       query,
       limit,
       offset,
       favouritesOnly,
     }),
-  chatMessageCount: (aiId: string) => invoke<number>('chat_message_count', { aiId }),
-  getChatSyncState: (aiId: string) => invoke<ChatSyncState | null>('get_chat_sync_state', { aiId }),
-  getCurrentSync: () => invoke<string | null>('get_current_sync'),
-  startChatSync: (aiId: string) => invoke<void>('start_chat_sync', { aiId }),
+  chatMessageCount: (aiId: string, kind: TargetKind) =>
+    invoke<number>('chat_message_count', { aiId, kind }),
+  getChatSyncState: (aiId: string, kind: TargetKind) =>
+    invoke<ChatSyncState | null>('get_chat_sync_state', { aiId, kind }),
+  getCurrentSync: () =>
+    invoke<{ ai_id: string; kind: TargetKind } | null>('get_current_sync'),
+  startChatSync: (aiId: string, kind: TargetKind) =>
+    invoke<void>('start_chat_sync', { aiId, kind }),
   cancelChatSync: () => invoke<void>('cancel_chat_sync'),
-  resetChatHistory: (aiId: string) => invoke<number>('reset_chat_history', { aiId }),
-  setChatMessageFavourite: (aiId: string, kindroidMsgId: string) =>
-    invoke<boolean>('toggle_chat_message_favourite', { aiId, kindroidMsgId }),
+  resetChatHistory: (aiId: string, kind: TargetKind) =>
+    invoke<number>('reset_chat_history', { aiId, kind }),
+  setChatMessageFavourite: (aiId: string, kind: TargetKind, kindroidMsgId: string) =>
+    invoke<boolean>('toggle_chat_message_favourite', { aiId, kind, kindroidMsgId }),
 
   // Journal entries (character-scoped)
   listJournalEntries: (characterId: string) =>

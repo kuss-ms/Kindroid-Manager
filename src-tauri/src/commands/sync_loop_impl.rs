@@ -10,6 +10,7 @@ use crate::commands::push::{DEFAULT_BASE_URL, SETTING_BASE_URL};
 use crate::commands::sync_loop::compute_local_rewind;
 use crate::commands::sync_registry::SyncRegistry;
 use crate::domain::chat_message::{ChatMessage, ChatSyncState, SyncStatusKind};
+use crate::domain::target::TargetKind;
 use crate::error::AppError;
 use crate::kindroid::{ChatMessagesPage, KindroidClient, KindroidError, ListChatMessagesRequest};
 use crate::security::secrets::{Secrets, API_TOKEN_KEY};
@@ -35,6 +36,7 @@ struct SyncLoopStats {
 #[serde(rename_all = "snake_case")]
 pub struct SyncProgress {
     pub ai_id: String,
+    pub kind: TargetKind,
     pub total: u64,
     pub last_timestamp: i64,
     pub full_sync_done: bool,
@@ -58,6 +60,7 @@ pub struct SyncProgress {
 #[serde(rename_all = "snake_case")]
 pub struct SyncComplete {
     pub ai_id: String,
+    pub kind: TargetKind,
     pub total: u64,
     pub status_kind: String,
     pub status_message: Option<String>,
@@ -80,7 +83,7 @@ enum DrainOutcome {
     Error,
 }
 
-/// Run the long-running sync loop for a single ai_id.
+/// Run the long-running sync loop for a single `(ai_id, kind)`.
 ///
 /// The loop continuously **drains** pages from the API (one call per page,
 /// each page holds up to 100 messages) until the API returns an empty page
@@ -88,12 +91,14 @@ enum DrainOutcome {
 /// cycles. 429s are honoured inside the inner loop (retry the same page
 /// after `Retry-After`); other errors stop the loop, preserving the cursor
 /// so the user can resume by clicking Sync again.
+#[allow(clippy::too_many_arguments)]
 pub async fn run_sync_loop(
     repo: Arc<dyn Repository>,
     client: Arc<dyn KindroidClient>,
     ai_client: Arc<dyn crate::kindroid::ai::AiClient>,
     registry: Arc<SyncRegistry>,
     ai_id: String,
+    kind: TargetKind,
     cancel_rx: watch::Receiver<bool>,
     app: AppHandle,
 ) {
@@ -102,6 +107,7 @@ pub async fn run_sync_loop(
         client.clone(),
         ai_client.clone(),
         ai_id.clone(),
+        kind,
         cancel_rx,
         app.clone(),
     )
@@ -110,13 +116,14 @@ pub async fn run_sync_loop(
         // Preserve the existing cursor + total + full_sync_done so the
         // user can resume by clicking Sync again. We only flip to
         // `Error` and reset `is_syncing`.
-        let existing = repo.get_chat_sync_state(&ai_id).await.ok().flatten();
+        let existing = repo.get_chat_sync_state(&ai_id, kind).await.ok().flatten();
         let last_timestamp = existing.as_ref().map(|s| s.last_timestamp).unwrap_or(0);
         let full_sync_done = existing.as_ref().map(|s| s.full_sync_done).unwrap_or(false);
         let total = existing.as_ref().map(|s| s.total).unwrap_or(0);
         let _ = repo
             .upsert_chat_sync_state(&ChatSyncState {
                 ai_id: ai_id.clone(),
+                kind,
                 last_synced_at: Utc::now(),
                 last_timestamp,
                 full_sync_done,
@@ -131,6 +138,7 @@ pub async fn run_sync_loop(
             "chat-sync-complete",
             SyncComplete {
                 ai_id: ai_id.clone(),
+                kind,
                 total,
                 status_kind: "error".into(),
                 status_message: Some(e.to_string()),
@@ -147,15 +155,17 @@ async fn run_loop_inner(
     client: Arc<dyn KindroidClient>,
     ai_client: Arc<dyn crate::kindroid::ai::AiClient>,
     ai_id: String,
+    kind: TargetKind,
     cancel_rx: watch::Receiver<bool>,
     app: AppHandle,
 ) -> Result<(), AppError> {
-    let mut state = ensure_state(&repo, &ai_id).await?;
+    let mut state = ensure_state(&repo, &ai_id, kind).await?;
     let mut stats = SyncLoopStats::default();
     state = mark_status(
         &repo,
         &app,
         &ai_id,
+        kind,
         SyncStatusKind::Running,
         None,
         None,
@@ -169,7 +179,7 @@ async fn run_loop_inner(
 
     loop {
         if *cancel_rx.borrow() {
-            finalize_cancelled(&repo, &app, &ai_id, &state, stats).await;
+            finalize_cancelled(&repo, &app, &ai_id, kind, &state, stats).await;
             return Ok(());
         }
 
@@ -179,6 +189,7 @@ async fn run_loop_inner(
             &repo,
             &client,
             &ai_id,
+            kind,
             &mut state,
             &mut stats,
             &mut cancel_rx,
@@ -198,7 +209,7 @@ async fn run_loop_inner(
                 }
             }
             DrainOutcome::Cancelled => {
-                finalize_cancelled(&repo, &app, &ai_id, &state, stats).await;
+                finalize_cancelled(&repo, &app, &ai_id, kind, &state, stats).await;
                 return Ok(());
             }
             DrainOutcome::Error => {
@@ -209,7 +220,7 @@ async fn run_loop_inner(
         }
 
         if sleep_or_cancel(&mut cancel_rx, SYNC_INTERVAL).await == SleepResult::Cancelled {
-            finalize_cancelled(&repo, &app, &ai_id, &state, stats).await;
+            finalize_cancelled(&repo, &app, &ai_id, kind, &state, stats).await;
             return Ok(());
         }
     }
@@ -224,10 +235,12 @@ async fn run_loop_inner(
 /// pages (where we don't yet know whether the messages with `ts >
 /// lastTimestamp` still exist) defer this to the final page of the
 /// cycle.
+#[allow(clippy::too_many_arguments)]
 async fn drain_pages(
     repo: &Arc<dyn Repository>,
     client: &Arc<dyn KindroidClient>,
     ai_id: &str,
+    kind: TargetKind,
     state: &mut ChatSyncState,
     stats: &mut SyncLoopStats,
     cancel_rx: &mut watch::Receiver<bool>,
@@ -254,12 +267,21 @@ async fn drain_pages(
         // have fewer than 12 messages locally, we rewind to the oldest
         // so every locally-known message is re-checked.
         let start_after =
-            compute_local_rewind(&**repo, ai_id, state.full_sync_done, prev_cursor).await?;
+            compute_local_rewind(&**repo, ai_id, kind, state.full_sync_done, prev_cursor).await?;
 
         let token = match Secrets::get(API_TOKEN_KEY) {
             Ok(t) => t,
             Err(_) => {
-                finalize_error(repo, app, ai_id, "API token cleared", state.total, *stats).await;
+                finalize_error(
+                    repo,
+                    app,
+                    ai_id,
+                    kind,
+                    "API token cleared",
+                    state.total,
+                    *stats,
+                )
+                .await;
                 return Ok(DrainOutcome::Error);
             }
         };
@@ -270,6 +292,7 @@ async fn drain_pages(
 
         let req = ListChatMessagesRequest {
             ai_id: ai_id.to_string(),
+            kind,
             limit: 100,
             start_after_timestamp: start_after,
         };
@@ -283,6 +306,7 @@ async fn drain_pages(
                     repo,
                     app,
                     ai_id,
+                    kind,
                     state,
                     SyncStatusKind::Backoff,
                     Some(format!(
@@ -300,6 +324,7 @@ async fn drain_pages(
                     repo,
                     app,
                     ai_id,
+                    kind,
                     state,
                     SyncStatusKind::Running,
                     None,
@@ -311,7 +336,7 @@ async fn drain_pages(
                 continue;
             }
             Err(e) => {
-                finalize_error(repo, app, ai_id, &e.to_string(), state.total, *stats).await;
+                finalize_error(repo, app, ai_id, kind, &e.to_string(), state.total, *stats).await;
                 return Ok(DrainOutcome::Error);
             }
         };
@@ -328,7 +353,7 @@ async fn drain_pages(
             stats.last_batch_size = 0;
             stats.last_deleted_count = 0;
             repo.upsert_chat_sync_state(state).await?;
-            emit_progress(app, ai_id, state, *stats);
+            emit_progress(app, ai_id, kind, state, *stats);
             return Ok(DrainOutcome::Drained);
         }
 
@@ -340,6 +365,7 @@ async fn drain_pages(
                 ChatMessage {
                     id: uuid::Uuid::new_v4(),
                     ai_id: ai_id.to_string(),
+                    kind,
                     fetched_at: Utc::now(),
                     message: text,
                     ..m.into()
@@ -347,13 +373,13 @@ async fn drain_pages(
             })
             .collect();
 
-        let touched = repo.upsert_chat_messages(ai_id, &incoming).await?;
+        let touched = repo.upsert_chat_messages(ai_id, kind, &incoming).await?;
         // `touched` is "inserts + content-actually-changed updates",
         // thanks to the WHERE clause on the upsert. We don't add it to
         // `state.total` because the same row can be touched on later
         // polls; instead we recompute the unique message count from the
         // DB so the displayed total stays exact.
-        state.total = repo.chat_message_count(ai_id).await?;
+        state.total = repo.chat_message_count(ai_id, kind).await?;
 
         // Advance the cursor. Prefer the server's `pagination.lastTimestamp`
         // (the API's documented cursor); fall back to the max of the
@@ -380,13 +406,13 @@ async fn drain_pages(
                     .map(|m| m.kindroid_msg_id.as_str())
                     .collect();
                 let deleted = repo
-                    .delete_missing_chat_messages(ai_id, sa, prev_cursor, &keep_ids)
+                    .delete_missing_chat_messages(ai_id, kind, sa, prev_cursor, &keep_ids)
                     .await?;
                 let _ = deleted;
                 stats.last_deleted_count = deleted as u64;
                 // The deletes may have changed the row count, so refresh
                 // the cached total.
-                state.total = repo.chat_message_count(ai_id).await?;
+                state.total = repo.chat_message_count(ai_id, kind).await?;
             }
         } else {
             stats.last_deleted_count = 0;
@@ -402,7 +428,7 @@ async fn drain_pages(
         stats.last_batch_size = incoming.len() as u64;
         let _ = touched; // surfaced via the per-poll progress bar in the UI
         repo.upsert_chat_sync_state(state).await?;
-        emit_progress(app, ai_id, state, *stats);
+        emit_progress(app, ai_id, kind, state, *stats);
 
         if !page.has_more {
             // Server says we're done.
@@ -423,13 +449,18 @@ fn format_countdown(until: chrono::DateTime<Utc>) -> String {
     }
 }
 
-async fn ensure_state(repo: &Arc<dyn Repository>, ai_id: &str) -> Result<ChatSyncState, AppError> {
-    if let Some(s) = repo.get_chat_sync_state(ai_id).await? {
+async fn ensure_state(
+    repo: &Arc<dyn Repository>,
+    ai_id: &str,
+    kind: TargetKind,
+) -> Result<ChatSyncState, AppError> {
+    if let Some(s) = repo.get_chat_sync_state(ai_id, kind).await? {
         return Ok(s);
     }
-    let total = repo.chat_message_count(ai_id).await?;
+    let total = repo.chat_message_count(ai_id, kind).await?;
     let s = ChatSyncState {
         ai_id: ai_id.to_string(),
+        kind,
         last_synced_at: Utc::now(),
         last_timestamp: 0,
         full_sync_done: total > 0,
@@ -448,7 +479,8 @@ async fn mark_status(
     repo: &Arc<dyn Repository>,
     app: &AppHandle,
     ai_id: &str,
-    kind: SyncStatusKind,
+    kind: TargetKind,
+    sync_kind: SyncStatusKind,
     message: Option<String>,
     backoff_until: Option<chrono::DateTime<Utc>>,
     is_syncing: bool,
@@ -457,17 +489,18 @@ async fn mark_status(
 ) -> ChatSyncState {
     let s = ChatSyncState {
         ai_id: ai_id.to_string(),
+        kind,
         last_synced_at: Utc::now(),
         last_timestamp: state.last_timestamp,
         full_sync_done: state.full_sync_done,
         is_syncing,
-        status_kind: kind,
+        status_kind: sync_kind,
         status_message: message,
         backoff_until,
         total: state.total,
     };
     let _ = repo.upsert_chat_sync_state(&s).await;
-    emit_progress(app, ai_id, &s, stats);
+    emit_progress(app, ai_id, kind, &s, stats);
     s
 }
 
@@ -476,19 +509,20 @@ async fn write_state(
     repo: &Arc<dyn Repository>,
     app: &AppHandle,
     ai_id: &str,
+    kind: TargetKind,
     prev: &ChatSyncState,
-    kind: SyncStatusKind,
+    sync_kind: SyncStatusKind,
     message: Option<String>,
     backoff_until: Option<chrono::DateTime<Utc>>,
     stats: SyncLoopStats,
 ) -> ChatSyncState {
     let mut s = prev.clone();
-    s.status_kind = kind;
+    s.status_kind = sync_kind;
     s.status_message = message;
     s.backoff_until = backoff_until;
     s.last_synced_at = Utc::now();
     let _ = repo.upsert_chat_sync_state(&s).await;
-    emit_progress(app, ai_id, &s, stats);
+    emit_progress(app, ai_id, kind, &s, stats);
     s
 }
 
@@ -496,6 +530,7 @@ async fn finalize_cancelled(
     repo: &Arc<dyn Repository>,
     app: &AppHandle,
     ai_id: &str,
+    kind: TargetKind,
     prev: &ChatSyncState,
     stats: SyncLoopStats,
 ) {
@@ -510,6 +545,7 @@ async fn finalize_cancelled(
         "chat-sync-complete",
         SyncComplete {
             ai_id: ai_id.to_string(),
+            kind,
             total: s.total,
             status_kind: s.status_kind.as_str().to_string(),
             status_message: s.status_message.clone(),
@@ -522,17 +558,19 @@ async fn finalize_error(
     repo: &Arc<dyn Repository>,
     app: &AppHandle,
     ai_id: &str,
+    kind: TargetKind,
     message: &str,
     total: u64,
     stats: SyncLoopStats,
 ) {
     // Preserve the cursor so the user can resume the backfill by
     // clicking Sync again. We only flip to Error status.
-    let existing = repo.get_chat_sync_state(ai_id).await.ok().flatten();
+    let existing = repo.get_chat_sync_state(ai_id, kind).await.ok().flatten();
     let last_timestamp = existing.as_ref().map(|s| s.last_timestamp).unwrap_or(0);
     let full_sync_done = existing.as_ref().map(|s| s.full_sync_done).unwrap_or(false);
     let s = ChatSyncState {
         ai_id: ai_id.to_string(),
+        kind,
         last_synced_at: Utc::now(),
         last_timestamp,
         full_sync_done,
@@ -547,6 +585,7 @@ async fn finalize_error(
         "chat-sync-complete",
         SyncComplete {
             ai_id: ai_id.to_string(),
+            kind,
             total: s.total,
             status_kind: s.status_kind.as_str().to_string(),
             status_message: s.status_message.clone(),
@@ -555,11 +594,18 @@ async fn finalize_error(
     );
 }
 
-fn emit_progress(app: &AppHandle, ai_id: &str, state: &ChatSyncState, stats: SyncLoopStats) {
+fn emit_progress(
+    app: &AppHandle,
+    ai_id: &str,
+    kind: TargetKind,
+    state: &ChatSyncState,
+    stats: SyncLoopStats,
+) {
     let _ = app.emit(
         "chat-sync-progress",
         SyncProgress {
             ai_id: ai_id.to_string(),
+            kind,
             total: state.total,
             last_timestamp: state.last_timestamp,
             full_sync_done: state.full_sync_done,
@@ -585,6 +631,9 @@ impl From<crate::kindroid::RawChatMessage> for ChatMessage {
         ChatMessage {
             id: uuid::Uuid::new_v4(),
             ai_id: String::new(),
+            // Placeholder; the caller (`drain_pages`) overrides this with
+            // the kind of the target whose chat history is being synced.
+            kind: TargetKind::Ai,
             kindroid_msg_id: m.id,
             sender: m.sender,
             display_name: m.display_name,

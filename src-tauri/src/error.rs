@@ -1,6 +1,7 @@
 use serde::{Deserialize, Serialize};
 use thiserror::Error;
 
+use crate::domain::target::TargetKind;
 use crate::kindroid::ai::AiError;
 use crate::kindroid::KindroidError;
 use crate::security::secrets::SecretStoreError;
@@ -27,8 +28,15 @@ pub enum AppError {
     Database { message: String },
     #[error("internal: {message}")]
     Internal { message: String },
-    #[error("sync already running for {ai_id}")]
-    SyncConflict { ai_id: String },
+    #[error("sync already running for {ai_id} (kind={target_kind:?})")]
+    SyncConflict {
+        ai_id: String,
+        // Serialized as `target_kind` because the outer `#[serde(tag =
+        // "kind")]` reserves the `kind` key for the discriminator.
+        // The frontend `errorMessage()` only reads the outer tag, so
+        // the inner name is unused on the JS side.
+        target_kind: TargetKind,
+    },
     // Transparent wrappers are emitted as struct variants with
     // `#[serde(flatten)]` so the outer `kind` is preserved and the inner
     // enum's fields (including its own `code` discriminator) are
@@ -172,6 +180,7 @@ mod tests {
             AppError::internal("nope"),
             AppError::SyncConflict {
                 ai_id: "ai_1".into(),
+                target_kind: TargetKind::Ai,
             },
         ];
         for v in variants {

@@ -7,10 +7,12 @@
 
 #[cfg(not(test))]
 mod inner {
+    use crate::commands::sync_registry::ActiveSync;
     use crate::commands::{
         ai, characters, chat_automation, chat_history, history, journal, push, settings,
         share_code, targets,
     };
+    use crate::domain::target::TargetKind;
     use tauri::State;
 
     type Repo = std::sync::Arc<dyn crate::storage::Repository>;
@@ -218,6 +220,7 @@ mod inner {
     pub async fn list_chat_messages(
         repo: State<'_, Repo>,
         ai_id: String,
+        kind: TargetKind,
         before_ts: Option<i64>,
         limit: u32,
         favourites_only: bool,
@@ -225,6 +228,7 @@ mod inner {
         chat_history::list_chat_messages(
             repo.inner().clone(),
             ai_id,
+            kind,
             before_ts,
             limit,
             favourites_only,
@@ -236,6 +240,7 @@ mod inner {
     pub async fn search_chat(
         repo: State<'_, Repo>,
         ai_id: String,
+        kind: TargetKind,
         query: String,
         limit: u32,
         offset: u32,
@@ -244,6 +249,7 @@ mod inner {
         chat_history::search_chat(
             repo.inner().clone(),
             ai_id,
+            kind,
             query,
             limit,
             offset,
@@ -257,12 +263,14 @@ mod inner {
         repo: State<'_, Repo>,
         client: State<'_, Client>,
         ai_id: String,
+        kind: TargetKind,
         kindroid_msg_id: String,
     ) -> Result<bool, crate::error::AppError> {
         chat_history::toggle_chat_message_favourite(
             repo.inner().clone(),
             client.inner().clone(),
             ai_id,
+            kind,
             kindroid_msg_id,
         )
         .await
@@ -272,8 +280,9 @@ mod inner {
     pub async fn chat_message_count(
         repo: State<'_, Repo>,
         ai_id: String,
+        kind: TargetKind,
     ) -> Result<u64, crate::error::AppError> {
-        chat_history::chat_message_count(repo.inner().clone(), ai_id).await
+        chat_history::chat_message_count(repo.inner().clone(), ai_id, kind).await
     }
 
     #[tauri::command]
@@ -281,15 +290,21 @@ mod inner {
         repo: State<'_, Repo>,
         registry: State<'_, std::sync::Arc<crate::commands::sync_registry::SyncRegistry>>,
         ai_id: String,
+        kind: TargetKind,
     ) -> Result<Option<crate::domain::chat_message::ChatSyncState>, crate::error::AppError> {
-        chat_history::get_chat_sync_state(repo.inner().clone(), registry.inner().clone(), ai_id)
-            .await
+        chat_history::get_chat_sync_state(
+            repo.inner().clone(),
+            registry.inner().clone(),
+            ai_id,
+            kind,
+        )
+        .await
     }
 
     #[tauri::command]
     pub async fn get_current_sync(
         registry: State<'_, std::sync::Arc<crate::commands::sync_registry::SyncRegistry>>,
-    ) -> Result<Option<String>, crate::error::AppError> {
+    ) -> Result<Option<ActiveSync>, crate::error::AppError> {
         chat_history::get_current_sync(registry.inner().clone()).await
     }
 
@@ -300,6 +315,7 @@ mod inner {
         ai_client: State<'_, Ai>,
         registry: State<'_, std::sync::Arc<crate::commands::sync_registry::SyncRegistry>>,
         ai_id: String,
+        kind: TargetKind,
         app: tauri::AppHandle,
     ) -> Result<(), crate::error::AppError> {
         chat_history::start_chat_sync(
@@ -308,6 +324,7 @@ mod inner {
             ai_client.inner().clone(),
             registry.inner().clone(),
             ai_id,
+            kind,
             app,
         )
         .await
@@ -324,8 +341,9 @@ mod inner {
     pub async fn reset_chat_history(
         repo: State<'_, Repo>,
         ai_id: String,
+        kind: TargetKind,
     ) -> Result<usize, crate::error::AppError> {
-        chat_history::reset_chat_history(repo.inner().clone(), ai_id).await
+        chat_history::reset_chat_history(repo.inner().clone(), ai_id, kind).await
     }
 
     #[tauri::command]

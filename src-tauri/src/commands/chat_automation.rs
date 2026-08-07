@@ -423,12 +423,24 @@ async fn process_journal(
         return Ok(());
     }
     if !state.journal_initialised {
+        // Plant the cursor at (EXCLUDE_NEWEST_N + interval)th-newest so
+        // the very first cycle has `interval` messages between cursor
+        // and the boundary (the EXCLUDE_NEWEST_Nth-newest). This makes
+        // the first cycle immediately journal the most recent content
+        // instead of waiting for fresh messages to arrive on a later
+        // cycle.
+        //
+        // If there are fewer than EXCLUDE_NEWEST_N + interval + 1
+        // messages, latest_stable_cursor returns None and the first
+        // cycle will journal whatever messages are available (limited
+        // by interval).
         state.journal_cursor = repo
-            .latest_stable_cursor(ai_id, TargetKind::Ai, EXCLUDE_NEWEST_N)
+            .latest_stable_cursor(ai_id, TargetKind::Ai, EXCLUDE_NEWEST_N + state.interval)
             .await?;
         state.journal_initialised = true;
         repo.upsert_chat_automation_state(&state).await?;
-        return Ok(());
+        // Fall through: let the rest of the function run the first
+        // cycle and journal the most recent content.
     }
     let token = match Secrets::get(API_TOKEN_KEY) {
         Ok(token) => token,

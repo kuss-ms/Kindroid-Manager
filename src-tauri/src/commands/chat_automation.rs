@@ -1,4 +1,5 @@
 use std::sync::{Arc, Mutex, OnceLock};
+use std::time::Duration;
 
 use chrono::Utc;
 use serde::{Deserialize, Serialize};
@@ -16,7 +17,9 @@ use crate::domain::chat_message::ChatMessage;
 use crate::domain::journal_entry::JournalEntry;
 use crate::domain::target::TargetKind;
 use crate::error::AppError;
-use crate::kindroid::ai::{AiClient, AiMessage, ChatCompletionRequest, ResponseFormat};
+use crate::kindroid::ai::{
+    AiClient, AiMessage, ChatCompletionRequest, ResponseFormat, SUMMARY_REQUEST_TIMEOUT,
+};
 use crate::kindroid::{JournalCreateRequest, KindroidClient, UpdateInfoRequest};
 use crate::security::secrets::{SecretStoreError, Secrets, AI_TOKEN_KEY, API_TOKEN_KEY};
 use crate::storage::{Repository, StorageError};
@@ -493,7 +496,7 @@ async fn process_journal(
         DEFAULT_JOURNAL_INSTRUCTIONS,
     );
     let prompt = journal_prompt(&instructions, &context, &prior, state.journal_cap, ai_name);
-    let response = ai_completion(repo, ai, &state, journal_system_prompt(ai_name), prompt).await?;
+    let response = ai_completion(repo, ai, &state, journal_system_prompt(ai_name), prompt, None).await?;
     state.journal_last_error = None;
     repo.upsert_chat_automation_state(&state).await?;
     if debug_response_capture_enabled(&**repo).await {
@@ -701,6 +704,7 @@ async fn process_summary(
         &state,
         summary_system_prompt(limit, ai_name),
         prompt,
+        Some(SUMMARY_REQUEST_TIMEOUT),
     )
     .await?;
     state.summary_last_error = None;
@@ -808,6 +812,7 @@ async fn ai_completion(
     _state: &ChatAutomationState,
     system: String,
     user: String,
+    timeout: Option<Duration>,
 ) -> Result<String, AppError> {
     let base_url = repo
         .get_setting(SETTING_AI_BASE_URL)
@@ -843,6 +848,7 @@ async fn ai_completion(
                 }),
                 stream: false,
             },
+            timeout,
         )
         .await?;
     Ok(response.content)

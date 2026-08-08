@@ -143,6 +143,7 @@ where
                 response_format: None,
                 stream: false,
             },
+            None,
         )
         .await;
     Ok(map_test_result(result, &req.base_url))
@@ -205,6 +206,7 @@ where
                 },
                 stream: false,
             },
+            None,
         )
         .await?;
     Ok(AiChatCompletionResponse {
@@ -380,6 +382,7 @@ mod tests {
             _base_url: &str,
             bearer_token: Option<&str>,
             req: ChatCompletionRequest,
+            _timeout: Option<std::time::Duration>,
         ) -> Result<ChatCompletionResponse, AiError> {
             self.capture(bearer_token, &req);
             Ok(ChatCompletionResponse {
@@ -1027,6 +1030,7 @@ mod tests {
                 _b: &str,
                 _t: Option<&str>,
                 _r: ChatCompletionRequest,
+                _timeout: Option<std::time::Duration>,
             ) -> Result<ChatCompletionResponse, AiError> {
                 Ok(ChatCompletionResponse {
                     content: "pong".into(),
@@ -1058,6 +1062,7 @@ mod tests {
                 _b: &str,
                 _t: Option<&str>,
                 _r: ChatCompletionRequest,
+                _timeout: Option<std::time::Duration>,
             ) -> Result<ChatCompletionResponse, AiError> {
                 Err(AiError::Auth {
                     status: 401,

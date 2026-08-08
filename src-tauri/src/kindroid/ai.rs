@@ -8,6 +8,12 @@ use thiserror::Error;
 
 pub const REQUEST_TIMEOUT: Duration = Duration::from_secs(30);
 
+/// Long-form AI calls (auto-summary) routinely need more headroom than the
+/// 30s default because the model has to ingest the full conversation and a
+/// prior summary before producing a new one. 120s matches the upper bound
+/// users were seeing before the connection was killed mid-stream.
+pub const SUMMARY_REQUEST_TIMEOUT: Duration = Duration::from_secs(120);
+
 #[derive(Debug, Error, Serialize)]
 #[serde(tag = "code", rename_all = "snake_case")]
 pub enum AiError {
@@ -62,6 +68,7 @@ pub trait AiClient: Send + Sync {
         base_url: &str,
         bearer_token: Option<&str>,
         req: ChatCompletionRequest,
+        timeout: Option<Duration>,
     ) -> Result<ChatCompletionResponse, AiError>;
 }
 
@@ -112,11 +119,15 @@ impl AiClient for HttpAiClient {
         base_url: &str,
         bearer_token: Option<&str>,
         req: ChatCompletionRequest,
+        timeout: Option<Duration>,
     ) -> Result<ChatCompletionResponse, AiError> {
         let url = format!("{}/chat/completions", base_url.trim_end_matches('/'));
         let mut builder = self.http.post(&url);
         if let Some(headers) = Self::build_headers(bearer_token) {
             builder = builder.headers(headers);
+        }
+        if let Some(t) = timeout {
+            builder = builder.timeout(t);
         }
         let resp = match builder.json(&req).send().await {
             Ok(r) => r,
@@ -247,7 +258,7 @@ mod tests {
             .await;
         let c = HttpAiClient::new();
         let r = c
-            .chat_completion(&server.uri(), Some("t"), make_request())
+            .chat_completion(&server.uri(), Some("t"), make_request(), None)
             .await
             .unwrap();
         assert_eq!(r.content, "pong");
@@ -271,7 +282,7 @@ mod tests {
             .await;
         let c = HttpAiClient::new();
         let r = c
-            .chat_completion(&server.uri(), Some(""), make_request())
+            .chat_completion(&server.uri(), Some(""), make_request(), None)
             .await
             .unwrap();
         assert_eq!(r.content, "pong");
@@ -294,7 +305,7 @@ mod tests {
             .await;
         let c = HttpAiClient::new();
         let r = c
-            .chat_completion(&server.uri(), None, make_request())
+            .chat_completion(&server.uri(), None, make_request(), None)
             .await
             .unwrap();
         assert_eq!(r.content, "pong");
@@ -322,7 +333,7 @@ mod tests {
             r#type: "json_object".into(),
         });
         let r = c
-            .chat_completion(&server.uri(), Some("t"), req)
+            .chat_completion(&server.uri(), Some("t"), req, None)
             .await
             .unwrap();
         assert_eq!(r.content, "{}");
@@ -338,7 +349,7 @@ mod tests {
             .await;
         let c = HttpAiClient::new();
         let err = c
-            .chat_completion(&server.uri(), Some("t"), make_request())
+            .chat_completion(&server.uri(), Some("t"), make_request(), None)
             .await
             .unwrap_err();
         assert!(matches!(err, AiError::Auth { status: 401, .. }));
@@ -354,7 +365,7 @@ mod tests {
             .await;
         let c = HttpAiClient::new();
         let err = c
-            .chat_completion(&server.uri(), Some("t"), make_request())
+            .chat_completion(&server.uri(), Some("t"), make_request(), None)
             .await
             .unwrap_err();
         assert!(matches!(err, AiError::BadRequest { status: 400, .. }));
@@ -374,7 +385,7 @@ mod tests {
             .await;
         let c = HttpAiClient::new();
         let err = c
-            .chat_completion(&server.uri(), Some("t"), make_request())
+            .chat_completion(&server.uri(), Some("t"), make_request(), None)
             .await
             .unwrap_err();
         match err {
@@ -395,7 +406,7 @@ mod tests {
             .await;
         let c = HttpAiClient::new();
         let err = c
-            .chat_completion(&server.uri(), Some("t"), make_request())
+            .chat_completion(&server.uri(), Some("t"), make_request(), None)
             .await
             .unwrap_err();
         assert!(matches!(err, AiError::Server { status: 500, .. }));
@@ -406,7 +417,7 @@ mod tests {
         // Port 1 is reserved; connection will be refused immediately.
         let c = HttpAiClient::new();
         let err = c
-            .chat_completion("http://127.0.0.1:1/v1", Some("t"), make_request())
+            .chat_completion("http://127.0.0.1:1/v1", Some("t"), make_request(), None)
             .await
             .unwrap_err();
         assert!(matches!(err, AiError::Network { message: _ }));
@@ -424,7 +435,7 @@ mod tests {
             .await;
         let c = HttpAiClient::new();
         let err = c
-            .chat_completion(&server.uri(), Some("t"), make_request())
+            .chat_completion(&server.uri(), Some("t"), make_request(), None)
             .await
             .unwrap_err();
         assert!(matches!(err, AiError::Decode { message: _ }));
@@ -440,7 +451,7 @@ mod tests {
             .await;
         let c = HttpAiClient::new();
         let err = c
-            .chat_completion(&server.uri(), Some("t"), make_request())
+            .chat_completion(&server.uri(), Some("t"), make_request(), None)
             .await
             .unwrap_err();
         assert!(matches!(err, AiError::Decode { message: _ }));
@@ -464,7 +475,7 @@ mod tests {
         let c = HttpAiClient::new();
         let url = format!("{}/", server.uri());
         let r = c
-            .chat_completion(&url, Some("t"), make_request())
+            .chat_completion(&url, Some("t"), make_request(), None)
             .await
             .unwrap();
         assert_eq!(r.content, "pong");

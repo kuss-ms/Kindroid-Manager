@@ -93,9 +93,7 @@ export function PushPage() {
     if (defaultAppliedFor.current === character.data.id) return;
     const defaultId = character.data.default_target_id;
     if (!defaultId) return;
-    const target = targets.data.find(
-      (t) => t.id === defaultId && t.kind === 'ai',
-    );
+    const target = targets.data.find((t) => t.id === defaultId && t.kind === 'ai');
     if (!target) return;
     defaultAppliedFor.current = character.data.id;
     setTargetId(target.id);
@@ -191,7 +189,7 @@ export function PushPage() {
         <div className="card">
           {' '}
           <h3>Target</h3>{' '}
-<select
+          <select
             className="select"
             value={targetId}
             onChange={(e) => setTargetId(e.target.value)}
@@ -205,7 +203,7 @@ export function PushPage() {
             ))}
           </select>
           {targetLabel && (
-            <div className="muted mono" style={{ marginTop: 6, fontSize: 12 }}>
+            <div className="muted mono text-sm" style={{ marginTop: 6 }}>
               {targetLabel}
             </div>
           )}
@@ -220,7 +218,7 @@ export function PushPage() {
         <div className="card">
           {' '}
           <h3 style={{ marginBottom: 8 }}>Fields to update</h3>{' '}
-          <p className="muted" style={{ fontSize: 12, marginBottom: 12 }}>
+          <p className="muted text-sm" style={{ marginBottom: 12 }}>
             {' '}
             Default is on for any non-empty field. Untick anything you don&apos;t want to send.{' '}
           </p>{' '}
@@ -234,16 +232,16 @@ export function PushPage() {
       {journalList.length > 0 && (
         <div className="card">
           <h3 style={{ marginBottom: 8 }}>Journal entries</h3>
-          <p className="muted" style={{ fontSize: 12, marginBottom: 8 }}>
+          <p className="muted text-sm" style={{ marginBottom: 8 }}>
             Selected entries become one <code>POST /journal-create</code> call each, sent after{' '}
             <code>/update-info</code> and before <code>/chat-break</code>. Local only; failures
             don&apos;t abort the push.
           </p>
           <div
+            className="text-sm"
             style={{
               display: 'flex',
               gap: 8,
-              fontSize: 12,
               marginBottom: 6,
             }}
           >
@@ -288,7 +286,7 @@ export function PushPage() {
                 <div style={{ flex: 1 }}>
                   <div style={{ whiteSpace: 'pre-wrap' }}>{e.entry}</div>
                   {e.keyphrases.length > 0 && (
-                    <div className="muted" style={{ fontSize: 11, marginTop: 2 }}>
+                    <div className="muted text-xs" style={{ marginTop: 2 }}>
                       {e.keyphrases.join(', ')}
                     </div>
                   )}
@@ -348,7 +346,7 @@ export function PushPage() {
       <div className="card">
         {' '}
         <h3>Preview</h3>{' '}
-        <p className="muted" style={{ fontSize: 12, marginBottom: 8 }}>
+        <p className="muted text-sm" style={{ marginBottom: 8 }}>
           {' '}
           The exact body that will be POSTed.{' '}
         </p>{' '}
@@ -400,7 +398,9 @@ export function PushPage() {
           <h3>Result</h3> <StepRow label="update-info" step={result.update_info} />{' '}
           {result.journal_entries && result.journal_entries.length > 0 && (
             <div style={{ marginTop: 8 }}>
-              <h4 style={{ margin: '8px 0 4px', fontSize: 13 }}>journal entries</h4>
+              <h4 style={{ margin: '8px 0 4px' }} className="text-md">
+                journal entries
+              </h4>
               {result.journal_entries.map((s) => (
                 <StepRow key={s.id} label={`journal ${s.id.slice(0, 8)}`} step={s} />
               ))}

@@ -54,9 +54,7 @@ export function TargetsPage() {
         <div className="page-header-actions">
           <button
             className="btn btn-primary"
-            onClick={() =>
-              setEditing({ ai_id: '', label: '', kind: 'ai' })
-            }
+            onClick={() => setEditing({ ai_id: '', label: '', kind: 'ai' })}
           >
             Add target
           </button>
@@ -99,7 +97,7 @@ export function TargetsPage() {
                   {(() => {
                     const count = defaultCountByTarget.get(t.id) ?? 0;
                     return count > 0 ? (
-                      <div className="muted" style={{ fontSize: 11, marginTop: 4 }}>
+                      <div className="muted text-xs" style={{ marginTop: 4 }}>
                         Default for {count} character{count === 1 ? '' : 's'}
                       </div>
                     ) : null;
@@ -197,34 +195,19 @@ function TargetDialog({
           </div>
           <div className="form-row">
             <label className="form-label">Kind</label>
-            <div
-              className="radio-group"
-              role="radiogroup"
-              aria-label="Target kind"
-            >
+            <div className="radio-group" role="radiogroup" aria-label="Target kind">
               <label className="radio">
-                <input
-                  type="radio"
-                  value="ai"
-                  {...register('kind')}
-                  disabled={isEdit}
-                />
+                <input type="radio" value="ai" {...register('kind')} disabled={isEdit} />
                 <span>{TARGET_KIND_LABEL.ai}</span>
               </label>
               <label className="radio">
-                <input
-                  type="radio"
-                  value="group"
-                  {...register('kind')}
-                  disabled={isEdit}
-                />
+                <input type="radio" value="group" {...register('kind')} disabled={isEdit} />
                 <span>{TARGET_KIND_LABEL.group}</span>
               </label>
             </div>
             {isEdit && (
-              <p className="muted" style={{ fontSize: 12, marginTop: 4 }}>
-                Kind can&apos;t be changed after creation — delete and re-add to
-                switch.
+              <p className="muted text-sm" style={{ marginTop: 4 }}>
+                Kind can&apos;t be changed after creation — delete and re-add to switch.
               </p>
             )}
           </div>

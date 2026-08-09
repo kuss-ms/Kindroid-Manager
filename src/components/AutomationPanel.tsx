@@ -294,8 +294,7 @@ export function AutomationPanel({
         role="status"
         data-testid="automation-group-notice"
       >
-        Automation isn&apos;t available for {TARGET_KIND_LABEL.group.toLowerCase()}{' '}
-        targets.
+        Automation isn&apos;t available for {TARGET_KIND_LABEL.group.toLowerCase()} targets.
       </div>
     );
   }
@@ -331,7 +330,7 @@ export function AutomationPanel({
           <span className="badge badge-muted">Automation idle</span>
         )}
       </div>
-      <p className="muted" style={{ fontSize: 12, marginTop: 6 }}>
+      <p className="muted text-sm" style={{ marginTop: 6 }}>
         Runs after each completed chat sync. Newest 10 local messages are excluded. Auto-journal
         entries are sent directly to Kindroid and cannot be edited or deleted. Auto-summary
         overwrites the selected persona field on the AI.
@@ -448,7 +447,7 @@ export function AutomationPanel({
 
       <div className="section" style={{ marginTop: 16 }}>
         <h4 style={{ marginBottom: 4 }}>Custom instructions (this target)</h4>
-        <p className="muted" style={{ fontSize: 12 }}>
+        <p className="muted text-sm">
           Overrides the global default. Leave empty and toggle off to use the global.
         </p>
         <div className="form-row">
@@ -578,11 +577,11 @@ export function AutomationPanel({
       <div className="section-grid">
         <div className="section">
           <h4 style={{ marginBottom: 4 }}>Auto-journal status</h4>
-          <p className="muted" style={{ fontSize: 12 }}>
+          <p className="muted text-sm">
             Last run: {isoOrEmpty(safeDto.state.journal_last_run_at)} · Last error:{' '}
             {safeDto.state.journal_last_error ?? '—'}
           </p>
-          <p className="muted" style={{ fontSize: 12 }}>
+          <p className="muted text-sm">
             Initialised:{' '}
             {safeDto.state.journal_initialised
               ? 'yes'
@@ -601,15 +600,14 @@ export function AutomationPanel({
           )}
           {safeDto.journal_last_response_debug && (
             <details style={{ marginTop: 4 }}>
-              <summary className="muted" style={{ fontSize: 12, cursor: 'pointer' }}>
+              <summary className="muted text-sm" style={{ cursor: 'pointer' }}>
                 Show last AI response (debug)
               </summary>
               <pre
-                className="card-tight"
+                className="card-tight text-sm"
                 style={{
                   background: 'var(--surface-2)',
                   padding: 8,
-                  fontSize: 12,
                   whiteSpace: 'pre-wrap',
                   wordBreak: 'break-word',
                   maxHeight: 220,
@@ -624,32 +622,31 @@ export function AutomationPanel({
         </div>
         <div className="section">
           <h4 style={{ marginBottom: 4 }}>Auto-summary status</h4>
-          <p className="muted" style={{ fontSize: 12 }}>
+          <p className="muted text-sm">
             Last run: {isoOrEmpty(safeDto.state.summary_last_run_at)} · Last error:{' '}
             {safeDto.state.summary_last_error ?? '—'}
           </p>
           {pending.pendingReformat && (
-            <p className="form-error" style={{ fontSize: 12 }}>
+            <p className="form-error text-sm">
               Pending reformat: local summary exceeds the {backendLimit}-char limit for{' '}
               {SUMMARY_BACKEND_LABELS[pending.summaryBackend]}. Will not send until it fits.
             </p>
           )}
           {pending.pendingSummaryCandidate && !pending.pendingReformat && (
-            <p className="muted" style={{ fontSize: 12 }}>
+            <p className="muted text-sm">
               Pending candidate ({candidateChars} chars) will be retried on the next drain.
             </p>
           )}
           {safeDto.summary_last_response_debug && (
             <details style={{ marginTop: 4 }}>
-              <summary className="muted" style={{ fontSize: 12, cursor: 'pointer' }}>
+              <summary className="muted text-sm" style={{ cursor: 'pointer' }}>
                 Show last AI response (debug)
               </summary>
               <pre
-                className="card-tight"
+                className="card-tight text-sm"
                 style={{
                   background: 'var(--surface-2)',
                   padding: 8,
-                  fontSize: 12,
                   whiteSpace: 'pre-wrap',
                   wordBreak: 'break-word',
                   maxHeight: 220,
@@ -668,11 +665,10 @@ export function AutomationPanel({
         <h4 style={{ marginBottom: 4 }}>Local summary (read-only)</h4>
         {pending.summary ? (
           <div
-            className="card-tight"
+            className="card-tight text-md"
             style={{
               background: 'var(--surface-2)',
               whiteSpace: 'pre-wrap',
-              fontSize: 13,
             }}
           >
             {pending.summary}
@@ -708,23 +704,19 @@ export function AutomationPanel({
                     }}
                   >
                     <span className={`badge ${b.cls}`}>{b.label}</span>
-                    <span className="muted" style={{ fontSize: 12 }}>
-                      {isoOrEmpty(e.created_at)}
-                    </span>
+                    <span className="muted text-sm">{isoOrEmpty(e.created_at)}</span>
                     {e.response_status != null && (
-                      <span className="muted" style={{ fontSize: 12 }}>
-                        HTTP {e.response_status}
-                      </span>
+                      <span className="muted text-sm">HTTP {e.response_status}</span>
                     )}
                   </div>
                   <div style={{ marginTop: 4, whiteSpace: 'pre-wrap' }}>{e.entry}</div>
                   {e.keyphrases.length > 0 && (
-                    <div className="muted" style={{ fontSize: 12, marginTop: 4 }}>
+                    <div className="muted text-sm" style={{ marginTop: 4 }}>
                       Keyphrases: {e.keyphrases.join(', ')}
                     </div>
                   )}
                   {e.response_message && e.status === 'error' && (
-                    <div className="form-error" style={{ fontSize: 12, marginTop: 4 }}>
+                    <div className="form-error text-sm" style={{ marginTop: 4 }}>
                       {e.response_message}
                     </div>
                   )}

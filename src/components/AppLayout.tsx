@@ -4,6 +4,7 @@ import { NavLink, Outlet, useNavigate } from 'react-router-dom';
 import { api, errorMessage } from '../lib/api';
 import { OnboardingBanner } from './OnboardingBanner';
 import { toast } from './Toaster';
+import { useFontScale } from '../lib/fontScale';
 import { useTheme } from '../lib/theme';
 export function AppLayout() {
   const queryClient = useQueryClient();
@@ -16,6 +17,11 @@ export function AppLayout() {
   // `color-scheme` style updates. The boot script in index.html has
   // already set the initial attribute before the first paint.
   useTheme();
+  // Mount the font-scale hook here for the same reason: keeps the
+  // `--app-font-scale` custom property synced with the user's saved
+  // preset for the lifetime of the app shell. The boot script has
+  // already applied the saved scale before the first paint.
+  useFontScale();
   const settings = useQuery({ queryKey: ['settings'], queryFn: api.getSettings });
   const characters = useQuery({ queryKey: ['characters'], queryFn: api.listCharacters });
   const targets = useQuery({ queryKey: ['targets'], queryFn: api.listTargets });

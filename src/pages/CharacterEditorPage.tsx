@@ -241,7 +241,11 @@ export function CharacterEditorPage() {
       }
       const saved = await saveAndGet();
       if (!saved) throw new Error('Save failed');
-      return api.pushToTarget({ character_id: id, target_id: character.data.default_target_id, fields: [field] });
+      return api.pushToTarget({
+        character_id: id,
+        target_id: character.data.default_target_id,
+        fields: [field],
+      });
     },
     onSuccess: (_res, field) => {
       const label = PERSONA_FIELD_LABELS[field];
@@ -344,7 +348,7 @@ export function CharacterEditorPage() {
 
       <div className="card">
         <h3>Cover image</h3>
-        <p className="muted" style={{ fontSize: 12, marginTop: 6 }}>
+        <p className="muted text-sm" style={{ marginTop: 6 }}>
           Shown on this character and embedded in the share image you export. Any existing kindroid
           metadata in the uploaded image is stripped.
         </p>
@@ -475,9 +479,7 @@ export function CharacterEditorPage() {
                 className="select"
                 data-testid="default-target-select"
                 value={
-                  field.value && aiTargets.some((t) => t.id === field.value)
-                    ? field.value
-                    : ''
+                  field.value && aiTargets.some((t) => t.id === field.value) ? field.value : ''
                 }
                 onChange={(e) => field.onChange(e.target.value)}
                 style={{ marginTop: 8 }}
@@ -497,7 +499,7 @@ export function CharacterEditorPage() {
       {id ? (
         <JournalEditor characterId={id} />
       ) : (
-        <div className="card muted" style={{ fontSize: 12 }}>
+        <div className="card muted text-sm">
           Save the character first to enable journal entries.
         </div>
       )}
@@ -717,7 +719,7 @@ function JournalEditor({ characterId }: { characterId: Uuid }) {
           </button>
         )}
       </div>
-      <p className="muted" style={{ fontSize: 12, marginTop: 6 }}>
+      <p className="muted text-sm" style={{ marginTop: 6 }}>
         Up to 500 characters and up to 8 specific, 1-3 word keyphrases per entry (Kindroid&apos;s
         recall is verbatim on the user&apos;s input, so generic single common words like
         &quot;love&quot; or &quot;wings&quot; hurt recall — pick proper nouns, dates, distinctive
@@ -739,11 +741,14 @@ function JournalEditor({ characterId }: { characterId: Uuid }) {
           Failed to load journal entries: {errorMessage(entries.error)}
         </div>
       )}
-      {(entries.data ?? []).length === 0 && !entries.isLoading && !entries.isError && editing == null && (
-        <div className="empty" style={{ marginTop: 12 }}>
-          No journal entries yet.
-        </div>
-      )}
+      {(entries.data ?? []).length === 0 &&
+        !entries.isLoading &&
+        !entries.isError &&
+        editing == null && (
+          <div className="empty" style={{ marginTop: 12 }}>
+            No journal entries yet.
+          </div>
+        )}
       <ul style={{ listStyle: 'none', padding: 0, marginTop: 12 }}>
         {(entries.data ?? []).map((e: JournalEntry) => (
           <li
@@ -772,7 +777,7 @@ function JournalEditor({ characterId }: { characterId: Uuid }) {
                     ))}
                   </div>
                 )}
-                <div className="muted" style={{ fontSize: 11, marginTop: 4 }}>
+                <div className="muted text-xs" style={{ marginTop: 4 }}>
                   updated {new Date(e.updated_at).toLocaleString()}
                 </div>
               </div>

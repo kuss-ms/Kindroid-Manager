@@ -113,7 +113,7 @@ export function CharactersPage() {
           />
         </div>{' '}
       </div>{' '}
-      <p className="muted" style={{ fontSize: 12, marginBottom: 0 }}>
+      <p className="muted text-sm" style={{ marginBottom: 0 }}>
         {' '}
         Drop a PNG anywhere on the window (or paste from clipboard) to import a share image.{' '}
       </p>{' '}

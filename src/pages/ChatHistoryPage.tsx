@@ -95,13 +95,7 @@ export function ChatHistoryPage() {
   // string, so keying the UI on `ai_id` alone would conflate them.
   const selectedKey = useMemo<{ ai_id: string; kind: TargetKind } | null>(() => {
     if (!targets.isLoading && targetsList.length === 0) return null;
-    if (
-      urlAiId &&
-      urlKind &&
-      targetsList.some(
-        (t) => t.ai_id === urlAiId && t.kind === urlKind,
-      )
-    ) {
+    if (urlAiId && urlKind && targetsList.some((t) => t.ai_id === urlAiId && t.kind === urlKind)) {
       return { ai_id: urlAiId, kind: urlKind };
     }
     return null;
@@ -111,9 +105,8 @@ export function ChatHistoryPage() {
   const selectedTarget = useMemo(
     () =>
       selectedKey
-        ? targetsList.find(
-            (t) => t.ai_id === selectedKey.ai_id && t.kind === selectedKey.kind,
-          ) ?? null
+        ? (targetsList.find((t) => t.ai_id === selectedKey.ai_id && t.kind === selectedKey.kind) ??
+          null)
         : null,
     [targetsList, selectedKey],
   );
@@ -232,7 +225,14 @@ export function ChatHistoryPage() {
 
   // Search results.
   const searchPage = useQuery<ChatMessage[]>({
-    queryKey: ['chat-search', selectedAiId, selectedKind, trimmedQuery, searchOffset, favouritesOnly],
+    queryKey: [
+      'chat-search',
+      selectedAiId,
+      selectedKind,
+      trimmedQuery,
+      searchOffset,
+      favouritesOnly,
+    ],
     queryFn: () => {
       if (!selectedAiId || !selectedKind || !trimmedQuery) return Promise.resolve([]);
       return api.searchChat(
@@ -422,34 +422,28 @@ export function ChatHistoryPage() {
       // Optimistically flip the favourite on every cached page for this
       // message. React Query keys include favouritesOnly + browseOffset +
       // kind, so we patch every variant via setQueriesData.
-      queryClient.setQueriesData<ChatMessage[]>(
-        { queryKey: ['chat-messages', aiId] },
-        (old) =>
-          old
-            ? old.map((m) =>
-                m.kindroid_msg_id === kindroidMsgId ? { ...m, favourite: !prevFavourite } : m,
-              )
-            : old,
+      queryClient.setQueriesData<ChatMessage[]>({ queryKey: ['chat-messages', aiId] }, (old) =>
+        old
+          ? old.map((m) =>
+              m.kindroid_msg_id === kindroidMsgId ? { ...m, favourite: !prevFavourite } : m,
+            )
+          : old,
       );
-      queryClient.setQueriesData<ChatMessage[]>(
-        { queryKey: ['chat-search', aiId] },
-        (old) =>
-          old
-            ? old.map((m) =>
-                m.kindroid_msg_id === kindroidMsgId ? { ...m, favourite: !prevFavourite } : m,
-              )
-            : old,
+      queryClient.setQueriesData<ChatMessage[]>({ queryKey: ['chat-search', aiId] }, (old) =>
+        old
+          ? old.map((m) =>
+              m.kindroid_msg_id === kindroidMsgId ? { ...m, favourite: !prevFavourite } : m,
+            )
+          : old,
       );
       // If the filter is on and we just unfavourited, drop the row so it
       // disappears from the filtered list immediately.
       if (favouritesOnly && prevFavourite) {
-        queryClient.setQueriesData<ChatMessage[]>(
-          { queryKey: ['chat-messages', aiId] },
-          (old) => (old ? old.filter((m) => m.kindroid_msg_id !== kindroidMsgId) : old),
+        queryClient.setQueriesData<ChatMessage[]>({ queryKey: ['chat-messages', aiId] }, (old) =>
+          old ? old.filter((m) => m.kindroid_msg_id !== kindroidMsgId) : old,
         );
-        queryClient.setQueriesData<ChatMessage[]>(
-          { queryKey: ['chat-search', aiId] },
-          (old) => (old ? old.filter((m) => m.kindroid_msg_id !== kindroidMsgId) : old),
+        queryClient.setQueriesData<ChatMessage[]>({ queryKey: ['chat-search', aiId] }, (old) =>
+          old ? old.filter((m) => m.kindroid_msg_id !== kindroidMsgId) : old,
         );
       }
       return { aiId, kind, kindroidMsgId, prevFavourite };
@@ -900,7 +894,7 @@ export function ChatHistoryPage() {
                 ✕
               </button>
             </div>
-            <p className="muted" style={{ fontSize: 12, marginTop: 0 }}>
+            <p className="muted text-sm" style={{ marginTop: 0 }}>
               Configure auto-journal and auto-summary for <code>{selectedAiId}</code>. Changes are
               applied when you click <strong>Save settings</strong>.
             </p>
@@ -956,18 +950,16 @@ function MessageRow({
       <div style={{ flex: 1, minWidth: 0 }}>
         <div style={{ display: 'flex', gap: 8, alignItems: 'baseline' }}>
           <strong>{who}</strong>
-          <span className="muted" style={{ fontSize: 12 }}>
-            {when}
-          </span>
+          <span className="muted text-sm">{when}</span>
         </div>
         <div style={{ marginTop: 2 }}>{snippet}</div>
         {message.image_urls.length > 0 && (
-          <div className="muted" style={{ fontSize: 12 }}>
+          <div className="muted text-sm">
             🖼 {message.image_urls.length} image{message.image_urls.length === 1 ? '' : 's'}
           </div>
         )}
         {message.link_url && (
-          <div style={{ fontSize: 12 }}>
+          <div className="text-sm">
             🔗{' '}
             <a href={message.link_url} onClick={(e) => e.stopPropagation()}>
               {message.link_description ?? message.link_url}
@@ -1092,7 +1084,7 @@ function MessageDetailDialog({
             </button>
           </div>
         </div>
-        <div className="muted" style={{ fontSize: 12, marginTop: 4 }}>
+        <div className="muted text-sm" style={{ marginTop: 4 }}>
           {when} · {message.sender}
         </div>
 
@@ -1144,7 +1136,7 @@ function MessageDetailDialog({
         )}
 
         <hr style={{ margin: '20px 0 12px', border: 0, borderTop: '1px solid var(--border)' }} />
-        <div className="muted" style={{ fontSize: 11, lineHeight: 1.4 }}>
+        <div className="muted text-xs" style={{ lineHeight: 1.4 }}>
           <div>id: {message.kindroid_msg_id}</div>
           <div>fetched_at: {fetched}</div>
         </div>

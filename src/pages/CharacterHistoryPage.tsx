@@ -73,7 +73,7 @@ export function CharacterHistoryPage() {
           </button>
         </div>
       </div>
-      <p className="muted" style={{ fontSize: 12 }}>
+      <p className="muted text-sm">
         Snapshots are captured automatically before every save. Restore replaces the
         character&apos;s persona fields, notes, and all journal entries with the snapshot&apos;s
         contents (cover image and creation time are preserved).
@@ -155,7 +155,7 @@ function RevisionRow({
       >
         <div style={{ flex: 1 }}>
           <div>{new Date(summary.saved_at).toLocaleString()}</div>
-          <div className="muted" style={{ fontSize: 12, marginTop: 4 }}>
+          <div className="muted text-sm" style={{ marginTop: 4 }}>
             {summary.journal_entry_count} journal{' '}
             {summary.journal_entry_count === 1 ? 'entry' : 'entries'}
           </div>
@@ -201,9 +201,7 @@ function RevisionDetail({ revision }: { revision: CharacterRevision }) {
       </dl>
       <h3 style={{ marginTop: 16 }}>Journal entries ({revision.journal_entries.length})</h3>
       {revision.journal_entries.length === 0 ? (
-        <p className="muted" style={{ fontSize: 12 }}>
-          No journal entries in this snapshot.
-        </p>
+        <p className="muted text-sm">No journal entries in this snapshot.</p>
       ) : (
         <ul style={{ listStyle: 'none', padding: 0, marginTop: 8 }}>
           {revision.journal_entries.map((e) => (
@@ -246,9 +244,7 @@ function FragmentRow({ label, value }: { label: string; value: string | null | u
   const display = value == null || value === '' ? <span className="muted">(none)</span> : value;
   return (
     <>
-      <dt className="muted" style={{ fontSize: 12 }}>
-        {label}
-      </dt>
+      <dt className="muted text-sm">{label}</dt>
       <dd
         style={{
           margin: 0,

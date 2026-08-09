@@ -38,6 +38,13 @@
     'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Oxygen, Ubuntu, sans-serif;
   --font-mono: 'JetBrains Mono', 'SF Mono', Menlo, Consolas, monospace;
   --transition: 120ms ease;
+  /* Font scale multiplier applied to the root font-size on <html> via
+     calc(14px * var(--app-font-scale)). Overridden by the boot script in
+     index.html before first paint and by the useFontScale hook thereafter
+     when the user picks a preset in Settings. Keeping it declared here
+     means any tool that reads the stylesheet (not the computed style)
+     still sees a sane default if the boot script fails. */
+  --app-font-scale: 1;
 }
 /* Dark theme tokens. Applied whenever <html data-theme="dark"> is set,
    which happens in two cases:
@@ -70,6 +77,7 @@
   --shadow-sm: 0 1px 2px rgba(0, 0, 0, 0.3);
   --shadow: 0 1px 3px rgba(0, 0, 0, 0.4), 0 1px 2px rgba(0, 0, 0, 0.25);
   --shadow-lg: 0 10px 25px rgba(0, 0, 0, 0.5), 0 4px 10px rgba(0, 0, 0, 0.3);
+  --app-font-scale: 1;
 }
 * {
   box-sizing: border-box;
@@ -83,10 +91,16 @@ body,
   background: var(--bg);
   color: var(--text);
   font-family: var(--font);
-  font-size: 14px;
   line-height: 1.5;
   -webkit-font-smoothing: antialiased;
   -moz-osx-font-smoothing: grayscale;
+}
+/* The single root font-size — every other font-size in this file is in
+   rem so it inherits this scale via the standard rem-on-root pattern.
+   All font-size declarations in this stylesheet MUST be in rem. See the
+   global-font-size-adjuster entry in docs/manual-checks.md. */
+html {
+  font-size: calc(14px * var(--app-font-scale));
 }
 h1,
 h2,
@@ -98,16 +112,16 @@ h4 {
   color: var(--text);
 }
 h1 {
-  font-size: 24px;
+  font-size: 1.714rem;
 }
 h2 {
-  font-size: 20px;
+  font-size: 1.429rem;
 }
 h3 {
-  font-size: 16px;
+  font-size: 1.143rem;
 }
 h4 {
-  font-size: 14px;
+  font-size: 1rem;
 }
 p {
   margin: 0;
@@ -122,18 +136,18 @@ a:hover {
 code,
 pre {
   font-family: var(--font-mono);
-  font-size: 12px;
+  font-size: 0.857rem;
 }
 button {
   font-family: inherit;
-  font-size: 13px;
+  font-size: 0.929rem;
   cursor: pointer;
 }
 input,
 textarea,
 select {
   font-family: inherit;
-  font-size: 13px;
+  font-size: 0.929rem;
   color: var(--text);
 } /* Layout */
 .app {
@@ -159,7 +173,7 @@ select {
   align-items: center;
   gap: var(--space-2);
   font-weight: 600;
-  font-size: 15px;
+  font-size: 1.071rem;
   color: var(--text);
 }
 .app-brand-mark {
@@ -172,7 +186,7 @@ select {
   justify-content: center;
   color: white;
   font-weight: 700;
-  font-size: 13px;
+  font-size: 0.929rem;
 }
 .app-nav {
   display: flex;
@@ -184,7 +198,7 @@ select {
   border-radius: var(--radius);
   color: var(--text-muted);
   font-weight: 500;
-  font-size: 13px;
+  font-size: 0.929rem;
   text-decoration: none;
   transition:
     background var(--transition),
@@ -211,7 +225,7 @@ select {
   padding: var(--space-3) var(--space-6);
   background: linear-gradient(90deg, var(--warning-soft), #fffbeb);
   border-bottom: 1px solid #fde68a;
-  font-size: 13px;
+  font-size: 0.929rem;
   color: #92400e;
 }
 .banner > span {
@@ -223,7 +237,7 @@ select {
   border: 1px solid #fde68a;
   border-radius: var(--radius);
   padding: 4px 10px;
-  font-size: 12px;
+  font-size: 0.857rem;
 }
 .banner button:hover {
   background: #fef3c7;
@@ -310,7 +324,7 @@ select {
     justify-content: center;
     color: var(--text-muted);
     font-weight: 500;
-    font-size: 11px;
+    font-size: 0.786rem;
     text-decoration: none;
     border: none;
     padding: 0 2px;
@@ -400,7 +414,7 @@ select {
   background: var(--surface);
   color: var(--text);
   font-weight: 500;
-  font-size: 13px;
+  font-size: 0.929rem;
   transition:
     background var(--transition),
     border-color var(--transition),
@@ -458,7 +472,7 @@ select {
 }
 .btn-sm {
   padding: 5px 10px;
-  font-size: 12px;
+  font-size: 0.857rem;
 }
 /* Buttons with dynamic text (e.g. "Push 8 fields and 3 journals to MyBot")
    that need to wrap on narrow viewports. Default .btn has
@@ -490,16 +504,16 @@ select {
 .form-row label,
 .form-label {
   font-weight: 500;
-  font-size: 13px;
+  font-size: 0.929rem;
   color: var(--text);
 }
 .form-hint {
-  font-size: 12px;
+  font-size: 0.857rem;
   color: var(--text-muted);
   margin-left: 6px;
 }
 .form-error {
-  font-size: 12px;
+  font-size: 0.857rem;
   color: var(--danger);
 }
 .input,
@@ -511,7 +525,7 @@ select {
   border-radius: var(--radius);
   background: var(--surface);
   color: var(--text);
-  font-size: 13px;
+  font-size: 0.929rem;
   transition:
     border-color var(--transition),
     box-shadow var(--transition);
@@ -530,7 +544,7 @@ select {
 }
 .input-mono {
   font-family: var(--font-mono);
-  font-size: 12px;
+  font-size: 0.857rem;
 }
 .input-search {
   min-width: 240px;
@@ -540,7 +554,7 @@ select {
   background-position: 10px center;
 }
 .soft-counter {
-  font-size: 12px;
+  font-size: 0.857rem;
   margin-top: 4px;
   color: var(--text-muted);
 }
@@ -551,7 +565,7 @@ select {
   display: inline-flex;
   align-items: center;
   gap: 8px;
-  font-size: 13px;
+  font-size: 0.929rem;
   cursor: pointer;
   user-select: none;
 }
@@ -574,7 +588,7 @@ select {
 .fieldset legend {
   padding: 0 6px;
   font-weight: 600;
-  font-size: 13px;
+  font-size: 0.929rem;
 }
 .fieldset-row {
   display: flex;
@@ -587,12 +601,12 @@ select {
   border-top: none;
 }
 .fieldset-row .code {
-  font-size: 11px;
+  font-size: 0.786rem;
   color: var(--text-muted);
   font-family: var(--font-mono);
 }
 .fieldset-row .empty {
-  font-size: 11px;
+  font-size: 0.786rem;
   color: var(--text-soft);
 }
 .fieldset-warning {
@@ -604,14 +618,14 @@ select {
   color: #92400e;
   padding: 8px 12px;
   border-radius: var(--radius);
-  font-size: 12px;
+  font-size: 0.857rem;
   margin-bottom: var(--space-2);
 }
 .fieldset-warning button {
   background: transparent;
   border: none;
   color: #92400e;
-  font-size: 11px;
+  font-size: 0.786rem;
   cursor: pointer;
   text-decoration: underline;
 } /* List (Characters/Targets) */
@@ -641,7 +655,7 @@ select {
   color: var(--text);
 }
 .list-item-sub {
-  font-size: 12px;
+  font-size: 0.857rem;
   color: var(--text-muted);
   margin-top: 2px;
 }
@@ -683,7 +697,7 @@ select {
   border-radius: var(--radius-sm);
   color: var(--text);
   cursor: pointer;
-  font-size: 13px;
+  font-size: 0.929rem;
   width: 100%;
 }
 .overflow-menu-item:hover:not(:disabled) {
@@ -698,7 +712,7 @@ select {
 }
 .btn-icon {
   padding: 4px 10px;
-  font-size: 16px;
+  font-size: 1.143rem;
   line-height: 1;
 }
 .empty {
@@ -722,14 +736,14 @@ select {
   padding: 10px 14px;
   text-align: left;
   border-bottom: 1px solid var(--border);
-  font-size: 13px;
+  font-size: 0.929rem;
 }
 .table th {
   background: var(--surface-2);
   font-weight: 600;
   color: var(--text-muted);
   text-transform: uppercase;
-  font-size: 11px;
+  font-size: 0.786rem;
   letter-spacing: 0.04em;
 }
 .table tbody tr {
@@ -747,7 +761,7 @@ select {
   align-items: center;
   padding: 2px 8px;
   border-radius: 999px;
-  font-size: 11px;
+  font-size: 0.786rem;
   font-weight: 600;
   text-transform: uppercase;
   letter-spacing: 0.04em;
@@ -775,7 +789,7 @@ pre {
   border-radius: var(--radius);
   overflow: auto;
   margin: 0;
-  font-size: 12px;
+  font-size: 0.857rem;
   line-height: 1.5;
 } /* Modal */
 .modal-overlay {
@@ -864,7 +878,7 @@ pre {
   color: white;
   border: none;
   margin-left: auto;
-  font-size: 18px;
+  font-size: 1.286rem;
   line-height: 1;
   cursor: pointer;
   padding: 0 4px;
@@ -892,7 +906,7 @@ pre {
 .detail-label {
   font-weight: 600;
   color: var(--text-muted);
-  font-size: 12px;
+  font-size: 0.857rem;
   min-width: 110px;
   text-transform: uppercase;
   letter-spacing: 0.04em;
@@ -905,7 +919,7 @@ pre {
 }
 .mono {
   font-family: var(--font-mono);
-  font-size: 12px;
+  font-size: 0.857rem;
 }
 .flex-row {
   display: flex;
@@ -959,18 +973,18 @@ pre {
   max-width: 480px;
 }
 .drop-icon {
-  font-size: 48px;
+  font-size: 3.429rem;
   color: var(--primary);
   margin-bottom: 12px;
 }
 .drop-title {
-  font-size: 18px;
+  font-size: 1.286rem;
   font-weight: 600;
   margin-bottom: 6px;
   color: var(--text);
 }
 .drop-sub {
-  font-size: 13px;
+  font-size: 0.929rem;
   color: var(--text-muted);
 } /* Image preview / crop */
 .image-preview {
@@ -999,7 +1013,7 @@ pre {
   border-radius: var(--radius);
   background: var(--surface-2);
   color: var(--text-muted);
-  font-size: 13px;
+  font-size: 0.929rem;
 }
 /* Chip input row: text input + Add button side by side. The Android
    virtual keyboard has no "Enter" key for committing a keyphrase (its
@@ -1035,7 +1049,7 @@ pre {
   background: transparent;
   color: var(--text-muted);
   padding: 6px 14px;
-  font-size: 13px;
+  font-size: 0.929rem;
   font-weight: 500;
   border-radius: calc(var(--radius) - 2px);
   cursor: pointer;
@@ -1051,6 +1065,19 @@ pre {
   background: var(--surface);
   color: var(--text);
   box-shadow: var(--shadow-sm);
+}
+/* Utility font-size classes — use these in inline-styled TSX paragraphs
+   so every piece of text picks up the global font-scale setting. They
+   map to the historical 11 / 12 / 13 px sizes (all divided by 14 to
+   convert to rem). */
+.text-xs {
+  font-size: 0.786rem;
+}
+.text-sm {
+  font-size: 0.857rem;
+}
+.text-md {
+  font-size: 0.929rem;
 }
 :root[data-theme='dark'] .banner {
   background: linear-gradient(90deg, var(--warning-soft), #1f1306);

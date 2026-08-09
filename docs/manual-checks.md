@@ -72,3 +72,13 @@ These are integration / smoke checks that the automated Rust + Vitest suite cann
 63. Editor → character with `default_target_id` set + populated `ai_directive`. Click the per-field "Push" button next to "Response directive". Confirm Kindroid updates, success toast names the target, push-history gains an entry, and the default-target label is unchanged (since `ai_name` was not pushed).
 64. Same editor, click the per-field "Push" button next to "Name" → confirm the target's local label on the Targets page syncs to the new `ai_name`.
 65. Editor → character with no default target. Confirm all 8 per-field "Push" buttons are disabled with the "Set a default push target" tooltip. Pick a default → buttons enable.
+
+## Global font-scale adjuster
+
+1. Cleared localStorage: app loads at Medium. No font flash on first paint.
+2. Settings → Appearance → click each preset (Small / Medium / Large / Extra Large). Text on every page (Characters, Editor, Targets, Push, History, Chat History, Settings, AutomationPanel) updates immediately. Header / buttons / modals don't clip.
+3. Reload the app. Selected preset persists. No flash of default before saved scale.
+4. Switch theme (light / dark / system). Font size is unaffected. Dark tokens are unaffected.
+5. Mobile bottom-nav viewport (≤ 720 px): text scales inside nav links; nav links do not overflow at Extra Large (known tight at 1.25× — see "Risks" in `.kilo/plans/1786307570997-global-font-size-adjuster.md`).
+6. Inline-styled paragraphs (Character Editor, Push, Settings cards) scale with the rest (they use `.text-xs` / `.text-sm` / `.text-md` utility classes, all rem-based).
+7. Future PR adds a `font-size: NNpx` to `global.css` → REJECT. Every font-size in `global.css` MUST be in `rem` so it inherits the global scale. The comment above the `html { font-size: ... }` rule documents this.

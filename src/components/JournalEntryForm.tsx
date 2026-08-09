@@ -133,10 +133,10 @@ export function JournalEntryForm({
       </div>
       {kpError && (
         <div
-          className="keyphrase-error"
+          className="keyphrase-error text-sm"
           role="alert"
           data-testid="keyphrase-error"
-          style={{ color: 'var(--danger)', fontSize: 12, marginTop: 4 }}
+          style={{ color: 'var(--danger)', marginTop: 4 }}
         >
           {kpError}
         </div>

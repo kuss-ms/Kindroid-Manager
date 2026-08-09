@@ -64,7 +64,7 @@ export function HistoryDetailPage() {
             {' '}
             {e.did_chat_break ? 'yes' : 'no'}{' '}
             {e.did_chat_break && (
-              <div className="muted" style={{ marginTop: 6, fontSize: 12 }}>
+              <div className="muted text-sm" style={{ marginTop: 6 }}>
                 {' '}
                 Greeting sent: {e.greeting ?? ''} <br /> wipe_cascaded:{' '}
                 {String(e.wipe_cascaded)}{' '}
@@ -86,27 +86,21 @@ export function HistoryDetailPage() {
         <div className="card">
           {' '}
           <h3>create-new-ai response</h3>{' '}
-          <p className="muted" style={{ fontSize: 12 }}>
-            Status: {e.create_new_ai_status}
-          </p>{' '}
+          <p className="muted text-sm">Status: {e.create_new_ai_status}</p>{' '}
           <pre>{e.create_new_ai_body ?? ''}</pre>{' '}
         </div>
       )}{' '}
       <div className="card">
         {' '}
         <h3>update-info response</h3>{' '}
-        <p className="muted" style={{ fontSize: 12 }}>
-          Status: {e.update_info_status}
-        </p>{' '}
+        <p className="muted text-sm">Status: {e.update_info_status}</p>{' '}
         <pre>{e.update_info_body}</pre>{' '}
       </div>{' '}
       {e.chat_break_status !== null && e.chat_break_status !== undefined && (
         <div className="card">
           {' '}
           <h3>chat-break response</h3>{' '}
-          <p className="muted" style={{ fontSize: 12 }}>
-            Status: {e.chat_break_status}
-          </p>{' '}
+          <p className="muted text-sm">Status: {e.chat_break_status}</p>{' '}
           <pre>{e.chat_break_body ?? ''}</pre>{' '}
         </div>
       )}{' '}

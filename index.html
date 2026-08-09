@@ -28,6 +28,16 @@
           }
           document.documentElement.setAttribute('data-theme', resolved);
           document.documentElement.style.colorScheme = resolved;
+
+          // Font scale: mirror src/lib/fontScale.ts so the chosen scale
+          // is applied to <html> before first paint. Validation falls
+          // back to the 'medium' numeric (1) on any unknown value.
+          var scaleId = localStorage.getItem('kindroid-manager.fontScale');
+          var scaleValue = '1';
+          if (scaleId === 'small') scaleValue = '0.875';
+          else if (scaleId === 'large') scaleValue = '1.125';
+          else if (scaleId === 'extraLarge') scaleValue = '1.25';
+          document.documentElement.style.setProperty('--app-font-scale', scaleValue);
         } catch (e) {
           document.documentElement.setAttribute('data-theme', 'light');
         }

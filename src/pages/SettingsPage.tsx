@@ -5,6 +5,7 @@ import { zodResolver } from '@hookform/resolvers/zod';
 import { api, errorMessage } from '../lib/api';
 import { aiSettingsSchema, automationInstructionsSchema, settingsSchema } from '../lib/schemas';
 import { useTheme, type ThemePreference } from '../lib/theme';
+import { FONT_SCALES, useFontScale } from '../lib/fontScale';
 import { ConfirmDialog } from '../components/ConfirmDialog';
 import { toast } from '../components/Toaster';
 
@@ -15,6 +16,7 @@ export function SettingsPage() {
     setPreference: setThemePreference,
     effective: effectiveTheme,
   } = useTheme();
+  const { scale: fontScale, value: fontScaleValue, setScale: setFontScale } = useFontScale();
   const settings = useQuery({ queryKey: ['settings'], queryFn: api.getSettings });
   const aiSettings = useQuery({ queryKey: ['ai-settings'], queryFn: api.getAiSettings });
   const [token, setToken] = useState('');
@@ -179,8 +181,7 @@ export function SettingsPage() {
   }, [settings.data]);
   const debugDirty = debugShowResponse !== (settings.data?.debug_show_automation_response ?? false);
   const saveDebugFlags = useMutation({
-    mutationFn: () =>
-      api.setDebugFlags({ debug_show_automation_response: debugShowResponse }),
+    mutationFn: () => api.setDebugFlags({ debug_show_automation_response: debugShowResponse }),
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ['settings'] });
       queryClient.invalidateQueries({ queryKey: ['chat-automation'] });
@@ -196,11 +197,11 @@ export function SettingsPage() {
       </div>
       <div className="card">
         <h3>Kindroid</h3>
-        <p className="muted" style={{ fontSize: 12, marginTop: 6 }}>
+        <p className="muted text-sm" style={{ marginTop: 6 }}>
           The token is stored in your OS keychain (Windows Credential Manager, macOS Keychain, Linux
           Secret Service). It is never written to disk and never leaves the app.
         </p>
-        <p className="muted" style={{ fontSize: 12, marginTop: 6 }}>
+        <p className="muted text-sm" style={{ marginTop: 6 }}>
           Where do I find my API key and AI ID?{' '}
           <a href="https://kindroid.ai/home/" target="_blank" rel="noreferrer">
             Kindroid → Profile Settings
@@ -264,7 +265,7 @@ export function SettingsPage() {
             </button>
           </div>
           {testToken.data && (
-            <p className="muted" style={{ fontSize: 12, marginTop: 8 }}>
+            <p className="muted text-sm" style={{ marginTop: 8 }}>
               Test result: {testToken.data.message} — checks reachability and auth, not character
               validity.
             </p>
@@ -273,7 +274,7 @@ export function SettingsPage() {
       </div>
       <div className="card">
         <h3>AI provider (OpenAI-compatible)</h3>
-        <p className="muted" style={{ fontSize: 12, marginTop: 6 }}>
+        <p className="muted text-sm" style={{ marginTop: 6 }}>
           Used by chat-history automation (auto-journal, auto-summary). Leave the bearer token empty
           for local servers that don&apos;t require auth.
         </p>
@@ -351,7 +352,7 @@ export function SettingsPage() {
       </div>
       <div className="card">
         <h3>Automation instructions (global defaults)</h3>
-        <p className="muted" style={{ fontSize: 12, marginTop: 6 }}>
+        <p className="muted text-sm" style={{ marginTop: 6 }}>
           Default instructions sent to the AI provider for auto-journal and auto-summary. Each
           target on the Chat History page can override these per feature. Use{' '}
           <code>{'{ai_name}'}</code> in either field and it will be replaced with the AI&apos;s name
@@ -413,7 +414,7 @@ export function SettingsPage() {
       </div>
       <div className="card">
         <h3>Debug</h3>
-        <p className="muted" style={{ fontSize: 12, marginTop: 6 }}>
+        <p className="muted text-sm" style={{ marginTop: 6 }}>
           Off by default. When <strong>Show AI response preview</strong> is on, the chat-automation
           cycle keeps the most recent journal + summary AI provider response in process memory and
           the AutomationPanel renders it. Nothing is written to the database — the captured
@@ -444,7 +445,7 @@ export function SettingsPage() {
       </div>
       <div className="card">
         <h3>Appearance</h3>
-        <p className="muted" style={{ fontSize: 12, marginTop: 6 }}>
+        <p className="muted text-sm" style={{ marginTop: 6 }}>
           Theme preference. <strong>System</strong> follows your operating system setting. Your
           choice is saved on this device only.
         </p>
@@ -470,15 +471,42 @@ export function SettingsPage() {
             );
           })}
         </div>
-        <p className="muted" style={{ fontSize: 12, marginTop: 8 }}>
+        <p className="muted text-sm" style={{ marginTop: 8 }}>
           Currently using the <strong>{effectiveTheme}</strong> palette.
+        </p>
+        <p className="muted text-sm" style={{ marginTop: 12 }}>
+          Text size. Scales every piece of text in the app uniformly. Your choice is saved on this
+          device only.
+        </p>
+        <div
+          role="radiogroup"
+          aria-label="Text size"
+          className="theme-segmented"
+          style={{ marginTop: 8 }}
+        >
+          {FONT_SCALES.map((opt) => {
+            const selected = fontScale === opt.id;
+            return (
+              <button
+                key={opt.id}
+                type="button"
+                role="radio"
+                aria-checked={selected}
+                className={`btn theme-segmented-option${selected ? ' active' : ''}`}
+                onClick={() => setFontScale(opt.id)}
+              >
+                {opt.label}
+              </button>
+            );
+          })}
+        </div>
+        <p className="muted text-sm" style={{ marginTop: 8 }}>
+          Currently at <strong>{(fontScaleValue * 100).toFixed(1)}%</strong> of the design base.
         </p>
       </div>
       <div className="card">
         <h3>About</h3>
-        <p className="muted" style={{ fontSize: 12 }}>
-          Kindroid Manager v0.5.0
-        </p>
+        <p className="muted text-sm">Kindroid Manager v0.5.0</p>
       </div>
       <ConfirmDialog
         open={confirmClear}

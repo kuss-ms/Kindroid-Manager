@@ -506,7 +506,7 @@ export function SettingsPage() {
       </div>
       <div className="card">
         <h3>About</h3>
-        <p className="muted text-sm">Kindroid Manager v0.5.0</p>
+        <p className="muted text-sm">Kindroid Manager v0.5.1</p>
       </div>
       <ConfirmDialog
         open={confirmClear}

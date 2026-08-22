@@ -768,9 +768,13 @@ export function ChatHistoryPage() {
             </option>
           ))}
         </select>
-        {/* The action buttons (Sync / Cancel / Automation / Reset) live
-            immediately to the right of the target select. They wrap to
-            a second line on narrower viewports. */}
+        {/* Spacer absorbs all available free space so the action buttons
+            (Sync / Cancel / Automation / Reset) and the chat/history
+            segmented control sit on the right side of the toolbar row.
+            Without this they'd pack immediately to the right of the
+            select and the row would look crowded. The wider action
+            buttons wrap to a second line on narrow viewports. */}
+        <div style={{ flex: 1 }} />
         {showHistoryActions && showSync && (
           <button
             className="btn btn-primary"
@@ -840,10 +844,12 @@ export function ChatHistoryPage() {
             Reset
           </button>
         )}
-        {/* Chat / History segmented control. Anchored to the right
-            side of the toolbar via `margin-left: auto`. `flex-shrink:
-            0` keeps the tabs together so they don't collapse. Hidden
-            for group targets — chat-mode is single-AI only. */}
+        {/* Chat / History segmented control. The spacer before the action
+            buttons already pushes everything to the right side of the
+            toolbar, so the tabs naturally sit at the far right after
+            the action buttons. `flex-shrink: 0` keeps them together so
+            they don't collapse if the row is tight. Hidden for group
+            targets — chat-mode is single-AI only. */}
         {!isGroup && (
           <div
             data-testid="view-segmented"
@@ -851,7 +857,6 @@ export function ChatHistoryPage() {
               flexDirection: 'row',
               gap: 0,
               flexShrink: 0,
-              marginLeft: 'auto',
             }}
             role="tablist"
           >
@@ -1617,12 +1622,10 @@ function ChatThemePicker({ aiId, themeState, setThemeState }: ChatThemePickerPro
   const [custom, setCustom] = useState<ChatThemePalette>(
     themeState.overridesByAi[aiId]?.custom ?? {
       bg: '#ffffff',
-      // The custom picker default uses a darker shade for the user
-      // bubble so the inline marks (painted with `accent`, which
-      // defaults to the same blue) stay visible. Picking matching
-      // values for user-bubble and accent would render italics
-      // invisible against the bubble.
-      userBubble: '#1d4ed8',
+      // Same rationale as the Default preset: a neutral dark slate for
+      // the user bubble guarantees contrast with the inline accent
+      // marks (which default to the accent swatch — `#2563eb` here).
+      userBubble: '#1e293b',
       userText: '#ffffff',
       aiBubble: '#f1f5f9',
       accent: '#2563eb',

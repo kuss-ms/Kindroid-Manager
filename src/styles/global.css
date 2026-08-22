@@ -1173,15 +1173,18 @@ pre {
   word-wrap: break-word;
 }
 .chat-bubble.user {
-  /* The user-bubble background comes from the active preset. Text
-     colour comes from `--chat-user-text` (set by `applyChatTheme`),
-     which the Default preset wires to `--text-inverse` so the text
-     stays readable against the saturated `--primary` background in
-     both light and dark mode. The `, #ffffff` fallback covers themes
-     that don't set `--chat-user-text` (e.g. legacy overrides from
-     before this field existed). */
-  background: var(--chat-user-bubble, var(--primary));
-  color: var(--chat-user-text, var(--text-inverse, #ffffff));
+  /* The user-bubble background comes from the active preset. The
+     Default preset uses a fixed dark slate (`#1e293b`) so the inline
+     accent (italic / bold marks, painted with `--chat-accent` =
+     `--primary`) always has enough contrast to be visible — the theme
+     primary is light-blue in dark mode and would otherwise blend into
+     a similarly-coloured bubble background. The `, #1e293b` fallback
+     covers themes that don't set `--chat-user-bubble`.
+     Text colour comes from `--chat-user-text` (default `#ffffff`,
+     white) which reads cleanly on the dark slate in both light and
+     dark mode. */
+  background: var(--chat-user-bubble, #1e293b);
+  color: var(--chat-user-text, #ffffff);
 }
 .chat-bubble.ai {
   background: var(--chat-ai-bubble, var(--surface-2));

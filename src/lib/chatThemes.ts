@@ -54,13 +54,16 @@ export const PRESET_THEMES: ChatThemePreset[] = [
     // commit to a fixed palette.
     palette: {
       bg: 'transparent',
-      // User bubble uses the darker `--primary-hover` so the inline
-      // marks (italic / bold, painted with `--chat-accent` = `--primary`)
-      // stay visible. With `--primary` for both, italicised text on a
-      // saturated blue bubble would be the same colour as the bubble
-      // itself in dark mode and the marks would vanish.
-      userBubble: 'var(--primary-hover)',
-      userText: 'var(--text-inverse, #ffffff)',
+      // User bubble uses a fixed dark slate so the inline marks (painted
+      // with `--chat-accent` = `--primary`) stay visible in BOTH light
+      // and dark mode. Using a theme-aware primary for the bubble
+      // (e.g. `--primary-hover`) makes the italic/bold runs the same
+      // colour as the bubble background in dark mode, where `--primary`
+      // is a light blue that matches `--primary-hover` closely enough
+      // to vanish. A neutral dark slate always contrasts with both
+      // light- and dark-mode accents.
+      userBubble: '#1e293b',
+      userText: '#ffffff',
       aiBubble: 'var(--surface-2)',
       accent: 'var(--primary)',
       text: 'var(--text)',

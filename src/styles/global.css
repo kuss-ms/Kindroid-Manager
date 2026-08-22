@@ -1141,13 +1141,20 @@ pre {
   /* `flex: 1` makes the chat pane fill the remaining vertical space in
      the page column. `padding-bottom` reserves room for the
      position-fixed chat-composer (which overlays the bottom of the
-     viewport) so the last message isn't hidden behind it when the
-     user scrolls to the end. The `.chat-scroll` child keeps
-     `overflow-y: auto` so the bubbles still scroll inside the pane
-     once they outgrow it. */
+     viewport) so two things stay correct:
+       - The last message isn't hidden behind the composer when the
+         user scrolls to the end.
+       - The chat-scroll's scrollbar (which lives on the right edge
+         of `.chat-scroll`, ending at its bottom) stays fully visible.
+     160 px comfortably fits the composer's tallest realistic state
+     — textarea at max-height 160 px plus its 12 px padding on each
+     side and the 1 px top border ≈ 185 px — with some breathing room
+     to spare on the default 2-row composer. The `.chat-scroll` child
+     keeps `overflow-y: auto` so the bubbles still scroll inside the
+     pane once they outgrow it. */
   flex: 1;
   overflow: hidden;
-  padding-bottom: 96px;
+  padding-bottom: 160px;
 }
 .chat-scroll {
   flex: 1;

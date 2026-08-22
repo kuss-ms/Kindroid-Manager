@@ -47,23 +47,17 @@ export const PRESET_THEMES: ChatThemePreset[] = [
     id: 'default',
     label: 'Default',
     // The "Default" preset adapts to the active light/dark theme by
-    // referencing the page-level CSS custom properties (--surface-2,
-    // --text) instead of baking a specific colour. This way the same
-    // preset renders correctly whether the user is on light or dark
-    // mode — only the explicit presets (Sepia / Midnight / Paper)
-    // commit to a fixed palette.
+    // referencing the page-level CSS custom properties. The bubble
+    // colours (`--primary-soft`, `--surface-2`) are deliberately not the
+    // same as the accent (`--primary`) so inline marks (italic, bold)
+    // are always visible. `--primary-soft` resolves to a light blue in
+    // light mode and a dark blue in dark mode, so the user bubble keeps
+    // its "user" identity without baking a fixed colour that breaks one
+    // of the two themes.
     palette: {
       bg: 'transparent',
-      // User bubble uses a fixed dark slate so the inline marks (painted
-      // with `--chat-accent` = `--primary`) stay visible in BOTH light
-      // and dark mode. Using a theme-aware primary for the bubble
-      // (e.g. `--primary-hover`) makes the italic/bold runs the same
-      // colour as the bubble background in dark mode, where `--primary`
-      // is a light blue that matches `--primary-hover` closely enough
-      // to vanish. A neutral dark slate always contrasts with both
-      // light- and dark-mode accents.
-      userBubble: '#1e293b',
-      userText: '#ffffff',
+      userBubble: 'var(--primary-soft)',
+      userText: 'var(--text)',
       aiBubble: 'var(--surface-2)',
       accent: 'var(--primary)',
       text: 'var(--text)',
@@ -77,7 +71,11 @@ export const PRESET_THEMES: ChatThemePreset[] = [
       userBubble: '#a07a4c',
       userText: '#ffffff',
       aiBubble: '#e8dcc0',
-      accent: '#a07a4c',
+      // Dark brown so the inline marks (and the quote bar) contrast with
+      // the medium-brown user bubble and the light AI bubble. The old
+      // `#a07a4c` matched the user bubble exactly and rendered italics
+      // invisible.
+      accent: '#3e2c1a',
       text: '#3e2c1a',
     },
   },
@@ -89,7 +87,11 @@ export const PRESET_THEMES: ChatThemePreset[] = [
       userBubble: '#60a5fa',
       userText: '#0b1220',
       aiBubble: '#1f2a44',
-      accent: '#60a5fa',
+      // Warm yellow — evokes stars against the night-sky palette and
+      // contrasts with both the light-blue user bubble and the dark
+      // AI bubble. The old `#60a5fa` matched the user bubble and made
+      // italics disappear.
+      accent: '#fbbf24',
       text: '#e2e8f0',
     },
   },
@@ -101,7 +103,10 @@ export const PRESET_THEMES: ChatThemePreset[] = [
       userBubble: '#16a34a',
       userText: '#ffffff',
       aiBubble: '#f0fdf4',
-      accent: '#16a34a',
+      // Dark forest green so the inline marks contrast against the
+      // bright-green user bubble. The old `#16a34a` matched the user
+      // bubble and made italics disappear.
+      accent: '#14532d',
       text: '#0f172a',
     },
   },

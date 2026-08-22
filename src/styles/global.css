@@ -1179,18 +1179,13 @@ pre {
   word-wrap: break-word;
 }
 .chat-bubble.user {
-  /* The user-bubble background comes from the active preset. The
-     Default preset uses a fixed dark slate (`#1e293b`) so the inline
-     accent (italic / bold marks, painted with `--chat-accent` =
-     `--primary`) always has enough contrast to be visible — the theme
-     primary is light-blue in dark mode and would otherwise blend into
-     a similarly-coloured bubble background. The `, #1e293b` fallback
-     covers themes that don't set `--chat-user-bubble`.
-     Text colour comes from `--chat-user-text` (default `#ffffff`,
-     white) which reads cleanly on the dark slate in both light and
-     dark mode. */
-  background: var(--chat-user-bubble, #1e293b);
-  color: var(--chat-user-text, #ffffff);
+  /* User-bubble background and text come from the active preset. The
+     Default preset wires both to theme-aware tokens (`--primary-soft`,
+     `--text`) so the bubble stays readable in light and dark mode.
+     The `, #dbeafe` fallback covers themes that don't set
+     `--chat-user-bubble`. */
+  background: var(--chat-user-bubble, #dbeafe);
+  color: var(--chat-user-text, #0f172a);
 }
 .chat-bubble.ai {
   background: var(--chat-ai-bubble, var(--surface-2));
@@ -1198,19 +1193,19 @@ pre {
   border: 1px solid var(--border);
 }
 .chat-bubble em {
-  /* Italicised runs (single `*…*`). We paint with `--chat-accent` so
-     they pop on both AI bubbles (light gray / dark blue background)
-     and user bubbles (saturated blue background). The accent is
-     guaranteed to contrast with the bubble in the Default preset
-     because userBubble uses `--primary-hover` (darker) while accent
-     uses `--primary` (lighter). */
+  /* Italicised runs (`*…*`). No accent paint here — the bubble's
+     own text colour is used so italics always stay readable. The
+     `font-style: italic` alone is enough of a visual cue, and painting
+     the same colour as `--chat-accent` made italics invisible whenever
+     the user picked a custom palette where the accent matched the
+     bubble. The accent is reserved for structural elements (the quote
+     bar, the favourited star). */
   font-style: italic;
-  color: var(--chat-accent, var(--primary));
 }
 .chat-bubble strong {
-  /* Bold runs (`**…**`) — same accent treatment. */
+  /* Bold runs (`**…**`). Same as <em> — inherit the bubble's text
+     colour, lean on `font-weight: 700` for emphasis. */
   font-weight: 700;
-  color: var(--chat-accent, var(--primary));
 }
 .chat-quote {
   display: block;

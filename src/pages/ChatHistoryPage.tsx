@@ -1645,11 +1645,12 @@ function ChatThemePicker({ aiId, themeState, setThemeState }: ChatThemePickerPro
   const [custom, setCustom] = useState<ChatThemePalette>(
     themeState.overridesByAi[aiId]?.custom ?? {
       bg: '#ffffff',
-      // Same rationale as the Default preset: a neutral dark slate for
-      // the user bubble guarantees contrast with the inline accent
-      // marks (which default to the accent swatch — `#2563eb` here).
-      userBubble: '#1e293b',
-      userText: '#ffffff',
+      // Light blue user bubble with a darker blue accent — the contrast
+      // is what keeps inline marks (italic, bold) and the quote bar
+      // visible. Picking equal colours for `userBubble` and `accent`
+      // renders the inline marks invisible.
+      userBubble: '#dbeafe',
+      userText: '#0f172a',
       aiBubble: '#f1f5f9',
       accent: '#2563eb',
       text: '#0f172a',

@@ -768,6 +768,47 @@ export function ChatHistoryPage() {
             </option>
           ))}
         </select>
+        {/* Chat / History segmented control. Sits immediately to the
+            right of the target select so they share one line. `flexShrink:
+            0` keeps the tabs together (they'd otherwise collapse when
+            the select option text is long). The wider action buttons
+            (Sync / Automation / Reset) wrap to a second line below
+            thanks to the row's `flex-wrap: wrap` — but the tabs always
+            stay adjacent to the select. Hidden for group targets —
+            chat-mode is single-AI only. */}
+        {!isGroup && (
+          <div
+            data-testid="view-segmented"
+            style={{
+              flexDirection: 'row',
+              gap: 0,
+              flexShrink: 0,
+              marginLeft: 4,
+            }}
+            role="tablist"
+          >
+            <button
+              type="button"
+              role="tab"
+              aria-selected={view === 'chat'}
+              className={`btn btn-sm ${view === 'chat' ? 'btn-primary' : ''}`}
+              onClick={() => setView('chat')}
+              style={{ borderTopRightRadius: 0, borderBottomRightRadius: 0 }}
+            >
+              Chat
+            </button>
+            <button
+              type="button"
+              role="tab"
+              aria-selected={view === 'history'}
+              className={`btn btn-sm ${view === 'history' ? 'btn-primary' : ''}`}
+              onClick={() => setView('history')}
+              style={{ borderTopLeftRadius: 0, borderBottomLeftRadius: 0 }}
+            >
+              History
+            </button>
+          </div>
+        )}
         <div style={{ flex: 1 }} />
         {showHistoryActions && showSync && (
           <button
@@ -837,42 +878,6 @@ export function ChatHistoryPage() {
           >
             Reset
           </button>
-        )}
-        {/* Chat / History segmented control. Pushed to the far right
-            via `margin-left: auto` so it stays out of the way of the
-            primary action buttons. Hidden for group targets — chat-mode
-            is single-AI only. */}
-        {!isGroup && (
-          <div
-            data-testid="view-segmented"
-            style={{
-              flexDirection: 'row',
-              gap: 0,
-              marginLeft: 'auto',
-            }}
-            role="tablist"
-          >
-            <button
-              type="button"
-              role="tab"
-              aria-selected={view === 'chat'}
-              className={`btn btn-sm ${view === 'chat' ? 'btn-primary' : ''}`}
-              onClick={() => setView('chat')}
-              style={{ borderTopRightRadius: 0, borderBottomRightRadius: 0 }}
-            >
-              Chat
-            </button>
-            <button
-              type="button"
-              role="tab"
-              aria-selected={view === 'history'}
-              className={`btn btn-sm ${view === 'history' ? 'btn-primary' : ''}`}
-              onClick={() => setView('history')}
-              style={{ borderTopLeftRadius: 0, borderBottomLeftRadius: 0 }}
-            >
-              History
-            </button>
-          </div>
         )}
       </div>
 

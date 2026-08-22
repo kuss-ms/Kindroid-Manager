@@ -1128,6 +1128,22 @@ pre {
 }
 
 /* --- Chat view --- */
+/* In chat mode the chat-composer is `position: fixed` at the bottom
+   of the viewport. If a page-level scrollbar were to appear on
+   `.app-main` (its default `overflow: auto` triggers on the
+   slightest content overflow), its thumb at the bottom would be
+   hidden behind the composer — the scroll position would still
+   work, but the user couldn't see the draggable handle. The class
+   is toggled by `useEffect` in `ChatHistoryPage` whenever a chat
+   view is active; we set `overflow: hidden` so any tiny overflow is
+   clipped (not scrollable) instead of producing a hidden scrollbar.
+   The `.chat-scroll` inside `.chat-view` still scrolls internally
+   via `overflow-y: auto`, so this only affects the outer page
+   scroll, not the messages. */
+body.chat-mode .app-main {
+  overflow: hidden;
+}
+
 /* The wrapper holds the scrollable list of bubbles + the composer.
    `--chat-*` custom properties are written at runtime by
    `applyChatTheme` in src/lib/chatThemes.ts. */
@@ -1141,20 +1157,21 @@ pre {
   /* `flex: 1` makes the chat pane fill the remaining vertical space in
      the page column. `padding-bottom` reserves room for the
      position-fixed chat-composer (which overlays the bottom of the
-     viewport) so two things stay correct:
-       - The last message isn't hidden behind the composer when the
-         user scrolls to the end.
-       - The chat-scroll's scrollbar (which lives on the right edge
-         of `.chat-scroll`, ending at its bottom) stays fully visible.
-     160 px comfortably fits the composer's tallest realistic state
-     — textarea at max-height 160 px plus its 12 px padding on each
-     side and the 1 px top border ≈ 185 px — with some breathing room
-     to spare on the default 2-row composer. The `.chat-scroll` child
-     keeps `overflow-y: auto` so the bubbles still scroll inside the
-     pane once they outgrow it. */
+     viewport) so the last message isn't hidden behind it when the
+     user scrolls to the end. The `.chat-scroll` child keeps
+     `overflow-y: auto` so the bubbles still scroll inside the pane
+     once they outgrow it.
+
+     The padding here is deliberately modest (96 px) to match the
+     visual distance the user wanted between the last message and
+     the composer. The scrollbar visibility issue is solved
+     elsewhere — see the `body.chat-mode .app-main { overflow: hidden }`
+     rule below, which prevents a browser-level scrollbar on
+     `.app-main` from appearing at all in chat mode (its thumb
+     would otherwise be hidden by the fixed composer). */
   flex: 1;
   overflow: hidden;
-  padding-bottom: 160px;
+  padding-bottom: 96px;
 }
 .chat-scroll {
   flex: 1;

@@ -768,37 +768,6 @@ export function ChatHistoryPage() {
             </option>
           ))}
         </select>
-        {/* Chat / History segmented control. Inlined next to the target
-            select so the layout stays compact on narrower viewports.
-            Hidden for group targets — chat-mode is single-AI only. */}
-        {!isGroup && (
-          <div
-            data-testid="view-segmented"
-            style={{ flexDirection: 'row', gap: 0, marginLeft: 4 }}
-            role="tablist"
-          >
-            <button
-              type="button"
-              role="tab"
-              aria-selected={view === 'chat'}
-              className={`btn btn-sm ${view === 'chat' ? 'btn-primary' : ''}`}
-              onClick={() => setView('chat')}
-              style={{ borderTopRightRadius: 0, borderBottomRightRadius: 0 }}
-            >
-              Chat
-            </button>
-            <button
-              type="button"
-              role="tab"
-              aria-selected={view === 'history'}
-              className={`btn btn-sm ${view === 'history' ? 'btn-primary' : ''}`}
-              onClick={() => setView('history')}
-              style={{ borderTopLeftRadius: 0, borderBottomLeftRadius: 0 }}
-            >
-              History
-            </button>
-          </div>
-        )}
         <div style={{ flex: 1 }} />
         {showHistoryActions && showSync && (
           <button
@@ -868,6 +837,42 @@ export function ChatHistoryPage() {
           >
             Reset
           </button>
+        )}
+        {/* Chat / History segmented control. Pushed to the far right
+            via `margin-left: auto` so it stays out of the way of the
+            primary action buttons. Hidden for group targets — chat-mode
+            is single-AI only. */}
+        {!isGroup && (
+          <div
+            data-testid="view-segmented"
+            style={{
+              flexDirection: 'row',
+              gap: 0,
+              marginLeft: 'auto',
+            }}
+            role="tablist"
+          >
+            <button
+              type="button"
+              role="tab"
+              aria-selected={view === 'chat'}
+              className={`btn btn-sm ${view === 'chat' ? 'btn-primary' : ''}`}
+              onClick={() => setView('chat')}
+              style={{ borderTopRightRadius: 0, borderBottomRightRadius: 0 }}
+            >
+              Chat
+            </button>
+            <button
+              type="button"
+              role="tab"
+              aria-selected={view === 'history'}
+              className={`btn btn-sm ${view === 'history' ? 'btn-primary' : ''}`}
+              onClick={() => setView('history')}
+              style={{ borderTopLeftRadius: 0, borderBottomLeftRadius: 0 }}
+            >
+              History
+            </button>
+          </div>
         )}
       </div>
 
@@ -1458,8 +1463,9 @@ function ChatView({
           disabled={suggestDisabled}
           title="Suggest a follow-up based on the conversation so far"
           data-testid="chat-suggest"
+          aria-label="Suggest a follow-up"
         >
-          ✨ Suggest
+          ✨
         </button>
         <div style={{ position: 'relative' }}>
           <button
@@ -1471,8 +1477,9 @@ function ChatView({
             data-testid="chat-rewind"
             aria-haspopup="true"
             aria-expanded={rewindOpen}
+            aria-label="Rewind"
           >
-            ↩️ Rewind
+            ↩️
           </button>
           {rewindOpen && (
             <div
@@ -1563,9 +1570,15 @@ function Bubble({ message, pending, onToggleFavourite }: BubbleProps) {
               padding: '2px 6px',
               background: 'transparent',
               border: 'none',
+              // Inline `color` wins over `.chat-meta`'s `text-muted`,
+              // so favourited stars actually show the accent colour.
               color: message.favourite ? 'var(--chat-accent, var(--primary))' : 'inherit',
-              opacity: 0.7,
+              opacity: pending ? 0.6 : 1,
               marginLeft: 'auto',
+              // Bump the font-size a touch so the glyph reads better
+              // at the small meta-row height.
+              fontSize: '1rem',
+              lineHeight: 1,
             }}
           >
             {message.favourite ? '★' : '☆'}
@@ -1602,6 +1615,7 @@ function ChatThemePicker({ aiId, themeState, setThemeState }: ChatThemePickerPro
     themeState.overridesByAi[aiId]?.custom ?? {
       bg: '#ffffff',
       userBubble: '#2563eb',
+      userText: '#ffffff',
       aiBubble: '#f1f5f9',
       accent: '#2563eb',
       text: '#0f172a',
@@ -1735,9 +1749,10 @@ function ChatThemePicker({ aiId, themeState, setThemeState }: ChatThemePickerPro
                 [
                   { key: 'bg', label: 'Background' },
                   { key: 'userBubble', label: 'Your bubble' },
+                  { key: 'userText', label: 'Your text colour' },
                   { key: 'aiBubble', label: 'AI bubble' },
                   { key: 'accent', label: 'Accent (quotes, stars)' },
-                  { key: 'text', label: 'Text colour' },
+                  { key: 'text', label: 'AI text colour' },
                 ] as const
               ).map(({ key, label }) => (
                 <label

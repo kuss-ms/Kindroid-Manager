@@ -45,6 +45,7 @@ describe('chatThemes', () => {
       custom: {
         bg: '#000000',
         userBubble: '#111111',
+        userText: '#ffffff',
         aiBubble: '#222222',
         accent: '#333333',
         text: '#ffffff',
@@ -54,6 +55,7 @@ describe('chatThemes', () => {
     const loaded = loadChatTheme();
     expect(loaded.base.presetId).toBe(CUSTOM_PRESET_ID);
     expect(loaded.base.custom?.bg).toBe('#000000');
+    expect(loaded.base.custom?.userText).toBe('#ffffff');
   });
 
   it('round-trips per-ai overrides', () => {
@@ -93,6 +95,36 @@ describe('chatThemes', () => {
     expect(el.style.getPropertyValue('--chat-bg')).toBe(
       PRESET_THEMES.find((p) => p.id === 'paper')!.palette.bg,
     );
+  });
+
+  it('applyChatTheme writes --chat-user-text from the active palette', () => {
+    const state = defaultChatThemeState();
+    state.base = { presetId: 'midnight' };
+    const el = document.createElement('div');
+    applyChatTheme(state, 'ai_x', el);
+    expect(el.style.getPropertyValue('--chat-user-text')).toBe(
+      PRESET_THEMES.find((p) => p.id === 'midnight')!.palette.userText,
+    );
+  });
+
+  it('sanitisePalette fills in a default userText when missing', () => {
+    // Legacy overrides saved before the userText field existed should
+    // still parse and default to white.
+    localStorage.setItem(
+      'kindroid-manager.chat-theme',
+      JSON.stringify({
+        presetId: 'custom',
+        custom: {
+          bg: '#000000',
+          userBubble: '#111111',
+          aiBubble: '#222222',
+          accent: '#333333',
+          text: '#ffffff',
+        },
+      }),
+    );
+    const loaded = loadChatTheme();
+    expect(loaded.base.custom?.userText).toBe('#ffffff');
   });
 
   it('drops override keys that no longer exist on save', () => {

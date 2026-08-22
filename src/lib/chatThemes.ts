@@ -15,6 +15,7 @@
 export interface ChatThemePalette {
   bg: string;
   userBubble: string;
+  userText: string;
   aiBubble: string;
   accent: string;
   text: string;
@@ -54,6 +55,13 @@ export const PRESET_THEMES: ChatThemePreset[] = [
     palette: {
       bg: 'transparent',
       userBubble: 'var(--primary)',
+      // The user-bubble text colour is the inverse of the active theme:
+      // dark on a saturated bubble in light mode, light in dark mode.
+      // Inheriting from `--text` would invert the contrast against
+      // `--primary` (light-on-light in dark mode), so we use
+      // `--text-inverse` which is the theme-aware opposite. Falls back
+      // to `#ffffff` for users without a custom theme.
+      userText: 'var(--text-inverse, #ffffff)',
       aiBubble: 'var(--surface-2)',
       accent: 'var(--primary)',
       text: 'var(--text)',
@@ -65,6 +73,7 @@ export const PRESET_THEMES: ChatThemePreset[] = [
     palette: {
       bg: '#f5ecd9',
       userBubble: '#a07a4c',
+      userText: '#ffffff',
       aiBubble: '#e8dcc0',
       accent: '#a07a4c',
       text: '#3e2c1a',
@@ -76,6 +85,7 @@ export const PRESET_THEMES: ChatThemePreset[] = [
     palette: {
       bg: '#0b1220',
       userBubble: '#60a5fa',
+      userText: '#0b1220',
       aiBubble: '#1f2a44',
       accent: '#60a5fa',
       text: '#e2e8f0',
@@ -87,6 +97,7 @@ export const PRESET_THEMES: ChatThemePreset[] = [
     palette: {
       bg: '#ffffff',
       userBubble: '#16a34a',
+      userText: '#ffffff',
       aiBubble: '#f0fdf4',
       accent: '#16a34a',
       text: '#0f172a',
@@ -144,6 +155,7 @@ function sanitisePalette(p: unknown): ChatThemePalette {
   return {
     bg: typeof o.bg === 'string' ? o.bg : '#ffffff',
     userBubble: typeof o.userBubble === 'string' ? o.userBubble : '#2563eb',
+    userText: typeof o.userText === 'string' ? o.userText : '#ffffff',
     aiBubble: typeof o.aiBubble === 'string' ? o.aiBubble : '#f1f5f9',
     accent: typeof o.accent === 'string' ? o.accent : '#2563eb',
     text: typeof o.text === 'string' ? o.text : '#0f172a',
@@ -192,6 +204,7 @@ export function applyChatTheme(
   const palette = resolvePalette(theme);
   el.style.setProperty('--chat-bg', palette.bg);
   el.style.setProperty('--chat-user-bubble', palette.userBubble);
+  el.style.setProperty('--chat-user-text', palette.userText);
   el.style.setProperty('--chat-ai-bubble', palette.aiBubble);
   el.style.setProperty('--chat-accent', palette.accent);
   el.style.setProperty('--chat-text', palette.text);

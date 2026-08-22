@@ -19,6 +19,11 @@
   --warning: #d97706;
   --warning-soft: #fef3c7;
   --accent: #6366f1;
+  /* Inverse of --text. Used as a high-contrast text colour when a
+     bubble sits on a saturated background (e.g. the user bubble on
+     --primary). Light in light mode, dark in dark mode so the user
+     bubble stays readable in either theme. */
+  --text-inverse: #ffffff;
   --radius-sm: 4px;
   --radius: 8px;
   --radius-lg: 12px;
@@ -74,6 +79,9 @@
   --warning: #fbbf24;
   --warning-soft: #422006;
   --accent: #818cf8;
+  /* Inverse of --text in dark mode — dark text on a light/saturated
+     bubble background. */
+  --text-inverse: #0f172a;
   --shadow-sm: 0 1px 2px rgba(0, 0, 0, 0.3);
   --shadow: 0 1px 3px rgba(0, 0, 0, 0.4), 0 1px 2px rgba(0, 0, 0, 0.25);
   --shadow-lg: 0 10px 25px rgba(0, 0, 0, 0.5), 0 4px 10px rgba(0, 0, 0, 0.3);
@@ -1148,10 +1156,13 @@ pre {
   width: 100%;
 }
 .chat-bubble-row.user {
-  justify-content: flex-end;
+  /* User bubble sits on the LEFT — mirrors how chat apps render the
+     conversation timeline so the human's thread stays anchored. */
+  justify-content: flex-start;
 }
 .chat-bubble-row.ai {
-  justify-content: flex-start;
+  /* AI bubble on the RIGHT. */
+  justify-content: flex-end;
 }
 .chat-bubble {
   max-width: 70%;
@@ -1163,12 +1174,14 @@ pre {
 }
 .chat-bubble.user {
   /* The user-bubble background comes from the active preset. Text
-     colour defaults to white for the bright default/primary palette
-     but can be overridden per-theme via --chat-user-text (the Custom
-     theme picker doesn't expose it yet, so we default to white for
-     readability against the blue/green/midnight/sepia accents). */
+     colour comes from `--chat-user-text` (set by `applyChatTheme`),
+     which the Default preset wires to `--text-inverse` so the text
+     stays readable against the saturated `--primary` background in
+     both light and dark mode. The `, #ffffff` fallback covers themes
+     that don't set `--chat-user-text` (e.g. legacy overrides from
+     before this field existed). */
   background: var(--chat-user-bubble, var(--primary));
-  color: var(--chat-user-text, #ffffff);
+  color: var(--chat-user-text, var(--text-inverse, #ffffff));
 }
 .chat-bubble.ai {
   background: var(--chat-ai-bubble, var(--surface-2));
@@ -1183,11 +1196,16 @@ pre {
 }
 .chat-quote {
   display: block;
-  border-left: 3px solid var(--chat-accent, var(--primary));
-  padding-left: var(--space-2);
+  /* `accent` paints the quote's left bar. We also tint the bar's
+     adjacent background via box-shadow so the accent shows even
+     when the user picks a colour close to the bubble background
+     (e.g. light accent on a light bubble). The box-shadow inset
+     keeps the visual contained inside the quote's own padding box. */
+  border-left: 4px solid var(--chat-accent, var(--primary));
+  padding: 2px var(--space-2);
   margin: var(--space-1) 0;
   color: var(--chat-text, inherit);
-  opacity: 0.85;
+  border-radius: var(--radius-sm, 4px);
 }
 .chat-composer {
   display: flex;

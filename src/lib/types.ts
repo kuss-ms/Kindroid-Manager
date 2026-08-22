@@ -400,3 +400,18 @@ export interface AutomationInstructionsDefaults {
   journal: string;
   summary: string;
 }
+
+export interface SendChatMessageInput {
+  ai_id: string;
+  message: string;
+}
+
+export interface RewindChatInput {
+  ai_id: string;
+  count: number;
+}
+
+export interface SuggestChatUserMessageInput {
+  ai_id: string;
+  existing_message: string;
+}

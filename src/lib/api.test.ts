@@ -130,9 +130,7 @@ describe('errorMessage', () => {
   });
 
   it('maps AppError::ShareCode / Database / Internal', () => {
-    expect(errorMessage(wrapped('{"kind":"share_code","message":"bad png"}'))).toContain(
-      'bad png',
-    );
+    expect(errorMessage(wrapped('{"kind":"share_code","message":"bad png"}'))).toContain('bad png');
     expect(errorMessage(wrapped('{"kind":"database","message":"locked"}'))).toContain('locked');
     expect(errorMessage(wrapped('{"kind":"internal","message":"oops"}'))).toContain('oops');
   });
@@ -164,9 +162,9 @@ describe('errorMessage', () => {
     expect(errorMessage(wrapped('{"kind":"kindroid","code":"server","body":"500"}'))).toContain(
       '500',
     );
-    expect(errorMessage(wrapped('{"kind":"kindroid","code":"network","body":"timeout"}'))).toContain(
-      '(network) timeout',
-    );
+    expect(
+      errorMessage(wrapped('{"kind":"kindroid","code":"network","body":"timeout"}')),
+    ).toContain('(network) timeout');
   });
 
   it('maps AiError variants (nested inside AppError::Ai)', () => {

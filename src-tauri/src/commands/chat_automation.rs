@@ -496,7 +496,15 @@ async fn process_journal(
         DEFAULT_JOURNAL_INSTRUCTIONS,
     );
     let prompt = journal_prompt(&instructions, &context, &prior, state.journal_cap, ai_name);
-    let response = ai_completion(repo, ai, &state, journal_system_prompt(ai_name), prompt, None).await?;
+    let response = ai_completion(
+        repo,
+        ai,
+        &state,
+        journal_system_prompt(ai_name),
+        prompt,
+        None,
+    )
+    .await?;
     state.journal_last_error = None;
     repo.upsert_chat_automation_state(&state).await?;
     if debug_response_capture_enabled(&**repo).await {

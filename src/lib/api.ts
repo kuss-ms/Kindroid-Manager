@@ -16,11 +16,14 @@ import type {
   ResetChatSummaryInput,
   ClearStuckAutoJournalRunsInput,
   ClearStuckAutoJournalRunsResult,
+  RewindChatInput,
   RunSummaryNowInput,
   RunSummaryNowResult,
+  SendChatMessageInput,
   SetAutomationInstructionsInput,
   SetChatAutomationSettingsInput,
   SettingsDto,
+  SuggestChatUserMessageInput,
   AiSettingsDto,
   AiChatCompletionResponse,
   Target,
@@ -332,8 +335,7 @@ export const api = {
     invoke<number>('chat_message_count', { aiId, kind }),
   getChatSyncState: (aiId: string, kind: TargetKind) =>
     invoke<ChatSyncState | null>('get_chat_sync_state', { aiId, kind }),
-  getCurrentSync: () =>
-    invoke<{ ai_id: string; kind: TargetKind } | null>('get_current_sync'),
+  getCurrentSync: () => invoke<{ ai_id: string; kind: TargetKind } | null>('get_current_sync'),
   startChatSync: (aiId: string, kind: TargetKind) =>
     invoke<void>('start_chat_sync', { aiId, kind }),
   cancelChatSync: () => invoke<void>('cancel_chat_sync'),
@@ -341,6 +343,11 @@ export const api = {
     invoke<number>('reset_chat_history', { aiId, kind }),
   setChatMessageFavourite: (aiId: string, kind: TargetKind, kindroidMsgId: string) =>
     invoke<boolean>('toggle_chat_message_favourite', { aiId, kind, kindroidMsgId }),
+  sendChatMessage: (input: SendChatMessageInput) =>
+    invoke<ChatMessage>('send_chat_message', { input }),
+  rewindChat: (input: RewindChatInput) => invoke<number>('rewind_chat', { input }),
+  suggestChatUserMessage: (input: SuggestChatUserMessageInput) =>
+    invoke<string>('suggest_chat_user_message', { input }),
 
   // Journal entries (character-scoped)
   listJournalEntries: (characterId: string) =>

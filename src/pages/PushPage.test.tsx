@@ -73,11 +73,7 @@ function character(id: string, default_target_id: string | null): Character {
   };
 }
 
-function setupMocks(opts: {
-  character: Character;
-  targets: Target[];
-  defaultTargetId?: string;
-}) {
+function setupMocks(opts: { character: Character; targets: Target[]; defaultTargetId?: string }) {
   vi.mocked(api.listCharacters).mockResolvedValue([opts.character]);
   vi.mocked(api.listTargets).mockResolvedValue(opts.targets);
   vi.mocked(api.getCharacter).mockResolvedValue(opts.character);
@@ -117,10 +113,7 @@ describe('PushPage default-target auto-select', () => {
     const urlTid = '00000000-0000-0000-0000-000000000030';
     setupMocks({
       character: character(cid, defaultTid),
-      targets: [
-        target(defaultTid, 'Aria', 'ai_1'),
-        target(urlTid, 'Other', 'ai_2'),
-      ],
+      targets: [target(defaultTid, 'Aria', 'ai_1'), target(urlTid, 'Other', 'ai_2')],
     });
 
     renderPush(`/push?characterId=${cid}&targetId=${urlTid}`);
@@ -142,7 +135,9 @@ describe('PushPage default-target auto-select', () => {
     });
 
     const { rerender } = render(
-      <QueryClientProvider client={new QueryClient({ defaultOptions: { queries: { retry: false } } })}>
+      <QueryClientProvider
+        client={new QueryClient({ defaultOptions: { queries: { retry: false } } })}
+      >
         <MemoryRouter initialEntries={[`/push?characterId=${cid}`]}>
           <Routes>
             <Route path="/push" element={<PushPage />} />
@@ -173,7 +168,9 @@ describe('PushPage default-target auto-select', () => {
     // did not auto-snap back by re-rendering with the same data (the ref
     // persists across the same component instance).
     rerender(
-      <QueryClientProvider client={new QueryClient({ defaultOptions: { queries: { retry: false } } })}>
+      <QueryClientProvider
+        client={new QueryClient({ defaultOptions: { queries: { retry: false } } })}
+      >
         <MemoryRouter initialEntries={[`/push?characterId=${cid}`]}>
           <Routes>
             <Route path="/push" element={<PushPage />} />

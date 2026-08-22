@@ -198,6 +198,13 @@ async fn run_loop_inner(
         .await?
         {
             DrainOutcome::Drained => {
+                // Centralised here (not inside `drain_pages`) because
+                // that function has three distinct `Drained` return
+                // points. Cleanup NULLs any `chat_automation_state`
+                // cursor column that still references a synthetic
+                // `local:` id — this can happen if the user rewound a
+                // local-only bubble before the server reconciled it.
+                let _ = repo.null_local_only_automation_cursors(&ai_id).await?;
                 if state.full_sync_done {
                     super::chat_automation::run_automation_cycle(
                         repo.clone(),
@@ -374,6 +381,28 @@ async fn drain_pages(
             .collect();
 
         let touched = repo.upsert_chat_messages(ai_id, kind, &incoming).await?;
+        // Reconcile any local-only rows (synthetic `local:<uuid>`
+        // `kindroid_msg_id`) whose content matches a freshly-arrived
+        // server row. The reconcile loop runs BEFORE the cursor
+        // advance so the automation cycle on the next iteration sees
+        // the rewritten cursor instead of the synthetic id.
+        for m in &incoming {
+            if m.kindroid_msg_id.starts_with("local:") {
+                // Server can't echo back a `local:` id — nothing to
+                // reconcile. (Defensive guard; the API doesn't return
+                // synthetic ids but a future bug shouldn't cascade.)
+                continue;
+            }
+            if let Some((local_id, old_msg_id)) = repo
+                .find_local_only_chat_message(ai_id, kind, &m.sender, m.timestamp, &m.message)
+                .await?
+            {
+                repo.rename_chat_message_id(local_id, &m.kindroid_msg_id)
+                    .await?;
+                repo.rewrite_chat_automation_cursor(ai_id, &old_msg_id, &m.kindroid_msg_id)
+                    .await?;
+            }
+        }
         // `touched` is "inserts + content-actually-changed updates",
         // thanks to the WHERE clause on the upsert. We don't add it to
         // `state.total` because the same row can be touched on later

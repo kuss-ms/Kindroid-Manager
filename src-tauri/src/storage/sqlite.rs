@@ -998,6 +998,193 @@ impl Repository for SqliteRepository {
         Ok(n)
     }
 
+    async fn find_local_only_chat_message(
+        &self,
+        ai_id: &str,
+        kind: TargetKind,
+        sender: &str,
+        timestamp: i64,
+        message: &str,
+    ) -> Result<Option<(Uuid, String)>, StorageError> {
+        let conn = lock(&self.conn).await;
+        let row: Option<(String, String)> = conn
+            .query_row(
+                "SELECT id, kindroid_msg_id FROM chat_messages
+                 WHERE ai_id = ?1 AND kind = ?2 AND sender = ?3
+                   AND timestamp = ?4 AND message = ?5
+                   AND kindroid_msg_id LIKE 'local:%'
+                 LIMIT 1",
+                params![ai_id, kind.as_str(), sender, timestamp, message],
+                |r| Ok((r.get(0)?, r.get(1)?)),
+            )
+            .optional()
+            .map_err(|e| StorageError::Database(e.to_string()))?;
+        Ok(row.and_then(|(id, msg_id)| Uuid::parse_str(&id).ok().map(|u| (u, msg_id))))
+    }
+
+    async fn rename_chat_message_id(
+        &self,
+        local_id: Uuid,
+        new_msg_id: &str,
+    ) -> Result<usize, StorageError> {
+        let conn = lock(&self.conn).await;
+        let n = conn
+            .execute(
+                "UPDATE chat_messages
+                    SET kindroid_msg_id = ?2, fetched_at = ?3
+                  WHERE id = ?1",
+                params![local_id.to_string(), new_msg_id, Utc::now().to_rfc3339()],
+            )
+            .map_err(|e| StorageError::Database(e.to_string()))?;
+        Ok(n)
+    }
+
+    async fn rewrite_chat_automation_cursor(
+        &self,
+        ai_id: &str,
+        old_id: &str,
+        new_id: &str,
+    ) -> Result<usize, StorageError> {
+        let conn = lock(&self.conn).await;
+        let tx = conn
+            .unchecked_transaction()
+            .map_err(|e| StorageError::Database(e.to_string()))?;
+        // chat_automation_state + auto_journal_runs have no `kind`
+        // column (verified against migrations 0007 + 0014) — they're
+        // AI-only by construction.
+        let mut total = 0usize;
+        let updates: [(&str, &str); 7] = [
+            (
+                "UPDATE chat_automation_state SET journal_cursor_msg_id = ?3
+                  WHERE ai_id = ?1 AND journal_cursor_msg_id = ?2",
+                "chat_automation_state.journal_cursor_msg_id",
+            ),
+            (
+                "UPDATE chat_automation_state SET summary_cursor_msg_id = ?3
+                  WHERE ai_id = ?1 AND summary_cursor_msg_id = ?2",
+                "chat_automation_state.summary_cursor_msg_id",
+            ),
+            (
+                "UPDATE chat_automation_state SET pending_summary_cursor_msg_id = ?3
+                  WHERE ai_id = ?1 AND pending_summary_cursor_msg_id = ?2",
+                "chat_automation_state.pending_summary_cursor_msg_id",
+            ),
+            (
+                "UPDATE auto_journal_runs SET start_cursor_msg_id = ?3
+                  WHERE ai_id = ?1 AND start_cursor_msg_id = ?2",
+                "auto_journal_runs.start_cursor_msg_id",
+            ),
+            (
+                "UPDATE auto_journal_runs SET end_cursor_msg_id = ?3
+                  WHERE ai_id = ?1 AND end_cursor_msg_id = ?2",
+                "auto_journal_runs.end_cursor_msg_id",
+            ),
+            (
+                "UPDATE auto_journal_entries SET source_start_msg_id = ?3
+                  WHERE ai_id = ?1 AND source_start_msg_id = ?2 AND status = 'pending'",
+                "auto_journal_entries.source_start_msg_id",
+            ),
+            (
+                "UPDATE auto_journal_entries SET source_end_msg_id = ?3
+                  WHERE ai_id = ?1 AND source_end_msg_id = ?2 AND status = 'pending'",
+                "auto_journal_entries.source_end_msg_id",
+            ),
+        ];
+        for (sql, label) in updates {
+            let n = tx
+                .execute(sql, params![ai_id, old_id, new_id])
+                .map_err(|e| StorageError::Database(format!("rewrite {label}: {e}")))?;
+            total += n;
+        }
+        tx.commit()
+            .map_err(|e| StorageError::Database(e.to_string()))?;
+        Ok(total)
+    }
+
+    async fn null_local_only_automation_cursors(&self, ai_id: &str) -> Result<usize, StorageError> {
+        let conn = lock(&self.conn).await;
+        let tx = conn
+            .unchecked_transaction()
+            .map_err(|e| StorageError::Database(e.to_string()))?;
+        let mut total = 0usize;
+        // NULL both the `*_msg_id` and the matching `*_timestamp` column
+        // so the reader's `cursor(timestamp, msg_id) → Option<...>`
+        // helper actually returns `None`. The plan's SQL appendix only
+        // lists the `_msg_id` columns, but leaving the timestamp in
+        // place would make the cursor round-trip back as
+        // `Some(StableMessageCursor { timestamp: 100, kindroid_msg_id: "" })`,
+        // which the next automation cycle would happily treat as a
+        // real cursor.
+        let updates: [&str; 3] = [
+            "UPDATE chat_automation_state SET journal_cursor_msg_id = NULL,
+                                            journal_cursor_timestamp = NULL
+              WHERE ai_id = ?1 AND journal_cursor_msg_id LIKE 'local:%'",
+            "UPDATE chat_automation_state SET summary_cursor_msg_id = NULL,
+                                            summary_cursor_timestamp = NULL
+              WHERE ai_id = ?1 AND summary_cursor_msg_id LIKE 'local:%'",
+            "UPDATE chat_automation_state SET pending_summary_cursor_msg_id = NULL,
+                                            pending_summary_cursor_timestamp = NULL
+              WHERE ai_id = ?1 AND pending_summary_cursor_msg_id LIKE 'local:%'",
+        ];
+        for sql in updates {
+            let n = tx
+                .execute(sql, params![ai_id])
+                .map_err(|e| StorageError::Database(e.to_string()))?;
+            total += n;
+        }
+        tx.commit()
+            .map_err(|e| StorageError::Database(e.to_string()))?;
+        Ok(total)
+    }
+
+    async fn last_n_chat_messages(
+        &self,
+        ai_id: &str,
+        kind: TargetKind,
+        count: u32,
+    ) -> Result<Vec<ChatMessage>, StorageError> {
+        let conn = lock(&self.conn).await;
+        // SQLite's LIMIT takes i64; clamp `count` to a sane range so a
+        // bogus value (u32::MAX) can't lock the DB.
+        let limit = count.clamp(1, 1000) as i64;
+        let mut stmt = conn
+            .prepare(
+                "SELECT id, ai_id, kind, kindroid_msg_id, sender, display_name,
+                        timestamp, message, image_urls, image_description, video_description,
+                        internet_response, link_url, link_description, fetched_at, favourite
+                 FROM chat_messages
+                 WHERE ai_id = ?1 AND kind = ?2
+                 ORDER BY timestamp DESC, kindroid_msg_id DESC
+                 LIMIT ?3",
+            )
+            .map_err(|e| StorageError::Database(e.to_string()))?;
+        let rows = stmt
+            .query_map(params![ai_id, kind.as_str(), limit], row_to_chat_message)
+            .map_err(|e| StorageError::Database(e.to_string()))?;
+        rows.map(|r| r.map_err(|e| StorageError::Database(e.to_string())))
+            .collect()
+    }
+
+    async fn delete_chat_messages_by_content(
+        &self,
+        ai_id: &str,
+        kind: TargetKind,
+        sender: &str,
+        timestamp: i64,
+        message: &str,
+    ) -> Result<usize, StorageError> {
+        let conn = lock(&self.conn).await;
+        let n = conn
+            .execute(
+                "DELETE FROM chat_messages
+                  WHERE ai_id = ?1 AND kind = ?2 AND sender = ?3
+                    AND timestamp = ?4 AND message = ?5",
+                params![ai_id, kind.as_str(), sender, timestamp, message],
+            )
+            .map_err(|e| StorageError::Database(e.to_string()))?;
+        Ok(n)
+    }
+
     async fn list_stable_chat_messages(
         &self,
         ai_id: &str,
@@ -3294,5 +3481,262 @@ mod tests {
             .await
             .unwrap()
             .is_empty());
+    }
+
+    #[tokio::test]
+    async fn find_local_only_chat_message_returns_synthetic_msg_id() {
+        let repo = SqliteRepository::open_in_memory().unwrap();
+        let t = target("T", "ai_x");
+        repo.upsert_target(t).await.unwrap();
+
+        let local = ChatMessage {
+            id: Uuid::new_v4(),
+            ai_id: "ai_x".into(),
+            kind: TargetKind::Ai,
+            kindroid_msg_id: "local:11111111-1111-1111-1111-111111111111".into(),
+            ..chat_msg("ai_x", "k1", 1_700_000_000_000, "hello")
+        };
+        repo.upsert_chat_messages("ai_x", TargetKind::Ai, std::slice::from_ref(&local))
+            .await
+            .unwrap();
+
+        let found = repo
+            .find_local_only_chat_message(
+                "ai_x",
+                TargetKind::Ai,
+                "user",
+                1_700_000_000_000,
+                "hello",
+            )
+            .await
+            .unwrap();
+        let (uuid, msg_id) = found.expect("expected local-only row");
+        assert_eq!(uuid, local.id);
+        assert_eq!(msg_id, "local:11111111-1111-1111-1111-111111111111");
+    }
+
+    #[tokio::test]
+    async fn find_local_only_skips_real_rows() {
+        let repo = SqliteRepository::open_in_memory().unwrap();
+        let t = target("T", "ai_x");
+        repo.upsert_target(t).await.unwrap();
+
+        // A real (non-`local:`) row with identical content must not be
+        // matched by the reconcile loop's find.
+        let real = chat_msg("ai_x", "real-msg-id", 1_700_000_000_000, "hello");
+        repo.upsert_chat_messages("ai_x", TargetKind::Ai, std::slice::from_ref(&real))
+            .await
+            .unwrap();
+        let found = repo
+            .find_local_only_chat_message(
+                "ai_x",
+                TargetKind::Ai,
+                "user",
+                1_700_000_000_000,
+                "hello",
+            )
+            .await
+            .unwrap();
+        assert!(found.is_none(), "real rows must not match: {found:?}");
+    }
+
+    #[tokio::test]
+    #[allow(clippy::field_reassign_with_default)]
+    async fn rewrite_chat_automation_cursor_touches_all_seven_columns() {
+        use crate::domain::chat_automation::{
+            AutoJournalEntryStatus, AutoJournalRunStatus, ChatAutomationState,
+        };
+        let repo = SqliteRepository::open_in_memory().unwrap();
+        let t = target("T", "ai_cursor");
+        repo.upsert_target(t).await.unwrap();
+
+        // Pre-populate one row on each cursor column, plus a Pending and a
+        // Sent auto_journal_entry (only the Pending row's cursors should
+        // be rewritten).
+        let mut state = ChatAutomationState::default();
+        state.ai_id = "ai_cursor".into();
+        state.journal_cursor = Some(crate::domain::chat_automation::StableMessageCursor {
+            timestamp: 100,
+            kindroid_msg_id: "local:OLD".into(),
+        });
+        state.summary_cursor = Some(crate::domain::chat_automation::StableMessageCursor {
+            timestamp: 100,
+            kindroid_msg_id: "local:OLD".into(),
+        });
+        state.pending_summary_cursor = Some(crate::domain::chat_automation::StableMessageCursor {
+            timestamp: 100,
+            kindroid_msg_id: "local:OLD".into(),
+        });
+        repo.upsert_chat_automation_state(&state).await.unwrap();
+
+        let run = AutoJournalRun {
+            id: "r1".into(),
+            ai_id: "ai_cursor".into(),
+            start_cursor: Some(crate::domain::chat_automation::StableMessageCursor {
+                timestamp: 100,
+                kindroid_msg_id: "local:OLD".into(),
+            }),
+            end_cursor: Some(crate::domain::chat_automation::StableMessageCursor {
+                timestamp: 200,
+                kindroid_msg_id: "local:OLD".into(),
+            }),
+            status: AutoJournalRunStatus::Pending,
+            attempts: 0,
+            completed_at: None,
+            last_error: None,
+            created_at: Utc::now(),
+        };
+        repo.create_auto_journal_run(&run).await.unwrap();
+
+        let now = Utc::now();
+        repo.create_auto_journal_entry(&AutoJournalEntry {
+            id: "ep".into(),
+            run_id: "r1".into(),
+            ai_id: "ai_cursor".into(),
+            entry: "pending entry".into(),
+            keyphrases: vec![],
+            source_start: Some(crate::domain::chat_automation::StableMessageCursor {
+                timestamp: 100,
+                kindroid_msg_id: "local:OLD".into(),
+            }),
+            source_end: Some(crate::domain::chat_automation::StableMessageCursor {
+                timestamp: 200,
+                kindroid_msg_id: "local:OLD".into(),
+            }),
+            status: AutoJournalEntryStatus::Pending,
+            response_status: None,
+            response_message: None,
+            created_at: now,
+            updated_at: now,
+        })
+        .await
+        .unwrap();
+        repo.create_auto_journal_entry(&AutoJournalEntry {
+            id: "es".into(),
+            run_id: "r1".into(),
+            ai_id: "ai_cursor".into(),
+            entry: "sent entry".into(),
+            keyphrases: vec![],
+            source_start: Some(crate::domain::chat_automation::StableMessageCursor {
+                timestamp: 100,
+                kindroid_msg_id: "local:OLD".into(),
+            }),
+            source_end: Some(crate::domain::chat_automation::StableMessageCursor {
+                timestamp: 200,
+                kindroid_msg_id: "local:OLD".into(),
+            }),
+            status: AutoJournalEntryStatus::Sent,
+            response_status: Some(200),
+            response_message: Some("ok".into()),
+            created_at: now,
+            updated_at: now,
+        })
+        .await
+        .unwrap();
+
+        let total = repo
+            .rewrite_chat_automation_cursor("ai_cursor", "local:OLD", "real:NEW")
+            .await
+            .unwrap();
+        // 3 (chat_automation_state) + 2 (auto_journal_runs) + 2
+        // (auto_journal_entries Pending only — Sent row stays) = 7
+        assert_eq!(total, 7);
+
+        // The Sent row's source ids are unchanged.
+        let entries = repo.list_auto_journal_entries("r1").await.unwrap();
+        let sent = entries.iter().find(|e| e.id == "es").unwrap();
+        assert_eq!(
+            sent.source_start.as_ref().unwrap().kindroid_msg_id,
+            "local:OLD"
+        );
+        assert_eq!(
+            sent.source_end.as_ref().unwrap().kindroid_msg_id,
+            "local:OLD"
+        );
+    }
+
+    #[tokio::test]
+    #[allow(clippy::field_reassign_with_default)]
+    async fn null_local_only_automation_cursors_clears_all_three() {
+        use crate::domain::chat_automation::ChatAutomationState;
+        let repo = SqliteRepository::open_in_memory().unwrap();
+        let t = target("T", "ai_null");
+        repo.upsert_target(t).await.unwrap();
+
+        let mut state = ChatAutomationState::default();
+        state.ai_id = "ai_null".into();
+        state.journal_cursor = Some(crate::domain::chat_automation::StableMessageCursor {
+            timestamp: 100,
+            kindroid_msg_id: "local:A".into(),
+        });
+        state.summary_cursor = Some(crate::domain::chat_automation::StableMessageCursor {
+            timestamp: 100,
+            kindroid_msg_id: "local:B".into(),
+        });
+        state.pending_summary_cursor = Some(crate::domain::chat_automation::StableMessageCursor {
+            timestamp: 100,
+            kindroid_msg_id: "local:C".into(),
+        });
+        repo.upsert_chat_automation_state(&state).await.unwrap();
+
+        let n = repo
+            .null_local_only_automation_cursors("ai_null")
+            .await
+            .unwrap();
+        assert_eq!(n, 3);
+
+        let after = repo.get_chat_automation_state("ai_null").await.unwrap();
+        assert!(after.journal_cursor.is_none());
+        assert!(after.summary_cursor.is_none());
+        assert!(after.pending_summary_cursor.is_none());
+    }
+
+    #[tokio::test]
+    async fn last_n_chat_messages_orders_by_msg_id_secondary() {
+        let repo = SqliteRepository::open_in_memory().unwrap();
+        let t = target("T", "ai_n");
+        repo.upsert_target(t).await.unwrap();
+
+        // Three rows with the same timestamp must tie-break by
+        // `kindroid_msg_id DESC`, so the row with id `c` comes first.
+        let a = chat_msg("ai_n", "a", 100, "first");
+        let b = chat_msg("ai_n", "b", 100, "second");
+        let c = chat_msg("ai_n", "c", 100, "third");
+        repo.upsert_chat_messages("ai_n", TargetKind::Ai, &[a, b, c])
+            .await
+            .unwrap();
+
+        let list = repo
+            .last_n_chat_messages("ai_n", TargetKind::Ai, 2)
+            .await
+            .unwrap();
+        assert_eq!(list.len(), 2);
+        assert_eq!(list[0].kindroid_msg_id, "c");
+        assert_eq!(list[1].kindroid_msg_id, "b");
+    }
+
+    #[tokio::test]
+    async fn delete_chat_messages_by_content_removes_only_matching_rows() {
+        let repo = SqliteRepository::open_in_memory().unwrap();
+        let t = target("T", "ai_d");
+        repo.upsert_target(t).await.unwrap();
+
+        let m1 = chat_msg("ai_d", "k1", 100, "to-delete");
+        let m2 = chat_msg("ai_d", "k2", 200, "keep-me");
+        repo.upsert_chat_messages("ai_d", TargetKind::Ai, &[m1, m2])
+            .await
+            .unwrap();
+
+        let n = repo
+            .delete_chat_messages_by_content("ai_d", TargetKind::Ai, "user", 100, "to-delete")
+            .await
+            .unwrap();
+        assert_eq!(n, 1);
+        let remaining = repo
+            .list_chat_messages("ai_d", TargetKind::Ai, None, 50, false)
+            .await
+            .unwrap();
+        assert_eq!(remaining.len(), 1);
+        assert_eq!(remaining[0].kindroid_msg_id, "k2");
     }
 }

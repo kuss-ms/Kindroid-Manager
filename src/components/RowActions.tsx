@@ -70,9 +70,7 @@ export function RowActions({ actions }: { actions: RowAction[] }) {
       {secondary.map((a, i) => (
         <button
           key={i}
-          className={
-            'btn btn-sm list-item-secondary' + (a.danger ? ' btn-danger' : '')
-          }
+          className={'btn btn-sm list-item-secondary' + (a.danger ? ' btn-danger' : '')}
           onClick={a.onClick}
           disabled={a.disabled}
           title={a.title}

@@ -1,10 +1,15 @@
 use std::sync::Arc;
 
+use chrono::Utc;
+
 use crate::commands::push::{DEFAULT_BASE_URL, SETTING_BASE_URL_PUBLIC as SETTING_BASE_URL};
 use crate::domain::chat_message::{ChatMessage, ChatSyncState, SyncStatusKind};
 use crate::domain::target::TargetKind;
 use crate::error::AppError;
-use crate::kindroid::{KindroidClient, ToggleMessagePinRequest};
+use crate::kindroid::{
+    KindroidClient, RewindMessagesRequest, SendMessageRequest, SuggestUserMessageRequest,
+    ToggleMessagePinRequest,
+};
 use crate::security::secrets::{SecretStoreError, Secrets, API_TOKEN_KEY};
 use crate::storage::Repository;
 
@@ -150,6 +155,238 @@ pub async fn reset_chat_history(
         return Err(AppError::invalid("ai_id is required"));
     }
     Ok(repo.reset_chat_history(trimmed, kind).await?)
+}
+
+#[derive(Debug, Clone, serde::Deserialize)]
+pub struct SendChatMessageInput {
+    pub ai_id: String,
+    pub message: String,
+}
+
+#[derive(Debug, Clone, serde::Deserialize)]
+pub struct RewindChatInput {
+    pub ai_id: String,
+    pub count: u32,
+}
+
+#[derive(Debug, Clone, serde::Deserialize)]
+pub struct SuggestChatUserMessageInput {
+    pub ai_id: String,
+    pub existing_message: String,
+}
+
+/// Insert the user bubble, POST `/send-message`, insert the AI bubble.
+/// Both local rows use a synthetic `local:<uuid>` `kindroid_msg_id`; the
+/// next sync reconciles them with the server's real ids. The returned
+/// `ChatMessage` is the inserted AI bubble so the UI can optimistically
+/// append it.
+pub async fn send_chat_message(
+    repo: Arc<dyn Repository>,
+    client: Arc<dyn KindroidClient>,
+    input: SendChatMessageInput,
+) -> Result<ChatMessage, AppError> {
+    let trimmed_ai = input.ai_id.trim();
+    if trimmed_ai.is_empty() {
+        return Err(AppError::invalid("ai_id is required"));
+    }
+    // Chat mode is single-AI only. A Group target reaches here only if
+    // the frontend bypassed the Suggest/Send hide rule, but the backend
+    // still rejects to defend against direct invoke.
+    if repo
+        .get_target_by_kind(trimmed_ai, TargetKind::Ai)
+        .await?
+        .is_none()
+    {
+        return Err(AppError::invalid(format!(
+            "chat-mode is only available for AI targets, not groups or unknown ids (ai_id='{trimmed_ai}')"
+        )));
+    }
+    let message = input.message.trim().to_string();
+    if message.is_empty() {
+        return Err(AppError::invalid("message is required"));
+    }
+    let token = Secrets::get(API_TOKEN_KEY).map_err(map_secret_err)?;
+    let base_url = repo
+        .get_setting(SETTING_BASE_URL)
+        .await?
+        .unwrap_or_else(|| DEFAULT_BASE_URL.to_string());
+
+    // Insert the user bubble with a synthetic id. The timestamp is
+    // captured BEFORE the POST so the user bubble's timestamp is
+    // strictly older than the AI bubble's, even when the request
+    // completes within the same millisecond.
+    let user_ts = Utc::now().timestamp_millis();
+    let user_row = ChatMessage {
+        id: uuid::Uuid::new_v4(),
+        ai_id: trimmed_ai.to_string(),
+        kind: TargetKind::Ai,
+        kindroid_msg_id: format!("local:{}", uuid::Uuid::new_v4()),
+        sender: "user".into(),
+        display_name: None,
+        timestamp: user_ts,
+        message: message.clone(),
+        image_urls: Vec::new(),
+        image_description: None,
+        video_description: None,
+        internet_response: None,
+        link_url: None,
+        link_description: None,
+        fetched_at: Utc::now(),
+        favourite: false,
+    };
+    repo.upsert_chat_messages(trimmed_ai, TargetKind::Ai, std::slice::from_ref(&user_row))
+        .await?;
+
+    // POST the message. A failure here leaves the synthetic user bubble
+    // in the DB so the user can resend; the error bubbles up to the
+    // frontend as a toast.
+    client
+        .send_message(
+            &token,
+            &base_url,
+            SendMessageRequest {
+                ai_id: trimmed_ai.to_string(),
+                message,
+            },
+        )
+        .await?;
+
+    // Insert the AI bubble a millisecond after the user row so the
+    // DESC-by-timestamp ordering in the chat view keeps the AI bubble
+    // at the bottom (newest).
+    let ai_ts = user_ts + 1;
+    let ai_row = ChatMessage {
+        id: uuid::Uuid::new_v4(),
+        ai_id: trimmed_ai.to_string(),
+        kind: TargetKind::Ai,
+        kindroid_msg_id: format!("local:{}", uuid::Uuid::new_v4()),
+        sender: "ai".into(),
+        display_name: None,
+        timestamp: ai_ts,
+        message: String::new(),
+        image_urls: Vec::new(),
+        image_description: None,
+        video_description: None,
+        internet_response: None,
+        link_url: None,
+        link_description: None,
+        fetched_at: Utc::now(),
+        favourite: false,
+    };
+    repo.upsert_chat_messages(trimmed_ai, TargetKind::Ai, std::slice::from_ref(&ai_row))
+        .await?;
+    Ok(ai_row)
+}
+
+/// Validate, capture the rows the server is about to delete, POST
+/// `/rewind-messages`, then drop the local copies (including any
+/// synthetic `local:` twins the server never knew about).
+pub async fn rewind_chat(
+    repo: Arc<dyn Repository>,
+    client: Arc<dyn KindroidClient>,
+    input: RewindChatInput,
+) -> Result<usize, AppError> {
+    let trimmed_ai = input.ai_id.trim();
+    if trimmed_ai.is_empty() {
+        return Err(AppError::invalid("ai_id is required"));
+    }
+    if input.count == 0 {
+        return Err(AppError::invalid("count must be greater than zero"));
+    }
+    // Kindroid's `/rewind-messages` operates on `(user, ai)` pairs and
+    // rejects odd counts. The UI only offers even options; defend here.
+    if input.count % 2 != 0 {
+        return Err(AppError::invalid(
+            "count must be even — Kindroid rewinds in user/AI pairs",
+        ));
+    }
+    if repo
+        .get_target_by_kind(trimmed_ai, TargetKind::Ai)
+        .await?
+        .is_none()
+    {
+        return Err(AppError::invalid(format!(
+            "chat-mode is only available for AI targets, not groups or unknown ids (ai_id='{trimmed_ai}')"
+        )));
+    }
+
+    // Capture the rows to delete BEFORE the POST so the user sees the
+    // bubbles disappear even if the API call races with the next sync.
+    let captured = repo
+        .last_n_chat_messages(trimmed_ai, TargetKind::Ai, input.count)
+        .await?;
+    let token = Secrets::get(API_TOKEN_KEY).map_err(map_secret_err)?;
+    let base_url = repo
+        .get_setting(SETTING_BASE_URL)
+        .await?
+        .unwrap_or_else(|| DEFAULT_BASE_URL.to_string());
+    client
+        .rewind_messages(
+            &token,
+            &base_url,
+            RewindMessagesRequest {
+                ai_id: trimmed_ai.to_string(),
+                count: input.count,
+            },
+        )
+        .await?;
+
+    let mut deleted = 0usize;
+    for m in &captured {
+        // Delete by content fingerprint so any synthetic twin (the
+        // server may have already reconciled one of the pair but not
+        // the other) also goes away.
+        deleted += repo
+            .delete_chat_messages_by_content(
+                trimmed_ai,
+                TargetKind::Ai,
+                &m.sender,
+                m.timestamp,
+                &m.message,
+            )
+            .await?;
+    }
+    Ok(deleted)
+}
+
+/// Request a suggested user-message seed from Kindroid and return the
+/// plain-text body. Empty `existing_message` is allowed — the server
+/// uses it as the optional seed.
+pub async fn suggest_user_message(
+    repo: Arc<dyn Repository>,
+    client: Arc<dyn KindroidClient>,
+    input: SuggestChatUserMessageInput,
+) -> Result<String, AppError> {
+    let trimmed_ai = input.ai_id.trim();
+    if trimmed_ai.is_empty() {
+        return Err(AppError::invalid("ai_id is required"));
+    }
+    if repo
+        .get_target_by_kind(trimmed_ai, TargetKind::Ai)
+        .await?
+        .is_none()
+    {
+        return Err(AppError::invalid(format!(
+            "chat-mode is only available for AI targets, not groups or unknown ids (ai_id='{trimmed_ai}')"
+        )));
+    }
+    let token = Secrets::get(API_TOKEN_KEY).map_err(map_secret_err)?;
+    let base_url = repo
+        .get_setting(SETTING_BASE_URL)
+        .await?
+        .unwrap_or_else(|| DEFAULT_BASE_URL.to_string());
+    let resp = client
+        .suggest_user_message(
+            &token,
+            &base_url,
+            SuggestUserMessageRequest {
+                ai_id: trimmed_ai.to_string(),
+                existing_message: input.existing_message,
+                stream: false,
+            },
+        )
+        .await?;
+    Ok(resp.body.trim().to_string())
 }
 
 /// Validate inputs and spawn the background sync loop. The actual loop
@@ -313,5 +550,78 @@ mod tests {
         assert_eq!(got.status_kind, SyncStatusKind::Running);
         drop(h);
         registry.release().await;
+    }
+
+    fn set_test_token() {
+        crate::security::secrets::Secrets::set(
+            crate::security::secrets::API_TOKEN_KEY,
+            "test-token",
+        )
+        .expect("test token write");
+    }
+
+    #[tokio::test]
+    async fn send_chat_message_rejects_empty_after_trim() {
+        set_test_token();
+        let repo: Arc<dyn Repository> = Arc::new(SqliteRepository::open_in_memory().unwrap());
+        seed_target(&repo, "ai_x").await;
+        let client: Arc<dyn crate::kindroid::KindroidClient> =
+            Arc::new(crate::kindroid::http::HttpKindroidClient::new());
+        let err = super::send_chat_message(
+            repo.clone(),
+            client,
+            SendChatMessageInput {
+                ai_id: "ai_x".into(),
+                message: "   ".into(),
+            },
+        )
+        .await
+        .unwrap_err();
+        assert!(matches!(err, AppError::Invalid { .. }));
+    }
+
+    #[tokio::test]
+    async fn send_chat_message_rejects_group_target() {
+        set_test_token();
+        let repo: Arc<dyn Repository> = Arc::new(SqliteRepository::open_in_memory().unwrap());
+        // No AI target exists for "gc_1" — must fail the AI guard.
+        let client: Arc<dyn crate::kindroid::KindroidClient> =
+            Arc::new(crate::kindroid::http::HttpKindroidClient::new());
+        let err = super::send_chat_message(
+            repo.clone(),
+            client,
+            SendChatMessageInput {
+                ai_id: "gc_1".into(),
+                message: "hi".into(),
+            },
+        )
+        .await
+        .unwrap_err();
+        assert!(matches!(err, AppError::Invalid { .. }));
+    }
+
+    #[tokio::test]
+    async fn rewind_chat_rejects_odd_count() {
+        set_test_token();
+        let repo: Arc<dyn Repository> = Arc::new(SqliteRepository::open_in_memory().unwrap());
+        seed_target(&repo, "ai_x").await;
+        let client: Arc<dyn crate::kindroid::KindroidClient> =
+            Arc::new(crate::kindroid::http::HttpKindroidClient::new());
+        let err = super::rewind_chat(
+            repo.clone(),
+            client,
+            RewindChatInput {
+                ai_id: "ai_x".into(),
+                count: 3,
+            },
+        )
+        .await
+        .unwrap_err();
+        match err {
+            AppError::Invalid { message } => {
+                assert!(message.contains("even"), "msg: {message}");
+            }
+            other => panic!("expected Invalid, got {other:?}"),
+        }
     }
 }

@@ -65,10 +65,7 @@ function character(id: string, default_target_id: string | null): Character {
 describe('TargetsPage default-count caption', () => {
   it('shows the caption when 2 characters point at the same target', async () => {
     vi.mocked(api.listTargets).mockResolvedValue([target('t1', 'Aria', 'ai_1')]);
-    vi.mocked(api.listCharacters).mockResolvedValue([
-      character('c1', 't1'),
-      character('c2', 't1'),
-    ]);
+    vi.mocked(api.listCharacters).mockResolvedValue([character('c1', 't1'), character('c2', 't1')]);
 
     renderTargets();
 

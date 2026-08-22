@@ -76,7 +76,11 @@ describe('CharacterEditorPage default-target select', () => {
     // Resolve character immediately; keep targets pending forever.
     vi.mocked(api.getCharacter).mockResolvedValue(character(cid, tid));
     let resolveTargets: (v: Target[]) => void = () => {};
-    vi.mocked(api.listTargets).mockReturnValue(new Promise<Target[]>((res) => { resolveTargets = res; }));
+    vi.mocked(api.listTargets).mockReturnValue(
+      new Promise<Target[]>((res) => {
+        resolveTargets = res;
+      }),
+    );
     vi.mocked(api.listJournalEntries).mockResolvedValue([]);
 
     renderEditor(cid);
@@ -108,18 +112,21 @@ describe('CharacterEditorPage default-target select', () => {
 
     renderEditor(cid);
 
-    const select = (await waitFor(() => screen.getByTestId('default-target-select'))) as HTMLSelectElement;
+    const select = (await waitFor(() =>
+      screen.getByTestId('default-target-select'),
+    )) as HTMLSelectElement;
     // Targets must resolve before the AI option appears.
     await waitFor(() => {
-      const values = Array.from((screen.getByTestId('default-target-select') as HTMLSelectElement).options).map(
-        (o) => o.value,
-      );
+      const values = Array.from(
+        (screen.getByTestId('default-target-select') as HTMLSelectElement).options,
+      ).map((o) => o.value);
       expect(values).toContain(aiId);
     });
     const optionValues = Array.from(select.options).map((o) => o.value);
     expect(optionValues).toContain(aiId);
     expect(optionValues).not.toContain(groupId);
-  });});
+  });
+});
 
 describe('PushFieldButton', () => {
   it('is enabled and invokes onPush when value + target are set', async () => {

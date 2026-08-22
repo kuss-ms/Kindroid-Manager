@@ -163,6 +163,80 @@ pub trait Repository: Send + Sync {
         keep_ids: &[&str],
     ) -> Result<usize, StorageError>;
 
+    /// Find a local-only chat row (synthetic `kindroid_msg_id` starting
+    /// with `local:`) by content fingerprint. Used by the sync loop's
+    /// reconciliation step: when a real server row arrives with the same
+    /// `(ai_id, kind, sender, timestamp, message)`, the loop overwrites
+    /// the local row's `kindroid_msg_id` with the server's id.
+    ///
+    /// Returns `(local_uuid, synthetic_msg_id)` so the reconcile loop
+    /// can rewrite automation cursors keyed on the old synthetic id in
+    /// the same iteration, without a second SELECT.
+    async fn find_local_only_chat_message(
+        &self,
+        ai_id: &str,
+        kind: TargetKind,
+        sender: &str,
+        timestamp: i64,
+        message: &str,
+    ) -> Result<Option<(Uuid, String)>, StorageError>;
+
+    /// Overwrite a single chat row's `kindroid_msg_id` (and refresh
+    /// `fetched_at` to "just reconciled"). Returns the number of rows
+    /// updated (0 if the row was deleted between the find and now; 1 on
+    /// the happy path).
+    async fn rename_chat_message_id(
+        &self,
+        local_id: Uuid,
+        new_msg_id: &str,
+    ) -> Result<usize, StorageError>;
+
+    /// Rewrite every automation cursor column that still references
+    /// `old_id` to point at `new_id`. Updates three columns on
+    /// `chat_automation_state`, two on `auto_journal_runs`, and two on
+    /// `auto_journal_entries` (Pending-only — `sent` entries are audit
+    /// history and must not be rewritten). Single-AI scope; the
+    /// `chat_automation_state` and `auto_journal_runs` tables have no
+    /// `kind` column. Returns the total rows updated.
+    async fn rewrite_chat_automation_cursor(
+        &self,
+        ai_id: &str,
+        old_id: &str,
+        new_id: &str,
+    ) -> Result<usize, StorageError>;
+
+    /// NULL any `chat_automation_state` cursor column for `ai_id` that
+    /// still starts with `local:`. Called once per successful sync
+    /// drain so a cursor wedged on a synthetic id (e.g. user rewound
+    /// the local bubble before the server reconciled it) doesn't get
+    /// stuck. Returns the total rows updated.
+    async fn null_local_only_automation_cursors(&self, ai_id: &str) -> Result<usize, StorageError>;
+
+    /// Fetch the `count` most recent chat messages for `(ai_id, kind)`,
+    /// ordered `(timestamp DESC, kindroid_msg_id DESC)`. Used by the
+    /// rewind flow to capture which rows to delete locally *before* the
+    /// `/rewind-messages` POST, so the user sees the bubbles vanish
+    /// even if the POST races with the next sync.
+    async fn last_n_chat_messages(
+        &self,
+        ai_id: &str,
+        kind: TargetKind,
+        count: u32,
+    ) -> Result<Vec<ChatMessage>, StorageError>;
+
+    /// Delete a single chat row by content fingerprint (used to drop
+    /// local-only twins of a rewound row when one side has a slightly
+    /// different `kindroid_msg_id` after reconciliation). Returns the
+    /// number of rows deleted (0 or 1).
+    async fn delete_chat_messages_by_content(
+        &self,
+        ai_id: &str,
+        kind: TargetKind,
+        sender: &str,
+        timestamp: i64,
+        message: &str,
+    ) -> Result<usize, StorageError>;
+
     async fn list_journal_entries(
         &self,
         character_id: Uuid,

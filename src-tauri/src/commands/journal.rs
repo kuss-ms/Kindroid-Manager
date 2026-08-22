@@ -264,6 +264,48 @@ mod tests {
         ) -> Result<usize, StorageError> {
             Ok(0)
         }
+        async fn find_local_only_chat_message(
+            &self,
+            _: &str,
+            _: TargetKind,
+            _: &str,
+            _: i64,
+            _: &str,
+        ) -> Result<Option<(Uuid, String)>, StorageError> {
+            Ok(None)
+        }
+        async fn rename_chat_message_id(&self, _: Uuid, _: &str) -> Result<usize, StorageError> {
+            Ok(0)
+        }
+        async fn rewrite_chat_automation_cursor(
+            &self,
+            _: &str,
+            _: &str,
+            _: &str,
+        ) -> Result<usize, StorageError> {
+            Ok(0)
+        }
+        async fn null_local_only_automation_cursors(&self, _: &str) -> Result<usize, StorageError> {
+            Ok(0)
+        }
+        async fn last_n_chat_messages(
+            &self,
+            _: &str,
+            _: TargetKind,
+            _: u32,
+        ) -> Result<Vec<crate::domain::chat_message::ChatMessage>, StorageError> {
+            Ok(Vec::new())
+        }
+        async fn delete_chat_messages_by_content(
+            &self,
+            _: &str,
+            _: TargetKind,
+            _: &str,
+            _: i64,
+            _: &str,
+        ) -> Result<usize, StorageError> {
+            Ok(0)
+        }
 
         async fn list_stable_chat_messages(
             &self,

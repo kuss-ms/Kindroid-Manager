@@ -595,6 +595,56 @@ mod tests {
         ) -> Result<usize, crate::storage::StorageError> {
             Ok(0)
         }
+        async fn find_local_only_chat_message(
+            &self,
+            _ai_id: &str,
+            _kind: crate::domain::target::TargetKind,
+            _sender: &str,
+            _timestamp: i64,
+            _message: &str,
+        ) -> Result<Option<(Uuid, String)>, crate::storage::StorageError> {
+            Ok(None)
+        }
+        async fn rename_chat_message_id(
+            &self,
+            _local_id: Uuid,
+            _new_msg_id: &str,
+        ) -> Result<usize, crate::storage::StorageError> {
+            Ok(0)
+        }
+        async fn rewrite_chat_automation_cursor(
+            &self,
+            _ai_id: &str,
+            _old_id: &str,
+            _new_id: &str,
+        ) -> Result<usize, crate::storage::StorageError> {
+            Ok(0)
+        }
+        async fn null_local_only_automation_cursors(
+            &self,
+            _ai_id: &str,
+        ) -> Result<usize, crate::storage::StorageError> {
+            Ok(0)
+        }
+        async fn last_n_chat_messages(
+            &self,
+            _ai_id: &str,
+            _kind: crate::domain::target::TargetKind,
+            _count: u32,
+        ) -> Result<Vec<crate::domain::chat_message::ChatMessage>, crate::storage::StorageError>
+        {
+            Ok(Vec::new())
+        }
+        async fn delete_chat_messages_by_content(
+            &self,
+            _ai_id: &str,
+            _kind: crate::domain::target::TargetKind,
+            _sender: &str,
+            _timestamp: i64,
+            _message: &str,
+        ) -> Result<usize, crate::storage::StorageError> {
+            Ok(0)
+        }
 
         async fn list_stable_chat_messages(
             &self,

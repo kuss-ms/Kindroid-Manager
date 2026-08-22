@@ -887,7 +887,9 @@ mod tests {
         with_default.default_target_id = Some(t.id);
         repo.upsert_character(with_default).await.unwrap();
 
-        let dup = duplicate_character(repo.clone(), original.id).await.unwrap();
+        let dup = duplicate_character(repo.clone(), original.id)
+            .await
+            .unwrap();
         assert_eq!(dup.default_target_id, Some(t.id));
     }
 

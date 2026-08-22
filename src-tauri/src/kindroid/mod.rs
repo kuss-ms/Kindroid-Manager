@@ -43,6 +43,32 @@ pub struct JournalCreateRequest<'a> {
     pub keyphrases: &'a [String],
 }
 
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct SendMessageRequest {
+    pub ai_id: String,
+    pub message: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct RewindMessagesRequest {
+    pub ai_id: String,
+    pub count: u32,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct SuggestUserMessageRequest {
+    pub ai_id: String,
+    /// May be empty — the server uses it as the optional seed for the
+    /// suggestion. The frontend pre-fills with the current textarea
+    /// content (or `""` when the composer is empty).
+    pub existing_message: String,
+    /// Streaming mode is not used by the chat-mode composer. The Rust
+    /// surface accepts the field so the request struct mirrors the
+    /// Kindroid API; the frontend always sends `stream: false`.
+    #[serde(default)]
+    pub stream: bool,
+}
+
 /// Server response from `POST /toggle-message-pin` — the canonical pin state
 /// after the toggle. The frontend should reconcile the local cache to this
 /// value rather than relying on the optimistic flip.

@@ -1,5 +1,5 @@
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
-import { useEffect, useMemo, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import { useSearchParams } from 'react-router-dom';
 import { listen, type UnlistenFn } from '@tauri-apps/api/event';
 import { api, escapeFtsQuery, errorMessage } from '../lib/api';
@@ -15,9 +15,28 @@ import { TARGET_KIND_LABEL } from '../lib/types';
 import { ConfirmDialog } from '../components/ConfirmDialog';
 import { AutomationPanel } from '../components/AutomationPanel';
 import { toast } from '../components/Toaster';
+import {
+  applyChatTheme,
+  CUSTOM_PRESET_ID,
+  PRESET_THEMES,
+  useChatTheme,
+  type ChatTheme,
+  type ChatThemePalette,
+} from '../lib/chatThemes';
 
 const PAGE_SIZE = 50;
 const SEARCH_LIMIT = 200;
+
+type ViewMode = 'chat' | 'history' | 'search';
+
+function parseViewMode(raw: string | null): ViewMode {
+  if (raw === 'chat' || raw === 'history' || raw === 'search') return raw;
+  return 'chat';
+}
+
+function viewIsSearchMode(view: ViewMode): boolean {
+  return view === 'search';
+}
 
 interface ActiveSyncInfo {
   ai_id: string;
@@ -102,6 +121,19 @@ export function ChatHistoryPage() {
   }, [urlAiId, urlKind, targetsList, targets.isLoading]);
   const selectedAiId = selectedKey?.ai_id ?? null;
   const selectedKind: TargetKind | null = selectedKey?.kind ?? null;
+  const isGroup = selectedKind === 'group';
+
+  // View mode (URL `?view=`). Default is "chat" for single-AI targets;
+  // group targets force "history" below so the toggle isn't shown.
+  const urlView = parseViewMode(params.get('view'));
+  // If the target is a group, the chat view is unavailable.
+  const view: ViewMode = isGroup ? 'history' : urlView;
+  function setView(next: ViewMode) {
+    const newParams = new URLSearchParams(params);
+    newParams.set('view', next);
+    setParams(newParams, { replace: true });
+  }
+
   const selectedTarget = useMemo(
     () =>
       selectedKey
@@ -110,7 +142,6 @@ export function ChatHistoryPage() {
         : null,
     [targetsList, selectedKey],
   );
-  const isGroup = selectedKind === 'group';
 
   function setSelectedTarget(ai_id: string, kind: TargetKind) {
     const next = new URLSearchParams(params);
@@ -153,7 +184,9 @@ export function ChatHistoryPage() {
   }, [selectedAiId, debouncedQuery, favouritesOnly]);
 
   const trimmedQuery = debouncedQuery.trim();
-  const isSearching = trimmedQuery.length > 0;
+  // The search box only applies in the search view; otherwise an empty
+  // trimmed query is the normal "no filter" state.
+  const isSearching = viewIsSearchMode(view) && trimmedQuery.length > 0;
 
   // Live progress payload from the backend (refreshed via events).
   const [liveProgress, setLiveProgress] = useState<LiveProgress | null>(null);
@@ -207,7 +240,7 @@ export function ChatHistoryPage() {
     (automationBadge.data.state.auto_journal_enabled ||
       automationBadge.data.state.auto_summary_enabled);
 
-  // Page of messages (browse mode).
+  // Page of messages (browse mode). Runs for both chat and history views.
   const browsePage = useQuery<ChatMessage[]>({
     queryKey: ['chat-messages', selectedAiId, selectedKind, browseCursor, favouritesOnly],
     queryFn: () => {
@@ -322,6 +355,39 @@ export function ChatHistoryPage() {
       unlistens.forEach((p) => p.then((u) => u()).catch(() => {}));
     };
   }, [queryClient, selectedAiId, selectedKind]);
+
+  // Cancel any sync running on the same (ai_id, kind) when entering chat
+  // view, so the chat composer doesn't fight the background loop for the
+  // token. Syncs on other targets are left alone. Idempotent: a no-op
+  // when nothing is running.
+  const cancelledOnceRef = useRef<string | null>(null);
+  useEffect(() => {
+    if (view !== 'chat') return;
+    if (!selectedAiId || !selectedKind) return;
+    if (isGroup) return;
+    const key = `${selectedAiId}|${selectedKind}`;
+    if (cancelledOnceRef.current === key) return;
+    cancelledOnceRef.current = key;
+    const cur = current.data;
+    if (cur && cur.ai_id === selectedAiId && cur.kind === selectedKind) {
+      api
+        .cancelChatSync()
+        .then(() => {
+          toast('info', 'Sync paused for chat.');
+          queryClient.invalidateQueries({ queryKey: ['chat-sync-state'] });
+          queryClient.invalidateQueries({ queryKey: ['current-sync'] });
+        })
+        .catch(() => {
+          // Best-effort: if the cancel fails the user can still chat,
+          // and the sync will end on its own.
+        });
+    }
+  }, [view, selectedAiId, selectedKind, isGroup, current.data, queryClient]);
+  // Reset the once-per-target cancel latch when the user switches
+  // targets, so leaving and re-entering chat-view can cancel again.
+  useEffect(() => {
+    cancelledOnceRef.current = null;
+  }, [selectedAiId, selectedKind]);
 
   async function onSync() {
     if (!selectedAiId || !selectedKind) return;
@@ -584,6 +650,10 @@ export function ChatHistoryPage() {
     currentSyncing.ai_id === selectedAiId &&
     currentSyncing.kind === selectedKind;
 
+  // In chat-view we hide Sync / Reset / Automation so the user can't
+  // trigger destructive ops while composing a message.
+  const showHistoryActions = view === 'history' || view === 'search';
+
   // Build the progress indicator subtitle. During a sync we combine the
   // request count + last-batch timestamp so the user can see whether the
   // backfill is making progress.
@@ -687,7 +757,7 @@ export function ChatHistoryPage() {
           ))}
         </select>
         <div style={{ flex: 1 }} />
-        {showSync && (
+        {showHistoryActions && showSync && (
           <button
             className="btn btn-primary"
             disabled={!!syncDisabledReason}
@@ -697,7 +767,7 @@ export function ChatHistoryPage() {
             Sync
           </button>
         )}
-        {showCancel && (
+        {showHistoryActions && showCancel && (
           <button className="btn" onClick={onCancel}>
             Cancel
           </button>
@@ -705,143 +775,218 @@ export function ChatHistoryPage() {
         {/* Reset is available whenever a target is selected, except
             while a sync is running on this target (the wipe would race
             with the in-flight loop). */}
-        <button
-          className="btn"
-          onClick={() => setAutomationOpen(true)}
-          disabled={isGroup}
-          title={
-            isGroup
-              ? 'Automation is not available for group chats.'
-              : automationHasError
-                ? 'Automation recorded an error — open to clear or reset.'
-                : automationIsActive
-                  ? 'Auto-journal or auto-summary is enabled for this target.'
-                  : 'Configure auto-journal and auto-summary for this target.'
-          }
-          data-testid="automation-button"
-        >
-          Automation…
-          {!isGroup && automationHasError && (
-            <span
-              className="badge badge-danger"
-              style={{ marginLeft: 6 }}
-              aria-label="automation error"
-            >
-              error
-            </span>
-          )}
-          {!isGroup && automationIsActive && !automationHasError && (
-            <span
-              className="badge badge-success"
-              style={{ marginLeft: 6 }}
-              aria-label="automation enabled"
-            >
-              on
-            </span>
-          )}
-        </button>
-        <button
-          className="btn btn-danger"
-          onClick={() => setResetOpen(true)}
-          disabled={resetting || activeSyncMatches}
-          title={
-            activeSyncMatches
-              ? 'Cancel the sync before resetting.'
-              : 'Delete all locally-cached chat history for this target.'
-          }
-        >
-          Reset
-        </button>
-      </div>
-
-      {body && <p className="muted">{body}</p>}
-
-      <div
-        className="form-row"
-        style={{ flexDirection: 'row', gap: 8, alignItems: 'center', flexWrap: 'wrap' }}
-      >
-        <input
-          type="search"
-          className="input input-search"
-          placeholder="Search messages…"
-          value={searchInput}
-          onChange={(e) => setSearchInput(e.target.value)}
-          style={{ flex: 1, minWidth: 200 }}
-        />
-        <label className="checkbox" title="Show only messages you've favourited (pinned) here">
-          <input
-            type="checkbox"
-            checked={favouritesOnly}
-            onChange={(e) => setFavouritesOnly(e.target.checked)}
-          />
-          Favourites only
-        </label>
-      </div>
-
-      {isSearching && (
-        <p className="muted" style={{ marginTop: 8 }}>
-          {messages.length === 0
-            ? `No matches for "${trimmedQuery}".`
-            : `Showing ${messages.length} matches. All terms required (Porter stemmed); wrap a phrase in "quotes" for an exact match.`}
-        </p>
-      )}
-
-      <div style={{ marginTop: 12 }}>
-        {messages.map((m) => (
-          <MessageRow
-            key={m.id}
-            message={m}
-            query={trimmedQuery}
-            pending={pendingFavourites.has(m.kindroid_msg_id)}
-            onOpen={() => setOpenMessage(m)}
-            onToggleFavourite={() =>
-              setFavourite.mutate({
-                kindroidMsgId: m.kindroid_msg_id,
-                prevFavourite: m.favourite,
-              })
+        {showHistoryActions && (
+          <button
+            className="btn"
+            onClick={() => setAutomationOpen(true)}
+            disabled={isGroup}
+            title={
+              isGroup
+                ? 'Automation is not available for group chats.'
+                : automationHasError
+                  ? 'Automation recorded an error — open to clear or reset.'
+                  : automationIsActive
+                    ? 'Auto-journal or auto-summary is enabled for this target.'
+                    : 'Configure auto-journal and auto-summary for this target.'
             }
-          />
-        ))}
-        {messages.length === 0 && !activeList.isLoading && (
-          <div className="empty">
-            {isSearching ? 'No messages match your search.' : 'No messages yet.'}
-          </div>
+            data-testid="automation-button"
+          >
+            Automation…
+            {!isGroup && automationHasError && (
+              <span
+                className="badge badge-danger"
+                style={{ marginLeft: 6 }}
+                aria-label="automation error"
+              >
+                error
+              </span>
+            )}
+            {!isGroup && automationIsActive && !automationHasError && (
+              <span
+                className="badge badge-success"
+                style={{ marginLeft: 6 }}
+                aria-label="automation enabled"
+              >
+                on
+              </span>
+            )}
+          </button>
+        )}
+        {showHistoryActions && (
+          <button
+            className="btn btn-danger"
+            onClick={() => setResetOpen(true)}
+            disabled={resetting || activeSyncMatches}
+            title={
+              activeSyncMatches
+                ? 'Cancel the sync before resetting.'
+                : 'Delete all locally-cached chat history for this target.'
+            }
+          >
+            Reset
+          </button>
         )}
       </div>
 
-      <div className="flex-row" style={{ marginTop: 12 }}>
-        <button
-          className="btn"
-          disabled={isSearching ? searchOffset === 0 : browseCursorStack.length <= 1}
-          onClick={() => {
-            if (isSearching) {
-              setSearchOffset(Math.max(0, searchOffset - PAGE_SIZE));
-            } else {
-              setBrowseCursorStack((stack) => (stack.length > 1 ? stack.slice(0, -1) : stack));
-            }
-          }}
+      {body && view !== 'chat' && <p className="muted">{body}</p>}
+
+      {/* 3-way segmented control. Hidden for group targets — chat-mode
+          is single-AI only. */}
+      {!isGroup && (
+        <div
+          className="form-row"
+          data-testid="view-segmented"
+          style={{ flexDirection: 'row', gap: 0, marginBottom: 8 }}
+          role="tablist"
         >
-          ← {isSearching ? 'Prev' : 'Newer'}
-        </button>
-        <button
-          className="btn"
-          disabled={
-            messages.length < PAGE_SIZE || (isSearching && searchOffset + PAGE_SIZE >= SEARCH_LIMIT)
+          <button
+            type="button"
+            role="tab"
+            aria-selected={view === 'chat'}
+            className={`btn btn-sm ${view === 'chat' ? 'btn-primary' : ''}`}
+            onClick={() => setView('chat')}
+            style={{ borderTopRightRadius: 0, borderBottomRightRadius: 0 }}
+          >
+            Chat
+          </button>
+          <button
+            type="button"
+            role="tab"
+            aria-selected={view === 'history'}
+            className={`btn btn-sm ${view === 'history' ? 'btn-primary' : ''}`}
+            onClick={() => setView('history')}
+            style={{ borderRadius: 0 }}
+          >
+            History
+          </button>
+          <button
+            type="button"
+            role="tab"
+            aria-selected={view === 'search'}
+            className={`btn btn-sm ${view === 'search' ? 'btn-primary' : ''}`}
+            onClick={() => setView('search')}
+            style={{ borderTopLeftRadius: 0, borderBottomLeftRadius: 0 }}
+          >
+            Search
+          </button>
+        </div>
+      )}
+
+      {/* Chat view: chat bubbles + composer. Reuses the same query key as
+          the history list so switching tabs is instant. */}
+      {view === 'chat' && !isGroup && selectedAiId && selectedKind && (
+        <ChatView
+          aiId={selectedAiId}
+          kind={selectedKind}
+          messages={browsePage.data ?? []}
+          pendingFavourites={pendingFavourites}
+          onToggleFavourite={(id, prev) =>
+            setFavourite.mutate({ kindroidMsgId: id, prevFavourite: prev })
           }
-          onClick={() => {
-            if (isSearching) {
-              setSearchOffset(searchOffset + PAGE_SIZE);
-            } else {
-              const oldest = messages[messages.length - 1];
-              if (oldest) {
-                setBrowseCursorStack((stack) => [...stack, oldest.timestamp]);
-              }
-            }
+          onInvalidate={() => {
+            queryClient.invalidateQueries({ queryKey: ['chat-messages'] });
+            queryClient.invalidateQueries({ queryKey: ['chat-message-count'] });
           }}
-        >
-          {isSearching ? 'Next' : 'Older'} →
-        </button>
-      </div>
+        />
+      )}
+
+      {(view === 'history' || view === 'search') && (
+        <>
+          <div
+            className="form-row"
+            style={{ flexDirection: 'row', gap: 8, alignItems: 'center', flexWrap: 'wrap' }}
+          >
+            <input
+              type="search"
+              className="input input-search"
+              placeholder="Search messages…"
+              value={searchInput}
+              onChange={(e) => {
+                setSearchInput(e.target.value);
+                // Typing while in History view auto-promotes to Search.
+                if (view === 'history' && e.target.value.length > 0) {
+                  setView('search');
+                }
+              }}
+              style={{ flex: 1, minWidth: 200 }}
+            />
+            <label className="checkbox" title="Show only messages you've favourited (pinned) here">
+              <input
+                type="checkbox"
+                checked={favouritesOnly}
+                onChange={(e) => setFavouritesOnly(e.target.checked)}
+              />
+              Favourites only
+            </label>
+          </div>
+
+          {isSearching && (
+            <p className="muted" style={{ marginTop: 8 }}>
+              {messages.length === 0
+                ? `No matches for "${trimmedQuery}".`
+                : `Showing ${messages.length} matches. All terms required (Porter stemmed); wrap a phrase in "quotes" for an exact match.`}
+            </p>
+          )}
+
+          <div style={{ marginTop: 12 }}>
+            {messages.map((m) => (
+              <MessageRow
+                key={m.id}
+                message={m}
+                query={trimmedQuery}
+                pending={pendingFavourites.has(m.kindroid_msg_id)}
+                onOpen={() => setOpenMessage(m)}
+                onToggleFavourite={() =>
+                  setFavourite.mutate({
+                    kindroidMsgId: m.kindroid_msg_id,
+                    prevFavourite: m.favourite,
+                  })
+                }
+              />
+            ))}
+            {messages.length === 0 && !activeList.isLoading && (
+              <div className="empty">
+                {isSearching ? 'No messages match your search.' : 'No messages yet.'}
+              </div>
+            )}
+          </div>
+
+          <div className="flex-row" style={{ marginTop: 12 }}>
+            <button
+              className="btn"
+              disabled={isSearching ? searchOffset === 0 : browseCursorStack.length <= 1}
+              onClick={() => {
+                if (isSearching) {
+                  setSearchOffset(Math.max(0, searchOffset - PAGE_SIZE));
+                } else {
+                  setBrowseCursorStack((stack) => (stack.length > 1 ? stack.slice(0, -1) : stack));
+                }
+              }}
+            >
+              ← {isSearching ? 'Prev' : 'Newer'}
+            </button>
+            <button
+              className="btn"
+              disabled={
+                messages.length < PAGE_SIZE ||
+                (isSearching && searchOffset + PAGE_SIZE >= SEARCH_LIMIT)
+              }
+              onClick={() => {
+                if (isSearching) {
+                  setSearchOffset(searchOffset + PAGE_SIZE);
+                } else {
+                  const oldest = messages[messages.length - 1];
+                  if (oldest) {
+                    setBrowseCursorStack((stack) => [...stack, oldest.timestamp]);
+                  }
+                }
+              }}
+            >
+              {isSearching ? 'Next' : 'Older'} →
+            </button>
+          </div>
+        </>
+      )}
 
       <MessageDetailDialog
         message={openMessage}
@@ -1171,5 +1316,428 @@ function makeSnippet(text: string, query: string, radius = 30): React.ReactNode 
       {text.slice(start, end)}
       {after}
     </span>
+  );
+}
+
+interface ChatViewProps {
+  aiId: string;
+  kind: TargetKind;
+  messages: ChatMessage[];
+  pendingFavourites: Set<string>;
+  onToggleFavourite: (kindroidMsgId: string, prev: boolean) => void;
+  onInvalidate: () => void;
+}
+
+const SUGGEST_COOLDOWN_MS = 1500;
+
+function ChatView({
+  aiId,
+  messages,
+  pendingFavourites,
+  onToggleFavourite,
+  onInvalidate,
+}: ChatViewProps) {
+  const wrapperRef = useRef<HTMLDivElement | null>(null);
+  const scrollRef = useRef<HTMLDivElement | null>(null);
+  const sentinelRef = useRef<HTMLDivElement | null>(null);
+  const composerRef = useRef<HTMLTextAreaElement | null>(null);
+
+  const { state: themeState, setState: setThemeState } = useChatTheme();
+
+  const [draft, setDraft] = useState('');
+  const [pending, setPending] = useState(false);
+  const [suggestCooldownUntil, setSuggestCooldownUntil] = useState<number>(0);
+  const [rewindOpen, setRewindOpen] = useState(false);
+
+  // Apply theme palette to the wrapper element. `useChatTheme()` runs
+  // every render, but `applyChatTheme` is idempotent (just writes CSS
+  // custom properties), so it's safe to call repeatedly.
+  useEffect(() => {
+    if (wrapperRef.current) {
+      applyChatTheme(themeState, aiId, wrapperRef.current);
+    }
+  }, [themeState, aiId]);
+
+  // Auto-scroll to the sentinel on new messages.
+  useEffect(() => {
+    sentinelRef.current?.scrollIntoView({ block: 'end' });
+  }, [messages.length]);
+
+  const send = useMutation<ChatMessage, unknown, string>({
+    mutationFn: (text: string) => api.sendChatMessage({ ai_id: aiId, message: text }),
+    onMutate: () => setPending(true),
+    onSettled: () => {
+      setPending(false);
+      onInvalidate();
+    },
+    onSuccess: () => {
+      setDraft('');
+      composerRef.current?.focus();
+    },
+    onError: (e) => toast('error', errorMessage(e)),
+  });
+
+  const suggest = useMutation<string, unknown, void>({
+    mutationFn: () =>
+      api.suggestChatUserMessage({
+        ai_id: aiId,
+        existing_message: draft,
+      }),
+    onSuccess: (body) => {
+      const trimmed = body.trim();
+      if (!trimmed) return;
+      setDraft(trimmed);
+      // Focus + select all so the user can type-over or hit Enter.
+      const ta = composerRef.current;
+      if (ta) {
+        ta.focus();
+        ta.setSelectionRange(0, trimmed.length);
+      }
+    },
+    onError: (e) => toast('error', errorMessage(e)),
+    onSettled: () => {
+      setSuggestCooldownUntil(Date.now() + SUGGEST_COOLDOWN_MS);
+      setTimeout(() => {
+        // Trigger a re-render so the button's disabled state refreshes.
+        setSuggestCooldownUntil((cur) => cur);
+      }, SUGGEST_COOLDOWN_MS);
+    },
+  });
+
+  const rewind = useMutation<number, unknown, number>({
+    mutationFn: (count: number) => api.rewindChat({ ai_id: aiId, count }),
+    onSuccess: (deleted) => {
+      toast('success', `Rewound ${deleted} message${deleted === 1 ? '' : 's'}.`);
+      onInvalidate();
+    },
+    onError: (e) => toast('error', errorMessage(e)),
+    onSettled: () => setRewindOpen(false),
+  });
+
+  const trimmedDraft = draft.trim();
+  const sendDisabled = pending || suggest.isPending || trimmedDraft.length === 0;
+  const suggestDisabled =
+    pending || send.isPending || suggest.isPending || Date.now() < suggestCooldownUntil;
+
+  function onComposerKeyDown(e: React.KeyboardEvent<HTMLTextAreaElement>) {
+    if (e.key === 'Enter' && !e.shiftKey) {
+      e.preventDefault();
+      if (!sendDisabled && trimmedDraft) {
+        send.mutate(trimmedDraft);
+      }
+    }
+  }
+
+  return (
+    <div className="chat-view" ref={wrapperRef} data-testid="chat-view">
+      <div className="chat-scroll" ref={scrollRef} data-testid="chat-scroll">
+        {messages.map((m) => (
+          <Bubble
+            key={m.id}
+            message={m}
+            pending={pendingFavourites.has(m.kindroid_msg_id)}
+            onToggleFavourite={() => onToggleFavourite(m.kindroid_msg_id, m.favourite)}
+          />
+        ))}
+        <div ref={sentinelRef} />
+      </div>
+      <div className="chat-composer">
+        <textarea
+          ref={composerRef}
+          value={draft}
+          placeholder="Type a message…"
+          onChange={(e) => setDraft(e.target.value)}
+          onKeyDown={onComposerKeyDown}
+          rows={2}
+          data-testid="chat-composer"
+          disabled={pending}
+        />
+        <button
+          type="button"
+          className="btn"
+          onClick={() => suggest.mutate()}
+          disabled={suggestDisabled}
+          title="Suggest a follow-up based on the conversation so far"
+          data-testid="chat-suggest"
+        >
+          ✨ Suggest
+        </button>
+        <button
+          type="button"
+          className="btn btn-primary"
+          onClick={() => send.mutate(trimmedDraft)}
+          disabled={sendDisabled}
+          data-testid="chat-send"
+        >
+          Send
+        </button>
+        <div style={{ position: 'relative' }}>
+          <button
+            type="button"
+            className="btn"
+            onClick={() => setRewindOpen((v) => !v)}
+            disabled={pending || send.isPending || suggest.isPending}
+            title="Rewind the last user/AI pair(s)"
+            data-testid="chat-rewind"
+            aria-haspopup="true"
+            aria-expanded={rewindOpen}
+          >
+            ⋯
+          </button>
+          {rewindOpen && (
+            <div
+              role="menu"
+              style={{
+                position: 'absolute',
+                bottom: '100%',
+                right: 0,
+                marginBottom: 4,
+                background: 'var(--surface)',
+                border: '1px solid var(--border)',
+                borderRadius: 'var(--radius)',
+                boxShadow: 'var(--shadow)',
+                padding: 4,
+                zIndex: 5,
+              }}
+            >
+              {[2, 4, 6, 8].map((n) => (
+                <button
+                  key={n}
+                  type="button"
+                  className="btn btn-sm"
+                  style={{ display: 'block', width: '100%', textAlign: 'left' }}
+                  onClick={() => rewind.mutate(n)}
+                  disabled={rewind.isPending}
+                  data-testid={`chat-rewind-${n}`}
+                >
+                  Rewind {n}
+                </button>
+              ))}
+            </div>
+          )}
+        </div>
+        <ChatThemePicker aiId={aiId} themeState={themeState} setThemeState={setThemeState} />
+      </div>
+    </div>
+  );
+}
+
+interface BubbleProps {
+  message: ChatMessage;
+  pending: boolean;
+  onToggleFavourite: () => void;
+}
+
+function Bubble({ message, pending, onToggleFavourite }: BubbleProps) {
+  const isUser = message.sender === 'user';
+  return (
+    <div className={`chat-bubble-row ${isUser ? 'user' : 'ai'}`}>
+      <div className={`chat-bubble ${isUser ? 'user' : 'ai'}`}>
+        {message.message || <span style={{ opacity: 0.6 }}>(empty message)</span>}
+        <div className="chat-meta">
+          <span>{new Date(message.timestamp).toLocaleString()}</span>
+          <button
+            type="button"
+            className="btn btn-sm"
+            aria-label={message.favourite ? 'Unfavourite' : 'Favourite'}
+            onClick={(e) => {
+              e.stopPropagation();
+              onToggleFavourite();
+            }}
+            disabled={pending}
+            style={{
+              padding: '2px 6px',
+              background: 'transparent',
+              border: 'none',
+              color: message.favourite ? 'var(--chat-accent, var(--primary))' : 'inherit',
+              opacity: 0.7,
+            }}
+          >
+            {message.favourite ? '★' : '☆'}
+          </button>
+        </div>
+        {message.image_urls.length > 0 && (
+          <div className="muted text-sm" style={{ marginTop: 4 }}>
+            🖼 {message.image_urls.length} image{message.image_urls.length === 1 ? '' : 's'}
+          </div>
+        )}
+        {message.link_url && (
+          <div className="text-sm" style={{ marginTop: 4 }}>
+            🔗{' '}
+            <a href={message.link_url} target="_blank" rel="noopener noreferrer">
+              {message.link_description ?? message.link_url}
+            </a>
+          </div>
+        )}
+      </div>
+    </div>
+  );
+}
+
+interface ChatThemePickerProps {
+  aiId: string;
+  themeState: ReturnType<typeof useChatTheme>['state'];
+  setThemeState: ReturnType<typeof useChatTheme>['setState'];
+}
+
+function ChatThemePicker({ aiId, themeState, setThemeState }: ChatThemePickerProps) {
+  const [open, setOpen] = useState(false);
+  const [overriding, setOverriding] = useState<boolean>(Boolean(themeState.overridesByAi[aiId]));
+  const [custom, setCustom] = useState<ChatThemePalette>(
+    themeState.overridesByAi[aiId]?.custom ?? {
+      bg: '#ffffff',
+      userBubble: '#2563eb',
+      aiBubble: '#f1f5f9',
+      accent: '#2563eb',
+      text: '#0f172a',
+    },
+  );
+  const [editingCustom, setEditingCustom] = useState(false);
+
+  const active = themeState.overridesByAi[aiId] ?? themeState.base;
+
+  function commitPreset(presetId: string) {
+    const next = {
+      ...themeState,
+      overridesByAi: { ...themeState.overridesByAi },
+    };
+    if (overriding) {
+      next.overridesByAi[aiId] = { presetId };
+    } else {
+      next.base = { presetId };
+    }
+    setThemeState(next);
+    setEditingCustom(false);
+  }
+
+  function commitCustom(palette: ChatThemePalette) {
+    const next = {
+      ...themeState,
+      overridesByAi: { ...themeState.overridesByAi },
+    };
+    const theme: ChatTheme = { presetId: CUSTOM_PRESET_ID, custom: palette };
+    if (overriding) {
+      next.overridesByAi[aiId] = theme;
+    } else {
+      next.base = theme;
+    }
+    setThemeState(next);
+  }
+
+  return (
+    <div style={{ position: 'relative' }}>
+      <button
+        type="button"
+        className="btn"
+        onClick={() => setOpen((v) => !v)}
+        title="Chat bubble theme"
+        data-testid="chat-theme-toggle"
+        aria-haspopup="true"
+        aria-expanded={open}
+      >
+        🎨
+      </button>
+      {open && (
+        <div
+          role="menu"
+          style={{
+            position: 'absolute',
+            bottom: '100%',
+            right: 0,
+            marginBottom: 4,
+            background: 'var(--surface)',
+            border: '1px solid var(--border)',
+            borderRadius: 'var(--radius)',
+            boxShadow: 'var(--shadow)',
+            padding: 8,
+            minWidth: 220,
+            zIndex: 5,
+          }}
+          data-testid="chat-theme-menu"
+        >
+          <label className="checkbox" style={{ marginBottom: 4 }}>
+            <input
+              type="checkbox"
+              checked={overriding}
+              onChange={(e) => {
+                const next = {
+                  ...themeState,
+                  overridesByAi: { ...themeState.overridesByAi },
+                };
+                if (e.target.checked) {
+                  next.overridesByAi[aiId] = { ...active };
+                  setOverriding(true);
+                  setThemeState(next);
+                } else {
+                  delete next.overridesByAi[aiId];
+                  setOverriding(false);
+                  setThemeState(next);
+                }
+              }}
+              data-testid="chat-theme-override"
+            />
+            Overwrite for this target
+          </label>
+          {PRESET_THEMES.map((p) => (
+            <button
+              key={p.id}
+              type="button"
+              className="btn btn-sm"
+              style={{
+                display: 'block',
+                width: '100%',
+                textAlign: 'left',
+                marginBottom: 2,
+                background: active.presetId === p.id ? 'var(--primary-soft)' : undefined,
+              }}
+              onClick={() => commitPreset(p.id)}
+              data-testid={`chat-theme-preset-${p.id}`}
+            >
+              {p.label}
+            </button>
+          ))}
+          <button
+            type="button"
+            className="btn btn-sm"
+            style={{
+              display: 'block',
+              width: '100%',
+              textAlign: 'left',
+              marginBottom: 4,
+              background: active.presetId === CUSTOM_PRESET_ID ? 'var(--primary-soft)' : undefined,
+            }}
+            onClick={() => {
+              setEditingCustom(true);
+              commitCustom(custom);
+            }}
+            data-testid="chat-theme-custom"
+          >
+            Custom…
+          </button>
+          {editingCustom && (
+            <div style={{ marginTop: 4, borderTop: '1px solid var(--border)', paddingTop: 4 }}>
+              {(['bg', 'userBubble', 'aiBubble', 'accent', 'text'] as const).map((key) => (
+                <label
+                  key={key}
+                  style={{ display: 'flex', alignItems: 'center', gap: 6, marginBottom: 2 }}
+                >
+                  <span style={{ flex: 1, fontSize: '0.85rem' }}>{key}</span>
+                  <input
+                    type="color"
+                    value={custom[key]}
+                    onChange={(e) => {
+                      const next = { ...custom, [key]: e.target.value };
+                      setCustom(next);
+                      commitCustom(next);
+                    }}
+                    data-testid={`chat-theme-custom-${key}`}
+                  />
+                </label>
+              ))}
+            </div>
+          )}
+        </div>
+      )}
+    </div>
   );
 }

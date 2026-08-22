@@ -4,7 +4,8 @@ use reqwest::Client;
 
 use super::{
     parse_retry_after, ChatBreakRequest, ChatMessagesPage, CreateNewAiRequest, HttpResponse,
-    JournalCreateRequest, KindroidError, ListChatMessagesRequest, ToggleMessagePinRequest,
+    JournalCreateRequest, KindroidError, ListChatMessagesRequest, RewindMessagesRequest,
+    SendMessageRequest, SuggestUserMessageRequest, ToggleMessagePinRequest,
     ToggleMessagePinResponse, UpdateInfoRequest, REQUEST_TIMEOUT,
 };
 use crate::domain::target::TargetKind;
@@ -46,6 +47,24 @@ pub trait KindroidClient: Send + Sync {
         token: &str,
         base_url: &str,
         req: JournalCreateRequest<'_>,
+    ) -> Result<HttpResponse, KindroidError>;
+    async fn send_message(
+        &self,
+        token: &str,
+        base_url: &str,
+        req: SendMessageRequest,
+    ) -> Result<HttpResponse, KindroidError>;
+    async fn rewind_messages(
+        &self,
+        token: &str,
+        base_url: &str,
+        req: RewindMessagesRequest,
+    ) -> Result<HttpResponse, KindroidError>;
+    async fn suggest_user_message(
+        &self,
+        token: &str,
+        base_url: &str,
+        req: SuggestUserMessageRequest,
     ) -> Result<HttpResponse, KindroidError>;
 }
 
@@ -291,6 +310,49 @@ impl KindroidClient for HttpKindroidClient {
             "ai_id": req.ai_id,
             "entry": req.entry,
             "keyphrases": req.keyphrases,
+        });
+        self.post_json(&url, token, body).await
+    }
+
+    async fn send_message(
+        &self,
+        token: &str,
+        base_url: &str,
+        req: SendMessageRequest,
+    ) -> Result<HttpResponse, KindroidError> {
+        let url = format!("{}/send-message", base_url.trim_end_matches('/'));
+        let body = serde_json::json!({
+            "ai_id": req.ai_id,
+            "message": req.message,
+        });
+        self.post_json(&url, token, body).await
+    }
+
+    async fn rewind_messages(
+        &self,
+        token: &str,
+        base_url: &str,
+        req: RewindMessagesRequest,
+    ) -> Result<HttpResponse, KindroidError> {
+        let url = format!("{}/rewind-messages", base_url.trim_end_matches('/'));
+        let body = serde_json::json!({
+            "ai_id": req.ai_id,
+            "count": req.count,
+        });
+        self.post_json(&url, token, body).await
+    }
+
+    async fn suggest_user_message(
+        &self,
+        token: &str,
+        base_url: &str,
+        req: SuggestUserMessageRequest,
+    ) -> Result<HttpResponse, KindroidError> {
+        let url = format!("{}/suggest-user-message", base_url.trim_end_matches('/'));
+        let body = serde_json::json!({
+            "ai_id": req.ai_id,
+            "existing_message": req.existing_message,
+            "stream": req.stream,
         });
         self.post_json(&url, token, body).await
     }
@@ -1344,5 +1406,238 @@ mod tests {
             .await
             .unwrap_err();
         assert!(matches!(err, KindroidError::Server { status: 500, .. }));
+    }
+
+    #[tokio::test]
+    async fn send_message_200() {
+        let server = MockServer::start().await;
+        Mock::given(method("POST"))
+            .and(path("/send-message"))
+            .and(header("Authorization", "Bearer t"))
+            .respond_with(ResponseTemplate::new(200).set_body_string("ok"))
+            .mount(&server)
+            .await;
+        let c = HttpKindroidClient::new();
+        let r = c
+            .send_message(
+                "t",
+                &server.uri(),
+                SendMessageRequest {
+                    ai_id: "ai_x".into(),
+                    message: "hello".into(),
+                },
+            )
+            .await
+            .unwrap();
+        assert_eq!(r.status, 200);
+    }
+
+    #[tokio::test]
+    async fn send_message_429_with_retry_after() {
+        let server = MockServer::start().await;
+        Mock::given(method("POST"))
+            .and(path("/send-message"))
+            .respond_with(
+                ResponseTemplate::new(429)
+                    .insert_header("Retry-After", "7")
+                    .set_body_string("slow"),
+            )
+            .mount(&server)
+            .await;
+        let c = HttpKindroidClient::new();
+        let err = c
+            .send_message(
+                "t",
+                &server.uri(),
+                SendMessageRequest {
+                    ai_id: "ai_x".into(),
+                    message: "hello".into(),
+                },
+            )
+            .await
+            .unwrap_err();
+        match err {
+            KindroidError::RateLimited { retry_after, .. } => {
+                assert_eq!(retry_after, Some(Duration::from_secs(7)))
+            }
+            other => panic!("expected RateLimited, got {other:?}"),
+        }
+    }
+
+    #[tokio::test]
+    async fn send_message_401_maps_to_auth() {
+        let server = MockServer::start().await;
+        Mock::given(method("POST"))
+            .and(path("/send-message"))
+            .respond_with(ResponseTemplate::new(401).set_body_string("nope"))
+            .mount(&server)
+            .await;
+        let c = HttpKindroidClient::new();
+        let err = c
+            .send_message(
+                "t",
+                &server.uri(),
+                SendMessageRequest {
+                    ai_id: "ai_x".into(),
+                    message: "hello".into(),
+                },
+            )
+            .await
+            .unwrap_err();
+        assert!(matches!(err, KindroidError::Auth { status: 401, .. }));
+    }
+
+    #[tokio::test]
+    async fn rewind_messages_200() {
+        let server = MockServer::start().await;
+        Mock::given(method("POST"))
+            .and(path("/rewind-messages"))
+            .and(header("Authorization", "Bearer t"))
+            .respond_with(ResponseTemplate::new(200).set_body_string("ok"))
+            .mount(&server)
+            .await;
+        let c = HttpKindroidClient::new();
+        let r = c
+            .rewind_messages(
+                "t",
+                &server.uri(),
+                RewindMessagesRequest {
+                    ai_id: "ai_x".into(),
+                    count: 2,
+                },
+            )
+            .await
+            .unwrap();
+        assert_eq!(r.status, 200);
+    }
+
+    #[tokio::test]
+    async fn rewind_messages_500_maps_to_server() {
+        let server = MockServer::start().await;
+        Mock::given(method("POST"))
+            .and(path("/rewind-messages"))
+            .respond_with(ResponseTemplate::new(500).set_body_string("boom"))
+            .mount(&server)
+            .await;
+        let c = HttpKindroidClient::new();
+        let err = c
+            .rewind_messages(
+                "t",
+                &server.uri(),
+                RewindMessagesRequest {
+                    ai_id: "ai_x".into(),
+                    count: 2,
+                },
+            )
+            .await
+            .unwrap_err();
+        assert!(matches!(err, KindroidError::Server { status: 500, .. }));
+    }
+
+    #[tokio::test]
+    async fn suggest_user_message_200() {
+        let server = MockServer::start().await;
+        Mock::given(method("POST"))
+            .and(path("/suggest-user-message"))
+            .and(header("Authorization", "Bearer t"))
+            .respond_with(
+                ResponseTemplate::new(200).set_body_string("Try asking about the weather."),
+            )
+            .mount(&server)
+            .await;
+        let c = HttpKindroidClient::new();
+        let r = c
+            .suggest_user_message(
+                "t",
+                &server.uri(),
+                SuggestUserMessageRequest {
+                    ai_id: "ai_x".into(),
+                    existing_message: "".into(),
+                    stream: false,
+                },
+            )
+            .await
+            .unwrap();
+        assert_eq!(r.status, 200);
+        assert!(r.body.contains("weather"));
+    }
+
+    #[tokio::test]
+    async fn suggest_user_message_400_maps_to_bad_request() {
+        let server = MockServer::start().await;
+        Mock::given(method("POST"))
+            .and(path("/suggest-user-message"))
+            .respond_with(ResponseTemplate::new(400).set_body_string("bad"))
+            .mount(&server)
+            .await;
+        let c = HttpKindroidClient::new();
+        let err = c
+            .suggest_user_message(
+                "t",
+                &server.uri(),
+                SuggestUserMessageRequest {
+                    ai_id: "ai_x".into(),
+                    existing_message: "".into(),
+                    stream: false,
+                },
+            )
+            .await
+            .unwrap_err();
+        assert!(matches!(err, KindroidError::BadRequest { status: 400, .. }));
+    }
+
+    #[tokio::test]
+    async fn suggest_user_message_429_without_retry_after() {
+        let server = MockServer::start().await;
+        Mock::given(method("POST"))
+            .and(path("/suggest-user-message"))
+            .respond_with(ResponseTemplate::new(429).set_body_string("slow"))
+            .mount(&server)
+            .await;
+        let c = HttpKindroidClient::new();
+        let err = c
+            .suggest_user_message(
+                "t",
+                &server.uri(),
+                SuggestUserMessageRequest {
+                    ai_id: "ai_x".into(),
+                    existing_message: "".into(),
+                    stream: false,
+                },
+            )
+            .await
+            .unwrap_err();
+        match err {
+            KindroidError::RateLimited { retry_after, .. } => assert!(retry_after.is_none()),
+            other => panic!("expected RateLimited, got {other:?}"),
+        }
+    }
+
+    #[tokio::test]
+    async fn toggle_message_pin_404_on_local_id_returns_not_found() {
+        // Pinning a `local:<uuid>` row before the next sync reconciles
+        // it → the server returns 404 (the synthetic id doesn't exist
+        // server-side). The frontend's optimistic-rollback handles the
+        // toast; this test just locks the mapping behaviour.
+        let server = MockServer::start().await;
+        Mock::given(method("POST"))
+            .and(path("/toggle-message-pin"))
+            .respond_with(ResponseTemplate::new(404).set_body_string(""))
+            .mount(&server)
+            .await;
+        let c = HttpKindroidClient::new();
+        let err = c
+            .toggle_message_pin(
+                "t",
+                &server.uri(),
+                ToggleMessagePinRequest {
+                    ai_id: "ai_x".into(),
+                    kind: TargetKind::Ai,
+                    message_id: "local:11111111-1111-1111-1111-111111111111".into(),
+                },
+            )
+            .await
+            .unwrap_err();
+        assert!(matches!(err, KindroidError::NotFound { status: 404, .. }));
     }
 }

@@ -38,40 +38,40 @@ These are integration / smoke checks that the automated Rust + Vitest suite cann
 30. Editor: save an entry with 501 characters → error toast "entry must be 500 characters or fewer".
 31. Editor: save an entry with a comma-separated keyphrase like `dragon wings, forked tongue` → error toast "keyphrase must not contain separators".
 32. Editor: save an entry with a multi-word keyphrase like `purple skin` → accepted (1..3 words allowed); save with 4+ words like `one two three four` → error toast "keyphrase must be 3 words or fewer".
-31. Export a character with 5 journal entries as a share image → reset app data → drop the image → character reappears with 5 journal entries (entry text + keyphrases preserved; ids and timestamps are new).
-32. Delete a character with journal entries → entries are gone (FK CASCADE).
-33. From Characters overview, click **Push as new Kin** on a character with `ai_name`, no journal entries → confirm; toast shows `New Kin created with ai_id …`; Push History detail lists `create-new-ai response` (status 200) and `update-info response` (status 200); Targets list now contains a row with the new ai_id and the AI name as label.
-35. Sync a target with fewer than 10 messages → automation does not process them; add stable messages and confirm the newest 10 remain excluded.
-36. Enable auto-journal after a completed sync → no historical backfill occurs; after the configured interval of stable messages, generated entries are sent to Kindroid.
-37. Force a partial `journal-create` failure → successful entries remain sent, the failed entry is retried on the next completed sync, and no successful entry is regenerated.
-38. Enable auto-summary with **Bootstrap from existing history** → the next completed sync summarizes all stable history; switch to **Incremental only** and confirm no initial AI call occurs.
-39. Add enough new stable messages for an incremental summary → the selected Kindroid field is updated; switch backend with an over-limit summary and confirm the reformat path runs before the remote update.
-40. Click **Reset summary** → local summary, candidate, and cursor clear while auto-journal settings and audit entries remain; **Run summary now** respects incremental-only no-op behavior.
-41. Set global automation instructions, then set a target override → prompts use override first, global second, and hard-coded defaults when both are empty; restore and clear each override.
-42. Configure an authless AI endpoint and an authenticated endpoint → automation sends an explicit empty AI bearer for the former and the stored bearer for the latter; no token appears in logs.
-43. Delete a target with automation enabled → automation state, pending runs, and generated audit entries are removed by cascade.
-44. Add a group target on the Targets page → row shows `Group chat` badge.
-45. Edit the target → kind radio is disabled.
-46. Push page → the group target does NOT appear in the dropdown.
-47. Chat History → select the group target → Sync fetches; messages list populates.
-48. Pin a message → row reflects favourite; Kindroid web UI shows the pin.
-49. On a group target, the `Automation…` button is disabled.
-50. Delete an AI target that has chat history → all rows cascade (existing behaviour).
-51. Delete a group target with chat history → same cascade.
-52. Add an AI and a Group with the same `id` string → both rows coexist; sync state and chat_messages are scoped to (id, kind).
-53. Character with no default → editor shows "— none —".
-54. Pick an AI target → save → reopen → still selected.
-55. Push page entry (no URL `targetId`) → dropdown pre-selected with the character's default.
-56. "Push as new Kin" on character with no default → reopen editor → default now points at the just-created target.
-57. Repeat 56 on a character that ALREADY has a default → default unchanged.
-58. Delete a referenced target → Targets row had "Default for N character(s)" caption before; affected character editor now shows "— none —".
-59. Duplicate a character with a default → duplicate's editor shows the same default.
-60. `/push?characterId=X` from character whose default is T → dropdown shows T. Same page with `?targetId=U` (Re-push link) → dropdown shows U.
-61. Editor dropdown lists only AI targets; group targets absent.
-62. On Push page, manually clear the dropdown → trigger any character refetch → dropdown stays cleared (does not snap back to the default).
-63. Editor → character with `default_target_id` set + populated `ai_directive`. Click the per-field "Push" button next to "Response directive". Confirm Kindroid updates, success toast names the target, push-history gains an entry, and the default-target label is unchanged (since `ai_name` was not pushed).
-64. Same editor, click the per-field "Push" button next to "Name" → confirm the target's local label on the Targets page syncs to the new `ai_name`.
-65. Editor → character with no default target. Confirm all 8 per-field "Push" buttons are disabled with the "Set a default push target" tooltip. Pick a default → buttons enable.
+33. Export a character with 5 journal entries as a share image → reset app data → drop the image → character reappears with 5 journal entries (entry text + keyphrases preserved; ids and timestamps are new).
+34. Delete a character with journal entries → entries are gone (FK CASCADE).
+35. From Characters overview, click **Push as new Kin** on a character with `ai_name`, no journal entries → confirm; toast shows `New Kin created with ai_id …`; Push History detail lists `create-new-ai response` (status 200) and `update-info response` (status 200); Targets list now contains a row with the new ai_id and the AI name as label.
+36. Sync a target with fewer than 10 messages → automation does not process them; add stable messages and confirm the newest 10 remain excluded.
+37. Enable auto-journal after a completed sync → no historical backfill occurs; after the configured interval of stable messages, generated entries are sent to Kindroid.
+38. Force a partial `journal-create` failure → successful entries remain sent, the failed entry is retried on the next completed sync, and no successful entry is regenerated.
+39. Enable auto-summary with **Bootstrap from existing history** → the next completed sync summarizes all stable history; switch to **Incremental only** and confirm no initial AI call occurs.
+40. Add enough new stable messages for an incremental summary → the selected Kindroid field is updated; switch backend with an over-limit summary and confirm the reformat path runs before the remote update.
+41. Click **Reset summary** → local summary, candidate, and cursor clear while auto-journal settings and audit entries remain; **Run summary now** respects incremental-only no-op behavior.
+42. Set global automation instructions, then set a target override → prompts use override first, global second, and hard-coded defaults when both are empty; restore and clear each override.
+43. Configure an authless AI endpoint and an authenticated endpoint → automation sends an explicit empty AI bearer for the former and the stored bearer for the latter; no token appears in logs.
+44. Delete a target with automation enabled → automation state, pending runs, and generated audit entries are removed by cascade.
+45. Add a group target on the Targets page → row shows `Group chat` badge.
+46. Edit the target → kind radio is disabled.
+47. Push page → the group target does NOT appear in the dropdown.
+48. Chat History → select the group target → Sync fetches; messages list populates.
+49. Pin a message → row reflects favourite; Kindroid web UI shows the pin.
+50. On a group target, the `Automation…` button is disabled.
+51. Delete an AI target that has chat history → all rows cascade (existing behaviour).
+52. Delete a group target with chat history → same cascade.
+53. Add an AI and a Group with the same `id` string → both rows coexist; sync state and chat_messages are scoped to (id, kind).
+54. Character with no default → editor shows "— none —".
+55. Pick an AI target → save → reopen → still selected.
+56. Push page entry (no URL `targetId`) → dropdown pre-selected with the character's default.
+57. "Push as new Kin" on character with no default → reopen editor → default now points at the just-created target.
+58. Repeat 56 on a character that ALREADY has a default → default unchanged.
+59. Delete a referenced target → Targets row had "Default for N character(s)" caption before; affected character editor now shows "— none —".
+60. Duplicate a character with a default → duplicate's editor shows the same default.
+61. `/push?characterId=X` from character whose default is T → dropdown shows T. Same page with `?targetId=U` (Re-push link) → dropdown shows U.
+62. Editor dropdown lists only AI targets; group targets absent.
+63. On Push page, manually clear the dropdown → trigger any character refetch → dropdown stays cleared (does not snap back to the default).
+64. Editor → character with `default_target_id` set + populated `ai_directive`. Click the per-field "Push" button next to "Response directive". Confirm Kindroid updates, success toast names the target, push-history gains an entry, and the default-target label is unchanged (since `ai_name` was not pushed).
+65. Same editor, click the per-field "Push" button next to "Name" → confirm the target's local label on the Targets page syncs to the new `ai_name`.
+66. Editor → character with no default target. Confirm all 8 per-field "Push" buttons are disabled with the "Set a default push target" tooltip. Pick a default → buttons enable.
 
 ## Global font-scale adjuster
 
@@ -82,3 +82,16 @@ These are integration / smoke checks that the automated Rust + Vitest suite cann
 5. Mobile bottom-nav viewport (≤ 720 px): text scales inside nav links; nav links do not overflow at Extra Large (known tight at 1.25× — see "Risks" in `.kilo/plans/1786307570997-global-font-size-adjuster.md`).
 6. Inline-styled paragraphs (Character Editor, Push, Settings cards) scale with the rest (they use `.text-xs` / `.text-sm` / `.text-md` utility classes, all rem-based).
 7. Future PR adds a `font-size: NNpx` to `global.css` → REJECT. Every font-size in `global.css` MUST be in `rem` so it inherits the global scale. The comment above the `html { font-size: ... }` rule documents this.
+
+## Chat mode (single-AI composer / rewind / suggest)
+
+1. Open chat-view for an AI target. Send 3 messages in a row.
+2. ✨ Suggest on an empty composer → textarea fills, text is selected. Type over a few chars, press Enter → sends.
+3. ✨ Suggest repeatedly → button disables for ~1.5 s each call.
+4. Switch to History. All 3 sent messages visible.
+5. Click Sync. After the first tick, open History detail on one of the 3 messages → `kindroid_msg_id` is the real server id (no `local:` prefix); no duplicate rows.
+6. Switch back to Chat. Rewind 2. Last two messages disappear locally; no orphaned synthetic twins.
+7. Toggle themes (preset + custom). CSS custom properties on `.chat-view` update live.
+8. Sync cancels on chat entry (when active) and resumes via Sync. Toast "Sync paused for chat." appears.
+9. Send disabled when textarea is whitespace-only.
+10. Group target → segmented control hidden; ChatView never renders.

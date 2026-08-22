@@ -347,6 +347,34 @@ mod inner {
     }
 
     #[tauri::command]
+    pub async fn send_chat_message(
+        repo: State<'_, Repo>,
+        client: State<'_, Client>,
+        input: chat_history::SendChatMessageInput,
+    ) -> Result<crate::domain::chat_message::ChatMessage, crate::error::AppError> {
+        chat_history::send_chat_message(repo.inner().clone(), client.inner().clone(), input).await
+    }
+
+    #[tauri::command]
+    pub async fn rewind_chat(
+        repo: State<'_, Repo>,
+        client: State<'_, Client>,
+        input: chat_history::RewindChatInput,
+    ) -> Result<usize, crate::error::AppError> {
+        chat_history::rewind_chat(repo.inner().clone(), client.inner().clone(), input).await
+    }
+
+    #[tauri::command]
+    pub async fn suggest_chat_user_message(
+        repo: State<'_, Repo>,
+        client: State<'_, Client>,
+        input: chat_history::SuggestChatUserMessageInput,
+    ) -> Result<String, crate::error::AppError> {
+        chat_history::suggest_user_message(repo.inner().clone(), client.inner().clone(), input)
+            .await
+    }
+
+    #[tauri::command]
     pub async fn get_chat_automation_state(
         repo: State<'_, Repo>,
         ai_id: String,

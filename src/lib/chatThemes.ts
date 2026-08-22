@@ -45,12 +45,18 @@ export const PRESET_THEMES: ChatThemePreset[] = [
   {
     id: 'default',
     label: 'Default',
+    // The "Default" preset adapts to the active light/dark theme by
+    // referencing the page-level CSS custom properties (--surface-2,
+    // --text) instead of baking a specific colour. This way the same
+    // preset renders correctly whether the user is on light or dark
+    // mode — only the explicit presets (Sepia / Midnight / Paper)
+    // commit to a fixed palette.
     palette: {
       bg: 'transparent',
-      userBubble: '#2563eb',
-      aiBubble: '#f1f5f9',
-      accent: '#2563eb',
-      text: '#0f172a',
+      userBubble: 'var(--primary)',
+      aiBubble: 'var(--surface-2)',
+      accent: 'var(--primary)',
+      text: 'var(--text)',
     },
   },
   {

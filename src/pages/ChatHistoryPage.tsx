@@ -15,6 +15,7 @@ import { TARGET_KIND_LABEL } from '../lib/types';
 import { ConfirmDialog } from '../components/ConfirmDialog';
 import { AutomationPanel } from '../components/AutomationPanel';
 import { toast } from '../components/Toaster';
+import { renderChatMarkdown } from '../lib/chatMarkdown';
 import {
   applyChatTheme,
   CUSTOM_PRESET_ID,
@@ -27,15 +28,11 @@ import {
 const PAGE_SIZE = 50;
 const SEARCH_LIMIT = 200;
 
-type ViewMode = 'chat' | 'history' | 'search';
+type ViewMode = 'chat' | 'history';
 
 function parseViewMode(raw: string | null): ViewMode {
-  if (raw === 'chat' || raw === 'history' || raw === 'search') return raw;
+  if (raw === 'chat' || raw === 'history') return raw;
   return 'chat';
-}
-
-function viewIsSearchMode(view: ViewMode): boolean {
-  return view === 'search';
 }
 
 interface ActiveSyncInfo {
@@ -184,9 +181,11 @@ export function ChatHistoryPage() {
   }, [selectedAiId, debouncedQuery, favouritesOnly]);
 
   const trimmedQuery = debouncedQuery.trim();
-  // The search box only applies in the search view; otherwise an empty
-  // trimmed query is the normal "no filter" state.
-  const isSearching = viewIsSearchMode(view) && trimmedQuery.length > 0;
+  // The search box only applies in History view (chat is single-AI
+  // composer only). When the user types into History, we run a
+  // FTS search; when they clear it, we fall back to the regular
+  // browse list.
+  const isSearching = view === 'history' && trimmedQuery.length > 0;
 
   // Live progress payload from the backend (refreshed via events).
   const [liveProgress, setLiveProgress] = useState<LiveProgress | null>(null);
@@ -356,38 +355,48 @@ export function ChatHistoryPage() {
     };
   }, [queryClient, selectedAiId, selectedKind]);
 
-  // Cancel any sync running on the same (ai_id, kind) when entering chat
+  // Cancel any sync running on the same (ai_id, kind) while in chat
   // view, so the chat composer doesn't fight the background loop for the
-  // token. Syncs on other targets are left alone. Idempotent: a no-op
-  // when nothing is running.
-  const cancelledOnceRef = useRef<string | null>(null);
+  // token. Syncs on other targets are left alone. The effect re-runs
+  // on every change of `current.data` so a sync that starts while we're
+  // already in chat view is also cancelled (the latch was removed —
+  // it was racy because `current.data` polls every 5s and could be
+  // stale on first mount).
   useEffect(() => {
     if (view !== 'chat') return;
     if (!selectedAiId || !selectedKind) return;
     if (isGroup) return;
-    const key = `${selectedAiId}|${selectedKind}`;
-    if (cancelledOnceRef.current === key) return;
-    cancelledOnceRef.current = key;
     const cur = current.data;
     if (cur && cur.ai_id === selectedAiId && cur.kind === selectedKind) {
-      api
-        .cancelChatSync()
-        .then(() => {
-          toast('info', 'Sync paused for chat.');
-          queryClient.invalidateQueries({ queryKey: ['chat-sync-state'] });
-          queryClient.invalidateQueries({ queryKey: ['current-sync'] });
-        })
-        .catch(() => {
-          // Best-effort: if the cancel fails the user can still chat,
-          // and the sync will end on its own.
-        });
+      api.cancelChatSync().catch(() => {
+        // Best-effort: if the cancel fails the user can still chat,
+        // and the sync will end on its own.
+      });
+    }
+  }, [view, selectedAiId, selectedKind, isGroup, current.data]);
+  // Surface a one-time info toast when a cancel actually fires, so the
+  // user knows their sync was paused. The latch is keyed on
+  // (ai_id, kind) and is cleared when the user navigates away from
+  // chat view, so re-entering chat and triggering another cancel
+  // re-shows the toast.
+  const cancelToastKeyRef = useRef<string | null>(null);
+  useEffect(() => {
+    if (view !== 'chat') {
+      cancelToastKeyRef.current = null;
+      return;
+    }
+    if (!selectedAiId || !selectedKind || isGroup) return;
+    const cur = current.data;
+    if (cur && cur.ai_id === selectedAiId && cur.kind === selectedKind) {
+      const key = `${cur.ai_id}|${cur.kind}`;
+      if (cancelToastKeyRef.current !== key) {
+        cancelToastKeyRef.current = key;
+        toast('info', 'Sync paused for chat.');
+        queryClient.invalidateQueries({ queryKey: ['chat-sync-state'] });
+        queryClient.invalidateQueries({ queryKey: ['current-sync'] });
+      }
     }
   }, [view, selectedAiId, selectedKind, isGroup, current.data, queryClient]);
-  // Reset the once-per-target cancel latch when the user switches
-  // targets, so leaving and re-entering chat-view can cancel again.
-  useEffect(() => {
-    cancelledOnceRef.current = null;
-  }, [selectedAiId, selectedKind]);
 
   async function onSync() {
     if (!selectedAiId || !selectedKind) return;
@@ -651,8 +660,11 @@ export function ChatHistoryPage() {
     currentSyncing.kind === selectedKind;
 
   // In chat-view we hide Sync / Reset / Automation so the user can't
-  // trigger destructive ops while composing a message.
-  const showHistoryActions = view === 'history' || view === 'search';
+  // trigger destructive ops while composing a message. The chat mode
+  // also cancels any in-flight sync on entry — see the `cancelledOnceRef`
+  // effect — and the Sync button stays disabled until the user switches
+  // back to History and re-syncs.
+  const showHistoryActions = view === 'history';
 
   // Build the progress indicator subtitle. During a sync we combine the
   // request count + last-batch timestamp so the user can see whether the
@@ -756,6 +768,37 @@ export function ChatHistoryPage() {
             </option>
           ))}
         </select>
+        {/* Chat / History segmented control. Inlined next to the target
+            select so the layout stays compact on narrower viewports.
+            Hidden for group targets — chat-mode is single-AI only. */}
+        {!isGroup && (
+          <div
+            data-testid="view-segmented"
+            style={{ flexDirection: 'row', gap: 0, marginLeft: 4 }}
+            role="tablist"
+          >
+            <button
+              type="button"
+              role="tab"
+              aria-selected={view === 'chat'}
+              className={`btn btn-sm ${view === 'chat' ? 'btn-primary' : ''}`}
+              onClick={() => setView('chat')}
+              style={{ borderTopRightRadius: 0, borderBottomRightRadius: 0 }}
+            >
+              Chat
+            </button>
+            <button
+              type="button"
+              role="tab"
+              aria-selected={view === 'history'}
+              className={`btn btn-sm ${view === 'history' ? 'btn-primary' : ''}`}
+              onClick={() => setView('history')}
+              style={{ borderTopLeftRadius: 0, borderBottomLeftRadius: 0 }}
+            >
+              History
+            </button>
+          </div>
+        )}
         <div style={{ flex: 1 }} />
         {showHistoryActions && showSync && (
           <button
@@ -830,48 +873,6 @@ export function ChatHistoryPage() {
 
       {body && view !== 'chat' && <p className="muted">{body}</p>}
 
-      {/* 3-way segmented control. Hidden for group targets — chat-mode
-          is single-AI only. */}
-      {!isGroup && (
-        <div
-          className="form-row"
-          data-testid="view-segmented"
-          style={{ flexDirection: 'row', gap: 0, marginBottom: 8 }}
-          role="tablist"
-        >
-          <button
-            type="button"
-            role="tab"
-            aria-selected={view === 'chat'}
-            className={`btn btn-sm ${view === 'chat' ? 'btn-primary' : ''}`}
-            onClick={() => setView('chat')}
-            style={{ borderTopRightRadius: 0, borderBottomRightRadius: 0 }}
-          >
-            Chat
-          </button>
-          <button
-            type="button"
-            role="tab"
-            aria-selected={view === 'history'}
-            className={`btn btn-sm ${view === 'history' ? 'btn-primary' : ''}`}
-            onClick={() => setView('history')}
-            style={{ borderRadius: 0 }}
-          >
-            History
-          </button>
-          <button
-            type="button"
-            role="tab"
-            aria-selected={view === 'search'}
-            className={`btn btn-sm ${view === 'search' ? 'btn-primary' : ''}`}
-            onClick={() => setView('search')}
-            style={{ borderTopLeftRadius: 0, borderBottomLeftRadius: 0 }}
-          >
-            Search
-          </button>
-        </div>
-      )}
-
       {/* Chat view: chat bubbles + composer. Reuses the same query key as
           the history list so switching tabs is instant. */}
       {view === 'chat' && !isGroup && selectedAiId && selectedKind && (
@@ -890,7 +891,7 @@ export function ChatHistoryPage() {
         />
       )}
 
-      {(view === 'history' || view === 'search') && (
+      {view === 'history' && (
         <>
           <div
             className="form-row"
@@ -901,13 +902,7 @@ export function ChatHistoryPage() {
               className="input input-search"
               placeholder="Search messages…"
               value={searchInput}
-              onChange={(e) => {
-                setSearchInput(e.target.value);
-                // Typing while in History view auto-promotes to Search.
-                if (view === 'history' && e.target.value.length > 0) {
-                  setView('search');
-                }
-              }}
+              onChange={(e) => setSearchInput(e.target.value)}
               style={{ flex: 1, minWidth: 200 }}
             />
             <label className="checkbox" title="Show only messages you've favourited (pinned) here">
@@ -1234,7 +1229,7 @@ function MessageDetailDialog({
         </div>
 
         <div style={{ whiteSpace: 'pre-wrap', marginTop: 16, lineHeight: 1.5 }}>
-          {message.message || <span className="muted">(empty message)</span>}
+          {message.message ? renderChatMarkdown(message.message) : <span className="muted">(empty message)</span>}
         </div>
 
         {message.image_urls.length > 0 && (
@@ -1431,7 +1426,11 @@ function ChatView({
   return (
     <div className="chat-view" ref={wrapperRef} data-testid="chat-view">
       <div className="chat-scroll" ref={scrollRef} data-testid="chat-scroll">
-        {messages.map((m) => (
+        {/* `browsePage.data` is sorted newest-first (DESC by timestamp).
+            Chat UX wants newest at the BOTTOM, so reverse before
+            rendering. The order is otherwise stable so React keys +
+            memoisation still work. */}
+        {[...messages].reverse().map((m) => (
           <Bubble
             key={m.id}
             message={m}
@@ -1462,15 +1461,6 @@ function ChatView({
         >
           ✨ Suggest
         </button>
-        <button
-          type="button"
-          className="btn btn-primary"
-          onClick={() => send.mutate(trimmedDraft)}
-          disabled={sendDisabled}
-          data-testid="chat-send"
-        >
-          Send
-        </button>
         <div style={{ position: 'relative' }}>
           <button
             type="button"
@@ -1482,7 +1472,7 @@ function ChatView({
             aria-haspopup="true"
             aria-expanded={rewindOpen}
           >
-            ⋯
+            ↩️ Rewind
           </button>
           {rewindOpen && (
             <div
@@ -1517,6 +1507,15 @@ function ChatView({
           )}
         </div>
         <ChatThemePicker aiId={aiId} themeState={themeState} setThemeState={setThemeState} />
+        <button
+          type="button"
+          className="btn btn-primary"
+          onClick={() => send.mutate(trimmedDraft)}
+          disabled={sendDisabled}
+          data-testid="chat-send"
+        >
+          Send
+        </button>
       </div>
     </div>
   );
@@ -1530,11 +1529,26 @@ interface BubbleProps {
 
 function Bubble({ message, pending, onToggleFavourite }: BubbleProps) {
   const isUser = message.sender === 'user';
+  // `display_name` is populated by Kindroid for AI messages (the
+  // character's actual name) and is empty for user messages on the
+  // current server API. We fall back to `sender` so the meta line
+  // is never blank.
+  const author = message.display_name?.trim() || message.sender;
   return (
     <div className={`chat-bubble-row ${isUser ? 'user' : 'ai'}`}>
       <div className={`chat-bubble ${isUser ? 'user' : 'ai'}`}>
-        {message.message || <span style={{ opacity: 0.6 }}>(empty message)</span>}
+        {message.message ? (
+          // Chat messages support a tiny inline markdown subset
+          // (bold / italic / > line quotes — see chatMarkdown.tsx).
+          // Empty messages fall through to the muted placeholder so
+          // the renderer never crashes on whitespace.
+          renderChatMarkdown(message.message)
+        ) : (
+          <span style={{ opacity: 0.6 }}>(empty message)</span>
+        )}
         <div className="chat-meta">
+          <strong style={{ color: 'inherit' }}>{author}</strong>
+          <span>·</span>
           <span>{new Date(message.timestamp).toLocaleString()}</span>
           <button
             type="button"
@@ -1551,6 +1565,7 @@ function Bubble({ message, pending, onToggleFavourite }: BubbleProps) {
               border: 'none',
               color: message.favourite ? 'var(--chat-accent, var(--primary))' : 'inherit',
               opacity: 0.7,
+              marginLeft: 'auto',
             }}
           >
             {message.favourite ? '★' : '☆'}
@@ -1716,12 +1731,29 @@ function ChatThemePicker({ aiId, themeState, setThemeState }: ChatThemePickerPro
           </button>
           {editingCustom && (
             <div style={{ marginTop: 4, borderTop: '1px solid var(--border)', paddingTop: 4 }}>
-              {(['bg', 'userBubble', 'aiBubble', 'accent', 'text'] as const).map((key) => (
+              {(
+                [
+                  { key: 'bg', label: 'Background' },
+                  { key: 'userBubble', label: 'Your bubble' },
+                  { key: 'aiBubble', label: 'AI bubble' },
+                  { key: 'accent', label: 'Accent (quotes, stars)' },
+                  { key: 'text', label: 'Text colour' },
+                ] as const
+              ).map(({ key, label }) => (
                 <label
                   key={key}
-                  style={{ display: 'flex', alignItems: 'center', gap: 6, marginBottom: 2 }}
+                  style={{
+                    display: 'flex',
+                    alignItems: 'center',
+                    gap: 6,
+                    marginBottom: 2,
+                    // Inherit the page's text colour so the labels stay
+                    // readable in both light and dark mode (the popup
+                    // sits on top of `--surface`).
+                    color: 'var(--text)',
+                  }}
                 >
-                  <span style={{ flex: 1, fontSize: '0.85rem' }}>{key}</span>
+                  <span style={{ flex: 1, fontSize: '0.85rem' }}>{label}</span>
                   <input
                     type="color"
                     value={custom[key]}

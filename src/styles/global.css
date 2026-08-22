@@ -1162,8 +1162,13 @@ pre {
   word-wrap: break-word;
 }
 .chat-bubble.user {
+  /* The user-bubble background comes from the active preset. Text
+     colour defaults to white for the bright default/primary palette
+     but can be overridden per-theme via --chat-user-text (the Custom
+     theme picker doesn't expose it yet, so we default to white for
+     readability against the blue/green/midnight/sepia accents). */
   background: var(--chat-user-bubble, var(--primary));
-  color: #ffffff;
+  color: var(--chat-user-text, #ffffff);
 }
 .chat-bubble.ai {
   background: var(--chat-ai-bubble, var(--surface-2));

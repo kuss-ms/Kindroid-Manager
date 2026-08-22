@@ -1128,22 +1128,6 @@ pre {
 }
 
 /* --- Chat view --- */
-/* In chat mode the chat-composer is `position: fixed` at the bottom
-   of the viewport. If a page-level scrollbar were to appear on
-   `.app-main` (its default `overflow: auto` triggers on the
-   slightest content overflow), its thumb at the bottom would be
-   hidden behind the composer — the scroll position would still
-   work, but the user couldn't see the draggable handle. The class
-   is toggled by `useEffect` in `ChatHistoryPage` whenever a chat
-   view is active; we set `overflow: hidden` so any tiny overflow is
-   clipped (not scrollable) instead of producing a hidden scrollbar.
-   The `.chat-scroll` inside `.chat-view` still scrolls internally
-   via `overflow-y: auto`, so this only affects the outer page
-   scroll, not the messages. */
-body.chat-mode .app-main {
-  overflow: hidden;
-}
-
 /* The wrapper holds the scrollable list of bubbles + the composer.
    `--chat-*` custom properties are written at runtime by
    `applyChatTheme` in src/lib/chatThemes.ts. */
@@ -1160,15 +1144,7 @@ body.chat-mode .app-main {
      viewport) so the last message isn't hidden behind it when the
      user scrolls to the end. The `.chat-scroll` child keeps
      `overflow-y: auto` so the bubbles still scroll inside the pane
-     once they outgrow it.
-
-     The padding here is deliberately modest (96 px) to match the
-     visual distance the user wanted between the last message and
-     the composer. The scrollbar visibility issue is solved
-     elsewhere — see the `body.chat-mode .app-main { overflow: hidden }`
-     rule below, which prevents a browser-level scrollbar on
-     `.app-main` from appearing at all in chat mode (its thumb
-     would otherwise be hidden by the fixed composer). */
+     once they outgrow it. */
   flex: 1;
   overflow: hidden;
   padding-bottom: 96px;
@@ -1181,6 +1157,14 @@ body.chat-mode .app-main {
   display: flex;
   flex-direction: column;
   gap: var(--space-2);
+  /* The chat-composer is `position: fixed` at the bottom of the
+     viewport, overlaying the bottom of the chat pane. The 16 px of
+     `padding-bottom` here reserves room inside the scroll area for
+     the scrollbar's bottom thumb position, so the draggable handle
+     never sits underneath the composer — without this, scrolling
+     all the way down hides the scrollbar thumb behind the fixed
+     bar. */
+  padding-bottom: calc(var(--space-3) + 16px);
 }
 .chat-bubble-row {
   display: flex;

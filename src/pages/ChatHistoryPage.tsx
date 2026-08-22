@@ -397,21 +397,6 @@ export function ChatHistoryPage() {
       }
     }
   }, [view, selectedAiId, selectedKind, isGroup, current.data, queryClient]);
-  // Toggle the `chat-mode` body class so the global CSS can disable
-  // `.app-main`'s default `overflow: auto` while the chat pane is
-  // rendered. Without this, the slightest content overflow on the
-  // page triggers a page-level scrollbar whose thumb at the bottom
-  // is hidden behind the position-fixed composer. The
-  // `.chat-scroll` inside `.chat-view` keeps its own `overflow-y:
-  // auto`, so the user can still scroll the messages; only the
-  // outer-page scroll is suppressed.
-  useEffect(() => {
-    if (view === 'chat' && selectedAiId && !isGroup) {
-      document.body.classList.add('chat-mode');
-      return () => document.body.classList.remove('chat-mode');
-    }
-    document.body.classList.remove('chat-mode');
-  }, [view, selectedAiId, isGroup]);
 
   async function onSync() {
     if (!selectedAiId || !selectedKind) return;

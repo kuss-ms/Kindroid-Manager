@@ -1128,28 +1128,35 @@ pre {
 }
 
 /* --- Chat view --- */
+/* The wrapper holds the scrollable list of bubbles + the composer.
+   `--chat-*` custom properties are written at runtime by
+   `applyChatTheme` in src/lib/chatThemes.ts. */
+
 /* In chat mode the chat-composer is `position: fixed` at the bottom
-   of the viewport. Without this rule, `.app-main`'s default
-   `overflow: auto` triggers a page-level scrollbar on the right edge
-   whenever the page is even one pixel taller than the visible area
-   (which happens because the `.chat-view` + chat-scroll combo
-   doesn't always land on exact integer heights). That scrollbar's
-   thumb at the bottom is then hidden behind the composer — scroll
-   position still works, but the user can't see or grab the handle.
+   of the viewport. `.app-main`'s default `overflow: auto` triggers
+   a page-level scrollbar on the right edge whenever the page is
+   even one pixel taller than the visible area, and that scrollbar's
+   thumb at the bottom would be hidden behind the composer.
 
-   We use `overflow: clip` rather than `overflow: hidden` because
-   `clip` does NOT establish a new scroll container. The user's
-   earlier complaint that scrolling was broken was because
-   `overflow: hidden` captured wheel events at the `.app-main`
-   layer and stopped them from reaching the inner `.chat-scroll`,
-   which has its own `overflow-y: auto` for scrolling the messages.
-   With `clip`, the page-level scroll is suppressed but the inner
-   scroll keeps working normally.
+   We hide the scrollbar visually rather than disabling scrolling.
+   `scrollbar-width: none` (Firefox) and `::-webkit-scrollbar { display:
+   none }` (Chromium / WebKit) suppress the bar in both engines
+   while still letting the user scroll the page via mouse wheel or
+   keyboard. The inner `.chat-scroll` keeps its own scrollbar
+   (visible via its own `::-webkit-scrollbar` rules below) so messages
+   are still navigable.
 
-   The class is toggled by `useEffect` in `ChatHistoryPage` whenever
-   a chat view is active. */
+   We do NOT change `.app-main`'s `overflow` value here. Switching
+   to `overflow: hidden` captures wheel events at the page level
+   and broke the inner chat-scroll, while `overflow: clip` doesn't
+   create a scroll container and caused the body / html to scroll
+   instead. Hiding the scrollbar visually leaves `.app-main`'s
+   scroll behaviour untouched. */
 body.chat-mode .app-main {
-  overflow: clip;
+  scrollbar-width: none;
+}
+body.chat-mode .app-main::-webkit-scrollbar {
+  display: none;
 }
 .chat-view {
   background: var(--chat-bg, transparent);
@@ -1185,6 +1192,19 @@ body.chat-mode .app-main {
      all the way down hides the scrollbar thumb behind the fixed
      bar. */
   padding-bottom: calc(var(--space-3) + 16px);
+  /* Restore a visible scrollbar here even though we hide it on the
+     outer `.app-main` (see comment above) — without this the chat
+     scroll would inherit `display: none` from `::-webkit-scrollbar`
+     on the body class in some browsers. */
+  scrollbar-width: thin;
+}
+.chat-scroll::-webkit-scrollbar {
+  width: 8px;
+  display: block;
+}
+.chat-scroll::-webkit-scrollbar-thumb {
+  background: var(--border-strong);
+  border-radius: 4px;
 }
 .chat-bubble-row {
   display: flex;

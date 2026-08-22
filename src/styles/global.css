@@ -1139,13 +1139,13 @@ pre {
   display: flex;
   flex-direction: column;
   /* `flex: 1` makes the chat pane fill the remaining vertical space in
-     the page column (between the toolbar and the bottom of the
-     viewport). Previously this was capped at `60vh`, which left a
-     visible empty area below the composer on standard viewports. The
-     `.chat-scroll` child keeps `overflow-y: auto` so the bubbles still
-     scroll inside the pane once they outgrow it. */
+     the page column. No `min-height` — a previous 320 px minimum
+     forced the pane below the fold on shorter viewports (e.g. laptop
+     windows or split-screen), pushing the composer off-screen and
+     making the user scroll just to reach the input. The
+     `.chat-scroll` child keeps `overflow-y: auto` so the bubbles
+     still scroll inside the pane once they outgrow it. */
   flex: 1;
-  min-height: 320px;
   overflow: hidden;
 }
 .chat-scroll {
@@ -1193,18 +1193,23 @@ pre {
   border: 1px solid var(--border);
 }
 .chat-bubble em {
-  /* Italicised runs (`*…*`). No accent paint here — the bubble's
-     own text colour is used so italics always stay readable. The
-     `font-style: italic` alone is enough of a visual cue, and painting
-     the same colour as `--chat-accent` made italics invisible whenever
-     the user picked a custom palette where the accent matched the
-     bubble. The accent is reserved for structural elements (the quote
-     bar, the favourited star). */
+  /* Italicised runs (`*…*`). In Kindroid chat history these are the
+     "thoughts/actions" markers — the AI's internal narration and
+     actions — so we paint them with `--chat-accent` to make them
+     visually distinct from regular text. The `font-style: italic`
+     carries the meaning even if the accent colour ends up matching
+     the bubble. */
   font-style: italic;
+  color: var(--chat-accent, var(--primary));
 }
 .chat-bubble strong {
-  /* Bold runs (`**…**`). Same as <em> — inherit the bubble's text
-     colour, lean on `font-weight: 700` for emphasis. */
+  /* Bold runs (`**…**`). In Kindroid, double asterisks are nested
+     emphasis inside an already-italicised thought, e.g.
+     `*I think about *you* all day long*`. We deliberately do NOT set
+     a colour here so the bold run inherits from its parent: accent
+     when nested inside an italic thought, or the bubble's normal
+     text colour when used at top level. `font-weight: 700` is enough
+     to mark the emphasis on its own. */
   font-weight: 700;
 }
 .chat-quote {

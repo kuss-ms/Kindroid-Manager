@@ -397,6 +397,20 @@ export function ChatHistoryPage() {
       }
     }
   }, [view, selectedAiId, selectedKind, isGroup, current.data, queryClient]);
+  // Toggle the `chat-mode` body class while a chat view is rendered
+  // so the global CSS can apply `body.chat-mode .app-main {
+  // overflow: clip }`. That suppresses the page-level scrollbar
+  // (whose thumb would otherwise be hidden behind the position-fixed
+  // composer) without breaking the inner `.chat-scroll`'s own
+  // `overflow-y: auto` — `overflow: clip` does not create a scroll
+  // container, so wheel events still reach the messages.
+  useEffect(() => {
+    if (view === 'chat' && selectedAiId && !isGroup) {
+      document.body.classList.add('chat-mode');
+      return () => document.body.classList.remove('chat-mode');
+    }
+    document.body.classList.remove('chat-mode');
+  }, [view, selectedAiId, isGroup]);
 
   async function onSync() {
     if (!selectedAiId || !selectedKind) return;

@@ -1189,10 +1189,20 @@ pre {
   border: 1px solid var(--border);
 }
 .chat-bubble em {
+  /* Italicised runs (single `*…*`) inherit the chat-text colour but
+     lean on the theme's accent for a tint, so they pop on both light
+     and dark backgrounds without competing with the bubble background.
+     Italics are the most common inline mark in chat messages, so this
+     is also where the accent colour is most visible to the user. */
   font-style: italic;
+  color: var(--chat-accent, var(--primary));
 }
 .chat-bubble strong {
-  font-weight: 600;
+  /* Bold runs (`**…**`) get the same accent treatment. We deliberately
+     avoid setting `color: var(--chat-accent)` on plain text — that would
+     tint the entire message body. Only the marked-up spans use it. */
+  font-weight: 700;
+  color: var(--chat-accent, var(--primary));
 }
 .chat-quote {
   display: block;

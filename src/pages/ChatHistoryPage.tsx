@@ -760,6 +760,18 @@ export function ChatHistoryPage() {
             const match = targetsList.find((t) => t.id === value);
             if (match) setSelectedTarget(match.ai_id, match.kind);
           }}
+          style={{
+            // The base `.select` rule (global.css) sets `width: 100%`
+            // for form-row stacks. In this toolbar row we want the
+            // select to size to its content so the spacer + action
+            // buttons + segmented control can sit on the same line.
+            // Without this override the select fills the entire row,
+            // wrapping everything else below.
+            width: 'auto',
+            flex: '0 1 auto',
+            minWidth: 180,
+            maxWidth: 360,
+          }}
         >
           <option value="">— select a target —</option>
           {targetsList.map((t) => (

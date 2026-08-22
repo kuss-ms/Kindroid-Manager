@@ -1477,83 +1477,85 @@ function ChatView({
         <div ref={sentinelRef} />
       </div>
       <div className="chat-composer">
-        <textarea
-          ref={composerRef}
-          value={draft}
-          placeholder="Type a message…"
-          onChange={(e) => setDraft(e.target.value)}
-          onKeyDown={onComposerKeyDown}
-          rows={2}
-          data-testid="chat-composer"
-          disabled={pending}
-        />
-        <button
-          type="button"
-          className="btn"
-          onClick={() => suggest.mutate()}
-          disabled={suggestDisabled}
-          title="Suggest a follow-up based on the conversation so far"
-          data-testid="chat-suggest"
-          aria-label="Suggest a follow-up"
-        >
-          ✨
-        </button>
-        <div style={{ position: 'relative' }}>
+        <div className="chat-composer-inner">
+          <textarea
+            ref={composerRef}
+            value={draft}
+            placeholder="Type a message…"
+            onChange={(e) => setDraft(e.target.value)}
+            onKeyDown={onComposerKeyDown}
+            rows={2}
+            data-testid="chat-composer"
+            disabled={pending}
+          />
           <button
             type="button"
             className="btn"
-            onClick={() => setRewindOpen((v) => !v)}
-            disabled={pending || send.isPending || suggest.isPending}
-            title="Rewind the last user/AI pair(s)"
-            data-testid="chat-rewind"
-            aria-haspopup="true"
-            aria-expanded={rewindOpen}
-            aria-label="Rewind"
+            onClick={() => suggest.mutate()}
+            disabled={suggestDisabled}
+            title="Suggest a follow-up based on the conversation so far"
+            data-testid="chat-suggest"
+            aria-label="Suggest a follow-up"
           >
-            ↩️
+            ✨
           </button>
-          {rewindOpen && (
-            <div
-              role="menu"
-              style={{
-                position: 'absolute',
-                bottom: '100%',
-                right: 0,
-                marginBottom: 4,
-                background: 'var(--surface)',
-                border: '1px solid var(--border)',
-                borderRadius: 'var(--radius)',
-                boxShadow: 'var(--shadow)',
-                padding: 4,
-                zIndex: 5,
-              }}
+          <div style={{ position: 'relative' }}>
+            <button
+              type="button"
+              className="btn"
+              onClick={() => setRewindOpen((v) => !v)}
+              disabled={pending || send.isPending || suggest.isPending}
+              title="Rewind the last user/AI pair(s)"
+              data-testid="chat-rewind"
+              aria-haspopup="true"
+              aria-expanded={rewindOpen}
+              aria-label="Rewind"
             >
-              {[2, 4, 6, 8].map((n) => (
-                <button
-                  key={n}
-                  type="button"
-                  className="btn btn-sm"
-                  style={{ display: 'block', width: '100%', textAlign: 'left' }}
-                  onClick={() => rewind.mutate(n)}
-                  disabled={rewind.isPending}
-                  data-testid={`chat-rewind-${n}`}
-                >
-                  Rewind {n}
-                </button>
-              ))}
-            </div>
-          )}
+              ↩️
+            </button>
+            {rewindOpen && (
+              <div
+                role="menu"
+                style={{
+                  position: 'absolute',
+                  bottom: '100%',
+                  right: 0,
+                  marginBottom: 4,
+                  background: 'var(--surface)',
+                  border: '1px solid var(--border)',
+                  borderRadius: 'var(--radius)',
+                  boxShadow: 'var(--shadow)',
+                  padding: 4,
+                  zIndex: 5,
+                }}
+              >
+                {[2, 4, 6, 8].map((n) => (
+                  <button
+                    key={n}
+                    type="button"
+                    className="btn btn-sm"
+                    style={{ display: 'block', width: '100%', textAlign: 'left' }}
+                    onClick={() => rewind.mutate(n)}
+                    disabled={rewind.isPending}
+                    data-testid={`chat-rewind-${n}`}
+                  >
+                    Rewind {n}
+                  </button>
+                ))}
+              </div>
+            )}
+          </div>
+          <ChatThemePicker aiId={aiId} themeState={themeState} setThemeState={setThemeState} />
+          <button
+            type="button"
+            className="btn btn-primary"
+            onClick={() => send.mutate(trimmedDraft)}
+            disabled={sendDisabled}
+            data-testid="chat-send"
+          >
+            Send
+          </button>
         </div>
-        <ChatThemePicker aiId={aiId} themeState={themeState} setThemeState={setThemeState} />
-        <button
-          type="button"
-          className="btn btn-primary"
-          onClick={() => send.mutate(trimmedDraft)}
-          disabled={sendDisabled}
-          data-testid="chat-send"
-        >
-          Send
-        </button>
       </div>
     </div>
   );

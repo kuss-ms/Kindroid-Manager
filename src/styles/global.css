@@ -1139,14 +1139,15 @@ pre {
   display: flex;
   flex-direction: column;
   /* `flex: 1` makes the chat pane fill the remaining vertical space in
-     the page column. No `min-height` — a previous 320 px minimum
-     forced the pane below the fold on shorter viewports (e.g. laptop
-     windows or split-screen), pushing the composer off-screen and
-     making the user scroll just to reach the input. The
-     `.chat-scroll` child keeps `overflow-y: auto` so the bubbles
-     still scroll inside the pane once they outgrow it. */
+     the page column. `padding-bottom` reserves room for the
+     position-fixed chat-composer (which overlays the bottom of the
+     viewport) so the last message isn't hidden behind it when the
+     user scrolls to the end. The `.chat-scroll` child keeps
+     `overflow-y: auto` so the bubbles still scroll inside the pane
+     once they outgrow it. */
   flex: 1;
   overflow: hidden;
+  padding-bottom: 96px;
 }
 .chat-scroll {
   flex: 1;
@@ -1226,11 +1227,32 @@ pre {
   border-radius: var(--radius-sm, 4px);
 }
 .chat-composer {
+  /* Position-fixed so the input row always stays at the bottom of the
+     viewport — the user never has to scroll the page just to reach
+     the composer. The `.chat-view` keeps `padding-bottom: 96px` to
+     leave room for this bar so the last message isn't hidden behind
+     it. `backdrop-filter` gives the bar a subtle blur over the
+     bubbles beneath it for a "floating" feel. The inner wrapper
+     `.chat-composer-inner` centres its content with the same
+     `max-width: 1100px` as `.page` so the buttons line up with the
+     toolbar above. */
+  position: fixed;
+  bottom: 0;
+  left: 0;
+  right: 0;
+  z-index: 50;
+  background: var(--surface);
+  border-top: 1px solid var(--border);
+  padding: var(--space-3);
+  display: flex;
+  justify-content: center;
+  box-shadow: 0 -2px 8px rgba(0, 0, 0, 0.08);
+}
+.chat-composer-inner {
+  max-width: 1100px;
+  width: 100%;
   display: flex;
   gap: var(--space-2);
-  padding: var(--space-3);
-  border-top: 1px solid var(--border);
-  background: var(--surface);
   align-items: flex-end;
 }
 .chat-composer textarea {

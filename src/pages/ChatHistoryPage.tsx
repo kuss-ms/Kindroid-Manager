@@ -738,7 +738,18 @@ export function ChatHistoryPage() {
   const messages = activeList.data ?? [];
 
   return (
-    <div className="page">
+    <div
+      className="page"
+      // `flex: 1` on the page wrapper lets the chat pane (which has
+      // `flex: 1` in CSS) fill the remaining vertical space in
+      // `.app-main`. Without this, `.page` sizes to its content and
+      // `.chat-view` has nothing left to expand into, leaving a
+      // large empty area below the composer. We only stretch when
+      // the chat pane is actually rendered — in history mode the
+      // page wraps its content normally so the message list sits at
+      // its natural height near the top.
+      style={{ flex: view === 'chat' && selectedAiId && !isGroup ? 1 : undefined }}
+    >
       <div className="page-header">
         <h2>Chat History</h2>
         <div className="muted">{subtitle}</div>
@@ -876,7 +887,7 @@ export function ChatHistoryPage() {
               type="button"
               role="tab"
               aria-selected={view === 'chat'}
-              className={`btn btn-sm ${view === 'chat' ? 'btn-primary' : ''}`}
+              className={`btn ${view === 'chat' ? 'btn-primary' : ''}`}
               onClick={() => setView('chat')}
               style={{ borderTopRightRadius: 0, borderBottomRightRadius: 0 }}
             >
@@ -886,7 +897,7 @@ export function ChatHistoryPage() {
               type="button"
               role="tab"
               aria-selected={view === 'history'}
-              className={`btn btn-sm ${view === 'history' ? 'btn-primary' : ''}`}
+              className={`btn ${view === 'history' ? 'btn-primary' : ''}`}
               onClick={() => setView('history')}
               style={{ borderTopLeftRadius: 0, borderBottomLeftRadius: 0 }}
             >

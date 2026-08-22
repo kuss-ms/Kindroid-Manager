@@ -1138,8 +1138,14 @@ pre {
   border-radius: var(--radius-lg);
   display: flex;
   flex-direction: column;
+  /* `flex: 1` makes the chat pane fill the remaining vertical space in
+     the page column (between the toolbar and the bottom of the
+     viewport). Previously this was capped at `60vh`, which left a
+     visible empty area below the composer on standard viewports. The
+     `.chat-scroll` child keeps `overflow-y: auto` so the bubbles still
+     scroll inside the pane once they outgrow it. */
+  flex: 1;
   min-height: 320px;
-  max-height: 60vh;
   overflow: hidden;
 }
 .chat-scroll {

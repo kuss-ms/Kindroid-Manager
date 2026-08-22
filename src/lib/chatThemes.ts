@@ -54,13 +54,12 @@ export const PRESET_THEMES: ChatThemePreset[] = [
     // commit to a fixed palette.
     palette: {
       bg: 'transparent',
-      userBubble: 'var(--primary)',
-      // The user-bubble text colour is the inverse of the active theme:
-      // dark on a saturated bubble in light mode, light in dark mode.
-      // Inheriting from `--text` would invert the contrast against
-      // `--primary` (light-on-light in dark mode), so we use
-      // `--text-inverse` which is the theme-aware opposite. Falls back
-      // to `#ffffff` for users without a custom theme.
+      // User bubble uses the darker `--primary-hover` so the inline
+      // marks (italic / bold, painted with `--chat-accent` = `--primary`)
+      // stay visible. With `--primary` for both, italicised text on a
+      // saturated blue bubble would be the same colour as the bubble
+      // itself in dark mode and the marks would vanish.
+      userBubble: 'var(--primary-hover)',
       userText: 'var(--text-inverse, #ffffff)',
       aiBubble: 'var(--surface-2)',
       accent: 'var(--primary)',

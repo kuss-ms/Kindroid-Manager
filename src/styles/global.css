@@ -1189,26 +1189,18 @@ pre {
   border: 1px solid var(--border);
 }
 .chat-bubble em {
-  /* Italicised runs (single `*…*`).
-     On AI bubbles we paint with `--chat-accent` so they pop against
-     the neutral bubble background. On user bubbles we deliberately
-     use `currentColor` instead: the user-bubble background is the
-     saturated `--primary` (or a custom accent in the Custom picker),
-     and `--chat-accent` defaults to the same `--primary` — so painting
-     italics with the accent makes them invisible against the bubble.
-     The font-style: italic alone is enough of a cue; the colour
-     stays readable. */
+  /* Italicised runs (single `*…*`). We paint with `--chat-accent` so
+     they pop on both AI bubbles (light gray / dark blue background)
+     and user bubbles (saturated blue background). The accent is
+     guaranteed to contrast with the bubble in the Default preset
+     because userBubble uses `--primary-hover` (darker) while accent
+     uses `--primary` (lighter). */
   font-style: italic;
-}
-.chat-bubble.ai em {
   color: var(--chat-accent, var(--primary));
 }
 .chat-bubble strong {
-  /* Bold runs (`**…**`) get the same treatment — accent on AI bubbles,
-     `currentColor` on user bubbles — for the same reason as <em>. */
+  /* Bold runs (`**…**`) — same accent treatment. */
   font-weight: 700;
-}
-.chat-bubble.ai strong {
   color: var(--chat-accent, var(--primary));
 }
 .chat-quote {
